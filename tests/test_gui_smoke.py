@@ -55,6 +55,32 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertIn(506, app.edited)
         self.assertTrue(app.dirty)
 
+    def test_factory_edit_applies(self):
+        from witpae import factories
+        import witpae_editor
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        self.assertEqual(app.factory_tree.get_children(), ())
+        app.tree.selection_set("506")
+        self.root.update()
+        self.assertEqual(len(app.factory_tree.get_children()), 20)
+        app.factory_tree.selection_set("2")  # Oil
+        self.root.update()
+        self.assertTrue(app.factory_production_check.instate(["disabled"]))
+        app.factory_tree.selection_set("4")  # Refinery
+        self.root.update()
+        self.assertFalse(app.factory_production_check.instate(["disabled"]))
+        app.factory_production_var.set(False)
+        app.apply_factory()
+        self.assertFalse(factories.get_factory(app.bases[506], 4).production_on)
+        self.assertIn(506, app.edited)
+        self.assertTrue(app.dirty)
+        self.assertEqual(app.factory_tree.selection(), ("4",))
+        self.assertEqual(app.factory_tree.set("4", "production"), "No")
+        app.tree.selection_remove("506")
+        app.show_detail(None)
+        self.assertEqual(app.factory_tree.get_children(), ())
+
     def test_load_folder_gives_clear_error(self):
         from unittest import mock
         import witpae_editor
