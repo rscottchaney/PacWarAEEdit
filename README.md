@@ -20,7 +20,8 @@ Tests: `python -m unittest discover -s tests -v`
 |---|---|
 | Supply, Fuel, Resource storage, Oil storage, Port size, Airfield size, Forts | verified in-game, editable |
 | Port max, Airfield max (the bracketed sizes) | values verified in-game, editable |
-| Ships in port, Aircraft at base | verified, display only |
+| Fuel requested, Value to Japan/Allies multipliers, Port damage, Airfield runway/service damage | verified in-game, editable |
+| Supply required, Aviation support, Ships in port, Aircraft at base | verified, display only (recalculated by the game) |
 
 Name, side and hex coordinates are read-only. The field table is in
 `witpae/bases.py`; adding a field is one line.

@@ -46,6 +46,16 @@ FIELDS = [
     Field("resources", "Resource storage", 508, "i", True, True, 0, MAX_VALUE),
     Field("oil", "Oil storage", 520, "i", True, True, 0, MAX_VALUE),
     Field("forts", "Forts", 430, "h", True, True, 0, 9),
+    Field("port_damage", "Port damage", 442, "h", True, True, 0, 100),
+    Field("runway_damage", "Airfield runway damage", 440, "h", True, True, 0, 100),
+    Field("service_damage", "Airfield service damage", 444, "h", True, True, 0, 100),
+    Field("fuel_requested", "Fuel requested", 532, "i", True, True, 0, MAX_VALUE),
+    # Recalculated by the game every turn, so editing it would not stick.
+    Field("supply_required", "Supply required", 540, "i", False, True, None, None),
+    # Bracketed multipliers on "Value to Japan/Allies"; the game shows base value x multiplier.
+    Field("value_japan", "Value to Japan (x)", 782, "h", True, True, 0, 1000),
+    Field("value_allies", "Value to Allies (x)", 784, "h", True, True, 0, 1000),
+    Field("aviation_support", "Aviation support", 560, "i", False, True, None, None),
     Field("ships_in_port", "Ships in port", 656, "h", False, True, None, None),
     Field("aircraft", "Aircraft at base", 584, "h", False, True, None, None),
 ]

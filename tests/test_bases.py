@@ -41,6 +41,10 @@ class BaseTests(unittest.TestCase):
         self.assertEqual(b.get("airfield"), 10)
         self.assertEqual(b.get("port_max"), 5)
         self.assertEqual(b.get("airfield_max"), 7)
+        self.assertEqual(b.get("fuel_requested"), 14935)
+        self.assertEqual(b.get("supply_required"), 7053)
+        self.assertEqual(b.get("runway_damage"), 10)
+        self.assertEqual(b.get("service_damage"), 40)
         self.assertEqual(b.get("ships_in_port"), 111)
         self.assertEqual(b.get("aircraft"), 256)
         self.assertEqual((b.x, b.y), (180, 107))
@@ -54,13 +58,30 @@ class BaseTests(unittest.TestCase):
             b = by_name[name]
             self.assertEqual((b.get("port_max"), b.get("airfield_max")), maxes, name)
 
+    def test_los_angeles_matches_screenshot(self):
+        b = self.by_id[506]
+        self.assertEqual(b.name, "Los Angeles")
+        expected = {"supply_required": 20836, "fuel_requested": 15654, "aviation_support": 302,
+                    "value_japan": 100, "value_allies": 1, "ships_in_port": 26, "aircraft": 19,
+                    "port": 8, "port_max": 9, "airfield": 10, "airfield_max": 7, "forts": 0}
+        for name, value in expected.items():
+            self.assertEqual(b.get(name), value, name)
+
+    def test_singapore_matches_screenshot(self):
+        b = self.by_id[722]
+        self.assertEqual(b.name, "Singapore")
+        expected = {"port_damage": 17, "runway_damage": 0, "service_damage": 0, "aviation_support": 104,
+                    "supply_required": 3417, "fuel_requested": 10644, "value_japan": 20, "value_allies": 90}
+        for name, value in expected.items():
+            self.assertEqual(b.get(name), value, name)
+
     def test_tokyo_side(self):
         self.assertEqual(self.by_id[252].side, "Japanese")
 
     def test_validation(self):
         b = self.by_id[584]
         for name, value in [("supply", -1), ("supply", 100000000), ("port", 11),
-                            ("forts", 10), ("airfield", "5"), ("aircraft", 1),
+                            ("forts", 10), ("airfield", "5"), ("aircraft", 1), ("supply_required", 1),
                             ("ships_in_port", 1), ("nope", 1)]:
             with self.assertRaises(ValueError, msg=(name, value)):
                 b.set(name, value)
