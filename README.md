@@ -19,6 +19,7 @@ Tests: `python -m unittest discover -s tests -v`
 | Field | Status |
 |---|---|
 | Supply, Fuel, Resource storage, Oil storage, Port size, Airfield size, Forts | verified in-game, editable |
+| Port max, Airfield max (the bracketed sizes) | values verified in-game, editable |
 | Ships in port, Aircraft at base | verified, display only |
 
 Name, side and hex coordinates are read-only. The field table is in

@@ -39,10 +39,20 @@ class BaseTests(unittest.TestCase):
         self.assertEqual(b.get("fuel"), 908984)
         self.assertEqual(b.get("port"), 7)
         self.assertEqual(b.get("airfield"), 10)
+        self.assertEqual(b.get("port_max"), 5)
+        self.assertEqual(b.get("airfield_max"), 7)
         self.assertEqual(b.get("ships_in_port"), 111)
         self.assertEqual(b.get("aircraft"), 256)
         self.assertEqual((b.x, b.y), (180, 107))
         self.assertEqual(b.side, "Allied")
+
+    def test_max_sizes_match_game(self):
+        # (port max, airfield max) as read off the in-game base screen.
+        expected = {"Los Angeles": (9, 7), "Manila": (6, 7), "Lunga": (1, 5), "Rabaul": (4, 6)}
+        by_name = {b.name: b for b in self.by_id.values()}
+        for name, maxes in expected.items():
+            b = by_name[name]
+            self.assertEqual((b.get("port_max"), b.get("airfield_max")), maxes, name)
 
     def test_tokyo_side(self):
         self.assertEqual(self.by_id[252].side, "Japanese")

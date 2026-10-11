@@ -40,6 +40,9 @@ FIELDS = [
     Field("fuel", "Fuel", 528, "i", True, True, 0, MAX_VALUE),
     Field("port", "Port size", 422, "h", True, True, 0, 10),
     Field("airfield", "Airfield size", 426, "h", True, True, 0, 10),
+    # The bracketed max sizes on the base screen; current size may exceed them.
+    Field("port_max", "Port max", 420, "h", True, True, 0, 10),
+    Field("airfield_max", "Airfield max", 416, "h", True, True, 0, 10),
     Field("resources", "Resource storage", 508, "i", True, True, 0, MAX_VALUE),
     Field("oil", "Oil storage", 520, "i", True, True, 0, MAX_VALUE),
     Field("forts", "Forts", 430, "h", True, True, 0, 9),
