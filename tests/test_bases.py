@@ -109,6 +109,38 @@ class BaseTests(unittest.TestCase):
         self.assertEqual(old[:lo], new[:lo])
         self.assertEqual(old[hi:], new[hi:])
 
+    def test_stockpile_default_off(self):
+        self.assertEqual(self.by_id[506].get_stockpile(),
+                         {"supply": False, "fuel": False, "resources": False, "oil": False})
+
+    def test_stockpile_roundtrip(self):
+        self.by_id[506].set_stockpile({"supply": True, "oil": True})
+        b2 = {x.id: x for x in bases.list_bases(self.roundtrip())}[506]
+        self.assertEqual(b2.get_stockpile(),
+                         {"supply": True, "fuel": False, "resources": False, "oil": True})
+        data = self.roundtrip()[bases.LOCATION_SECTION].data
+        self.assertEqual(data[506 * bases.RECORD_SIZE + bases.STOCKPILE_OFFSET], 0x09)
+
+    def test_stockpile_preserves_upper_bits(self):
+        pos = 506 * bases.RECORD_SIZE + bases.STOCKPILE_OFFSET
+        data = self.sf[bases.LOCATION_SECTION].data
+        data[pos] = 0xF0
+        b = self.by_id[506]
+        b.set_stockpile({"fuel": True, "resources": True})
+        self.assertEqual(data[pos], 0xF6)
+        b.set_stockpile({"fuel": False, "resources": False})
+        self.assertEqual(data[pos], 0xF0)
+
+    def test_stockpile_validation(self):
+        pos = 506 * bases.RECORD_SIZE + bases.STOCKPILE_OFFSET
+        data = self.sf[bases.LOCATION_SECTION].data
+        b = self.by_id[506]
+        for flags in [{"nope": True}, {"supply": 1}, {"supply": True, "oil": "yes"},
+                      {"supply": True, "nope": False}]:
+            with self.assertRaises(ValueError, msg=flags):
+                b.set_stockpile(flags)
+            self.assertEqual(data[pos], 0, flags)
+
     def test_untouched_identical(self):
         with open(SAVE_015, "rb") as fh:
             self.assertEqual(self.sf.to_bytes(), fh.read())

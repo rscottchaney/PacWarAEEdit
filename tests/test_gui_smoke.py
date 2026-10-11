@@ -41,6 +41,20 @@ class GuiSmokeTests(unittest.TestCase):
         app.sort_by("supply")
         self.root.update()
 
+    def test_stockpile_checkbox_applies(self):
+        import witpae_editor
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        app.tree.selection_set("506")
+        self.root.update()
+        self.assertFalse(any(v.get() for v in app.stockpile_vars.values()))
+        app.stockpile_vars["fuel"].set(True)
+        app.apply()
+        self.assertTrue(app.bases[506].get_stockpile()["fuel"])
+        self.assertFalse(app.bases[506].get_stockpile()["supply"])
+        self.assertIn(506, app.edited)
+        self.assertTrue(app.dirty)
+
     def test_load_folder_gives_clear_error(self):
         from unittest import mock
         import witpae_editor

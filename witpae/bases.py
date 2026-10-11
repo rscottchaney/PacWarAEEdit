@@ -61,6 +61,18 @@ FIELDS = [
 ]
 FIELD_BY_NAME = {f.name: f for f in FIELDS}
 
+# Yes/No switches from the base screen share one bitfield byte. Kept apart from
+# FIELDS because the names clash with the supply/fuel quantity fields. Bits
+# 0x10-0x80 are of unknown meaning and are preserved on write.
+STOCKPILE_OFFSET = 109
+STOCKPILE_FLAGS = [
+    ("supply", "Supply", 0x08),
+    ("fuel", "Fuel", 0x04),
+    ("resources", "Resources", 0x02),
+    ("oil", "Oil", 0x01),
+]
+STOCKPILE_BY_NAME = {name: bit for name, _label, bit in STOCKPILE_FLAGS}
+
 _cipher = None
 
 
@@ -141,6 +153,25 @@ class Base:
         checked = {name: self.validate(name, v) for name, v in values.items()}
         for name, v in checked.items():
             self.set(name, v)
+
+    def get_stockpile(self):
+        byte = self._save[LOCATION_SECTION].data[self._offset + STOCKPILE_OFFSET]
+        return {name: bool(byte & bit) for name, _label, bit in STOCKPILE_FLAGS}
+
+    def set_stockpile(self, flags):
+        """Set some or all switches, leaving other bits alone; validate before writing."""
+        for name, value in flags.items():
+            if name not in STOCKPILE_BY_NAME:
+                raise ValueError(f"unknown stockpile switch {name!r}")
+            if not isinstance(value, bool):
+                raise ValueError(f"stockpile switch {name!r} must be True or False")
+        data = self._save[LOCATION_SECTION].data
+        pos = self._offset + STOCKPILE_OFFSET
+        byte = data[pos]
+        for name, value in flags.items():
+            bit = STOCKPILE_BY_NAME[name]
+            byte = (byte | bit) if value else (byte & ~bit & 0xFF)
+        data[pos] = byte
 
 
 def list_bases(save):

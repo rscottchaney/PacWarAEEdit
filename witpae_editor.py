@@ -43,6 +43,7 @@ class EditorApp:
         self.sort_col = "id"
         self.sort_reverse = False
         self.field_vars = {}
+        self.stockpile_vars = {}
         self.current = None
 
         self._build_menu()
@@ -119,8 +120,16 @@ class EditorApp:
             self.field_vars[f.name] = var
             entry = ttk.Entry(right, textvariable=var, width=14, state="normal" if f.editable else "readonly")
             entry.grid(row=row, column=1, padx=(8, 0), pady=2)
+        stock_row = len(bases.FIELDS) + 1
+        ttk.Label(right, text="Stockpile").grid(row=stock_row, column=0, sticky="nw", pady=2)
+        stock_box = ttk.Frame(right)
+        stock_box.grid(row=stock_row, column=1, sticky="w", padx=(8, 0), pady=2)
+        for name, label, _bit in bases.STOCKPILE_FLAGS:
+            var = tk.BooleanVar()
+            self.stockpile_vars[name] = var
+            ttk.Checkbutton(stock_box, text=label, variable=var).pack(anchor="w")
         self.apply_btn = ttk.Button(right, text="Apply", command=self.apply)
-        self.apply_btn.grid(row=len(bases.FIELDS) + 1, column=0, columnspan=2, pady=(10, 0))
+        self.apply_btn.grid(row=stock_row + 1, column=0, columnspan=2, pady=(10, 0))
 
     # ---- loading -------------------------------------------------------
 
@@ -213,10 +222,14 @@ class EditorApp:
             self.detail_title.set("(select a base)")
             for var in self.field_vars.values():
                 var.set("")
+            for var in self.stockpile_vars.values():
+                var.set(False)
             return
         self.detail_title.set(f"{base.name} (#{base.id}, {base.side}, hex {base.x},{base.y})")
         for f in bases.FIELDS:
             self.field_vars[f.name].set(str(base.get(f.name)))
+        for name, on in base.get_stockpile().items():
+            self.stockpile_vars[name].set(on)
 
     def apply(self):
         if self.current is None:
@@ -235,8 +248,11 @@ class EditorApp:
                                      f"{f.label} must be a whole number from {f.min} to {f.max} (got {text!r}).")
                 return
         before = {n: base.get(n) for n in values}
+        flags = {n: bool(v.get()) for n, v in self.stockpile_vars.items()}
+        flags_before = base.get_stockpile()
         base.set_many(values)
-        if before != values:
+        base.set_stockpile(flags)
+        if before != values or flags_before != flags:
             self.edited.add(base.id)
             self.dirty = True
         self.refresh_list()
