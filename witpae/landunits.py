@@ -3,8 +3,9 @@
 Bases, land units and task forces share the table; the int16 at offset 28 is
 the record type. Names are stored without the unit-kind suffix the game
 appends. Views read and write the section's bytearray in place, so edits made
-here and in the Bases tab never touch each other's records. Equipment device
-ids and the TOE (table of organisation) columns are read-only.
+here and in the Bases tab never touch each other's records. A device can be
+added to an empty equipment slot; the devices of existing slots and the TOE
+(table of organisation) columns are read-only.
 """
 
 import struct
@@ -12,7 +13,8 @@ import struct
 from .airgroups import Record
 from .bases import (
     INDEX_RECORD_SIZE, INDEX_SECTION, LOCATION_SECTION, MAX_VALUE, NAME_SIZE, RECORD_COUNT,
-    RECORD_SIZE, SIDE_OFFSET, SIDES, TYPE_OFFSET, Field, decode_name,
+    RECORD_SIZE, SIDE_OFFSET, SIDES, TYPE_OFFSET, X_OFFSET, Y_OFFSET, Field, decode_name, is_place,
+    PIXEL_X_OFFSET, PIXEL_Y_OFFSET, place_hex, place_pixel, place_side_id,
 )
 from .factories import DEVICE_RECORD_SIZE, DEVICE_SECTION, _plain_name
 
@@ -24,6 +26,10 @@ LAND_TYPES = frozenset(TYPES) | frozenset(GUESSED_TYPES)
 HQ_OFFSET = 122
 LOCATION_OFFSET = 86
 TARGET_OFFSET = 102
+# A unit's map icon sits beside its place: left for Allied, right for Japanese (all but
+# 23 of 1725 placed units). The game names a unit's location after the nearest base to
+# this point, so a move that leaves it behind shows the old place.
+ICON_SHIFT = {0: (14, 9), 1: (-14, 9)}
 SUPPLIES_REQUIRED_OFFSET = 540
 # Matched the screen for 2 of 3 units, the third was off by a few.
 SUPPORT_REQUIRED_OFFSET = 548
@@ -155,6 +161,38 @@ class LandUnit(Record):
         pos = self.id * INDEX_RECORD_SIZE + SIDE_OFFSET
         return SIDES.get(struct.unpack_from("<i", self._save[INDEX_SECTION].data, pos)[0], "Unknown")
 
+    @property
+    def move_blocker(self):
+        """Why the unit cannot be moved, or "" when it can."""
+        loc = self.location_id
+        if not is_place(self._save, loc):
+            return "not at a base or town (not arrived)"
+        if (self._i16(X_OFFSET), self._i16(Y_OFFSET)) != place_hex(self._save, loc):
+            return "on the march"
+        return ""
+
+    @property
+    def can_move(self):
+        return not self.move_blocker
+
+    def move_to(self, place_id):
+        """Move to a base or town on the same side; sets location, hex, target and map position."""
+        if self.move_blocker:
+            raise ValueError(f"{self.name} cannot be moved: {self.move_blocker}")
+        if not is_place(self._save, place_id):
+            raise ValueError(f"{place_id!r} is not a base or town")
+        if place_side_id(self._save, place_id) != place_side_id(self._save, self.id):
+            raise ValueError(f"{self.name} can only move to a place on its own side")
+        x, y = place_hex(self._save, place_id)
+        struct.pack_into("<h", self._data, self._offset + LOCATION_OFFSET, place_id)
+        struct.pack_into("<h", self._data, self._offset + X_OFFSET, x)
+        struct.pack_into("<h", self._data, self._offset + Y_OFFSET, y)
+        struct.pack_into("<h", self._data, self._offset + TARGET_OFFSET, place_id)
+        px, py = place_pixel(self._save, place_id)
+        dx, dy = ICON_SHIFT[place_side_id(self._save, self.id)]
+        index = self._save[INDEX_SECTION].data
+        struct.pack_into("<2i", index, self.id * INDEX_RECORD_SIZE + PIXEL_X_OFFSET, px + dx, py + dy)
+
     # ---- equipment ------------------------------------------------------
 
     def _device_name(self, device_id):
@@ -200,6 +238,52 @@ class LandUnit(Record):
         count, disabled = self.check_equipment(slot, count, disabled)
         struct.pack_into("<h", self._data, self._offset + COUNT_OFFSET + 2 * slot, count)
         struct.pack_into("<h", self._data, self._offset + DISABLED_OFFSET + 2 * slot, disabled)
+
+    def add_equipment(self, device_id, count, disabled, allowed):
+        """Put a device in the lowest empty slot and return the slot number.
+
+        `allowed` is the device ids available to this unit's side (see available_devices).
+        The TOE device and count of the slot stay 0. Nothing is written unless all checks pass.
+        """
+        if isinstance(device_id, bool) or not isinstance(device_id, int) or device_id not in allowed:
+            raise ValueError(f"{device_id!r} is not available to {self.side} units")
+        for label, value in (("Count", count), ("Disabled", disabled)):
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ValueError(f"{label} must be an integer")
+        if not 1 <= count <= MAX_COUNT:
+            raise ValueError(f"Count must be between 1 and {MAX_COUNT}")
+        if not 0 <= disabled <= count:
+            raise ValueError(f"Disabled must be between 0 and the count ({count})")
+        used = set(self.equipment_slots())
+        slot = next((k for k in range(SLOTS) if k not in used), None)
+        if slot is None:
+            raise ValueError(f"{self.name} has no empty equipment slot")
+        struct.pack_into("<h", self._data, self._offset + DEVICE_OFFSET + 2 * slot, device_id)
+        struct.pack_into("<h", self._data, self._offset + COUNT_OFFSET + 2 * slot, count)
+        struct.pack_into("<h", self._data, self._offset + DISABLED_OFFSET + 2 * slot, disabled)
+        return slot
+
+
+def available_devices(save):
+    """Devices a side can add: those any land unit of that side already uses (current or TOE).
+
+    Returns {side_id: [(device_id, name), ...]} sorted by name. Ids outside the device table
+    are ignored.
+    """
+    data = save[LOCATION_SECTION].data
+    device_data = save[DEVICE_SECTION].data
+    limit = min(2000, len(device_data) // DEVICE_RECORD_SIZE)
+    ids = {side: set() for side in SIDES}
+    for unit in list_land_units(save):
+        used = ids.get(place_side_id(save, unit.id))
+        if used is None:
+            continue
+        base = unit.id * RECORD_SIZE
+        for offset in (DEVICE_OFFSET, TOE_DEVICE_OFFSET):
+            used.update(struct.unpack_from(f"<{SLOTS}h", data, base + offset))
+    return {side: sorted(((d, _plain_name(device_data, d * DEVICE_RECORD_SIZE)) for d in used if 0 < d < limit),
+                         key=lambda item: (item[1].lower(), item[0]))
+            for side, used in ids.items()}
 
 
 def list_land_units(save):

@@ -20,11 +20,17 @@ RECORD_COUNT = 18000
 INDEX_RECORD_SIZE = 20
 TYPE_OFFSET = 28
 TYPE_BASE = 1
+TYPE_TOWN = 5
+# Records a unit can be located at: bases and named towns.
+PLACE_TYPES = (TYPE_BASE, TYPE_TOWN)
 NAME_SIZE = 24
 NAME_KEY = b"AdmiralEdition"
 X_OFFSET = 36
 Y_OFFSET = 38
 SIDE_OFFSET = 8  # within the 20-byte record of the location index section
+# Map position in pixels, i32 x at 0 and y at 4 of the index record.
+PIXEL_X_OFFSET = 0
+PIXEL_Y_OFFSET = 4
 
 SIDES = {0: "Japanese", 1: "Allied"}
 
@@ -215,6 +221,46 @@ def list_bases(save):
             continue
         bases.append(Base(save, loc_id, decode_name(data[start:start + NAME_SIZE])))
     return bases
+
+
+Place = namedtuple("Place", "id name side_id x y")
+
+
+def list_places(save):
+    """Every base and named town, as Place tuples, in id order."""
+    data = save[LOCATION_SECTION].data
+    places = []
+    for loc_id in range(min(RECORD_COUNT, len(data) // RECORD_SIZE)):
+        start = loc_id * RECORD_SIZE
+        if struct.unpack_from("<h", data, start + TYPE_OFFSET)[0] not in PLACE_TYPES:
+            continue
+        places.append(Place(loc_id, decode_name(data[start:start + NAME_SIZE]), place_side_id(save, loc_id),
+                            struct.unpack_from("<h", data, start + X_OFFSET)[0],
+                            struct.unpack_from("<h", data, start + Y_OFFSET)[0]))
+    return places
+
+
+def is_place(save, loc_id):
+    data = save[LOCATION_SECTION].data
+    if isinstance(loc_id, bool) or not isinstance(loc_id, int) or not 0 <= loc_id < RECORD_COUNT:
+        return False
+    start = loc_id * RECORD_SIZE
+    return (start + RECORD_SIZE <= len(data)
+            and struct.unpack_from("<h", data, start + TYPE_OFFSET)[0] in PLACE_TYPES)
+
+
+def place_side_id(save, loc_id):
+    return struct.unpack_from("<i", save[INDEX_SECTION].data, loc_id * INDEX_RECORD_SIZE + SIDE_OFFSET)[0]
+
+
+def place_pixel(save, loc_id):
+    return struct.unpack_from("<2i", save[INDEX_SECTION].data, loc_id * INDEX_RECORD_SIZE + PIXEL_X_OFFSET)
+
+
+def place_hex(save, loc_id):
+    pos = loc_id * RECORD_SIZE
+    data = save[LOCATION_SECTION].data
+    return (struct.unpack_from("<h", data, pos + X_OFFSET)[0], struct.unpack_from("<h", data, pos + Y_OFFSET)[0])
 
 
 def set_title(save, title):

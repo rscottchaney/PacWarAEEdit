@@ -10,12 +10,24 @@ alone because their purpose is unknown.
 import struct
 
 from .aircraft import AIRCRAFT_RECORD_SIZE, AIRCRAFT_SECTION
-from .bases import NAME_SIZE, Field, decode_name
+from .bases import (
+    LOCATION_SECTION, NAME_SIZE, RECORD_SIZE, SIDES, Field, decode_name, is_place, place_side_id,
+)
 from .factories import _plain_name
 
 GROUP_SECTION = 0x14
 GROUP_RECORD_SIZE = 680
 GROUP_RECORD_COUNT = 30001
+LOCATION_OFFSET = 40
+# The group's base ("Based at" on its screen). Detachments keep their parent's base or
+# carrier here while they sit elsewhere.
+BASE_OFFSET = 42
+# Values from here up are ship id + SHIP_LOCATION_BASE (carrier and tender groups).
+SHIP_LOCATION_BASE = 18000
+# Ships in play, one record per ship; the name is plain text.
+SHIP_SECTION = 0x08
+SHIP_RECORD_SIZE = 464
+SHIP_RECORD_COUNT = 20000
 LEADER_SECTION = 0x15
 LEADER_RECORD_SIZE = 180
 LEADER_RECORD_COUNT = 50000
@@ -56,12 +68,16 @@ GROUP_FIELDS = [
 ARC_FIELDS = {"arc_start", "arc_end"}
 
 SKILLS = ["Air", "NavB", "NavT", "NavS", "Recn", "ASW", "Tran", "GrdB", "LowN", "LowG", "Staf", "Defn"]
+# Full names for the game's abbreviations, used where there is room for them.
+SKILL_NAMES = {"Air": "Air combat", "NavB": "Naval bombing", "NavT": "Naval torpedo", "NavS": "Naval search",
+               "Recn": "Reconnaissance", "ASW": "Anti-submarine", "Tran": "Transport", "GrdB": "Ground bombing",
+               "LowN": "Low-level naval", "LowG": "Low-level ground", "Staf": "Strafing", "Defn": "Defensive"}
 # The game's pilot list shows the second copy of the skills (78..89); the first
 # copy (65..76) is normally identical and is kept in step on every write.
 SKILL_OFFSET = 78
 SKILL_MIRROR_OFFSET = 65
 PILOT_FIELDS = [Field("experience", "Experience", 44, "B", True, True, 0, 99)] + [
-    Field("skill_" + name.lower(), name, SKILL_OFFSET + k, "B", True, True, 0, 99)
+    Field("skill_" + name.lower(), f"{SKILL_NAMES[name]} ({name})", SKILL_OFFSET + k, "B", True, True, 0, 99)
     for k, name in enumerate(SKILLS)
 ]
 
@@ -169,6 +185,56 @@ class AirGroup(Record):
     @property
     def leader_id(self):
         return self._i16(LEADER_OFFSET)
+
+    @property
+    def location_id(self):
+        return self._i16(LOCATION_OFFSET)
+
+    @property
+    def location_name(self):
+        loc = self.location_id
+        if is_place(self._save, loc):
+            start = loc * RECORD_SIZE
+            return decode_name(self._save[LOCATION_SECTION].data[start:start + NAME_SIZE])
+        if loc >= SHIP_LOCATION_BASE:
+            ship_id = loc - SHIP_LOCATION_BASE
+            data = self._save[SHIP_SECTION].data
+            start = ship_id * SHIP_RECORD_SIZE
+            name = _plain_name(data, start) if ship_id < SHIP_RECORD_COUNT and start < len(data) else ""
+            return name or f"ship #{ship_id}"
+        return ""
+
+    @property
+    def move_blocker(self):
+        """Why the group cannot be moved, or "" when it can."""
+        if is_place(self._save, self.location_id):
+            return ""
+        if self.location_id >= SHIP_LOCATION_BASE:
+            return "aboard a ship"
+        return "not arrived"
+
+    @property
+    def can_move(self):
+        return not self.move_blocker
+
+    @property
+    def side(self):
+        """Side of the current location; groups have no side field of their own."""
+        if not self.can_move:
+            return "Unknown"
+        return SIDES.get(place_side_id(self._save, self.location_id), "Unknown")
+
+    def move_to(self, place_id):
+        """Move to a base or town on the same side; the base follows unless it already differed."""
+        if self.move_blocker:
+            raise ValueError(f"{self.name} cannot be moved: {self.move_blocker}")
+        if not is_place(self._save, place_id):
+            raise ValueError(f"{place_id!r} is not a base or town")
+        if place_side_id(self._save, place_id) != place_side_id(self._save, self.location_id):
+            raise ValueError(f"{self.name} can only move to a place on its own side")
+        if self._i16(BASE_OFFSET) == self.location_id:
+            struct.pack_into("<h", self._data, self._offset + BASE_OFFSET, place_id)
+        struct.pack_into("<h", self._data, self._offset + LOCATION_OFFSET, place_id)
 
     @property
     def planes(self):

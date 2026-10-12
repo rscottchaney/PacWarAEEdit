@@ -236,6 +236,85 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertTrue(app.load(SAVE_015))
         self.assertEqual(app.units_edited, set())
 
+    def test_add_land_unit_equipment(self):
+        from unittest import mock
+        import witpae_editor
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        self.assertTrue(app.unit_add_button.instate(["disabled"]))
+        app.unit_tree.selection_set("5639")  # Allied
+        self.root.update()
+        values = app.unit_add_box.cget("values")
+        self.assertIn("Dutch Rifle Squad (367)", values)
+        self.assertNotIn("IJA Infantry Squad (264)", values)
+        self.assertFalse(app.unit_add_button.instate(["disabled"]))
+        app.unit_add_device_var.set("Dutch Rifle Squad (367)")
+        app.unit_add_vars["count"].set("9")
+        app.unit_add_vars["disabled"].set("4")
+        app.add_unit_equipment()
+        self.root.update()
+        self.assertEqual(app.units[5639].get_equipment(5)["device"], "Dutch Rifle Squad")
+        self.assertEqual(app.unit_equipment_tree.set("5", "device"), "Dutch Rifle Squad")
+        self.assertEqual(app.unit_equipment_tree.selection(), ("5",))
+        self.assertEqual((app.unit_equipment_vars["count"].get(), app.unit_equipment_vars["disabled"].get()),
+                         ("9", "4"))
+        self.assertIn(5639, app.units_edited)
+        self.assertTrue(app.dirty)
+        self.assertEqual(app.unit_add_vars["count"].get(), "")
+        # A device from the other side is refused and nothing changes.
+        app.unit_add_device_var.set("IJA Infantry Squad (264)")
+        app.unit_add_vars["count"].set("3")
+        with mock.patch.object(witpae_editor.messagebox, "showerror") as err:
+            app.add_unit_equipment()
+        self.assertTrue(err.called)
+        self.assertEqual(len(app.unit_equipment_tree.get_children()), 7)
+
+    def test_move_air_group_and_land_unit(self):
+        from unittest import mock
+        import witpae_editor
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        app.group_tree.selection_set("3626")
+        self.root.update()
+        self.assertEqual(app.group_tree.set("3626", "location"), "Pearl Harbor")
+        values = app.group_move_box.cget("values")
+        self.assertIn("Midway Island (581)", values)
+        self.assertIn("Chungking (1091)", values)
+        self.assertNotIn("Akita (222)", values)
+        self.assertFalse(app.group_move_button.instate(["disabled"]))
+        app.group_move_var.set("Midway Island (581)")
+        app.move_group()
+        self.assertEqual(app.groups[3626].location_id, 581)
+        self.assertIn(3626, app.groups_edited)
+        self.assertTrue(app.dirty)
+        self.assertEqual(app.group_tree.set("3626", "location"), "Midway Island")
+        app.group_tree.selection_set("144")  # aboard a ship
+        self.root.update()
+        self.assertTrue(app.group_move_button.instate(["disabled"]))
+        self.assertIn("ship", app.group_move_note.get())
+
+        self.assertTrue(app.load(SAVE_015))
+        self.assertFalse(app.dirty)
+        app.unit_tree.selection_set("5560")
+        self.root.update()
+        self.assertIn("Midway Island (581)", app.unit_move_box.cget("values"))
+        app.unit_move_var.set("Midway Island (581)")
+        app.move_unit()
+        self.assertEqual((app.units[5560].location_id, app.units[5560].target_id), (581, 581))
+        self.assertIn(5560, app.units_edited)
+        self.assertTrue(app.dirty)
+        self.assertEqual(app.unit_info["location"].get(), "581 Midway Island")
+        app.unit_tree.selection_set("6652")  # on the march
+        self.root.update()
+        self.assertTrue(app.unit_move_button.instate(["disabled"]))
+        self.assertIn("march", app.unit_move_note.get())
+        app.unit_tree.selection_set("5639")
+        self.root.update()
+        app.unit_move_var.set("")
+        with mock.patch.object(witpae_editor.messagebox, "showerror") as err:
+            app.move_unit()
+        self.assertTrue(err.called)
+
     def test_load_folder_gives_clear_error(self):
         from unittest import mock
         import witpae_editor

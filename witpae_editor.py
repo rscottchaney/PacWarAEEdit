@@ -61,6 +61,7 @@ GROUP_COLUMNS = [
     ("pilots", "Pilots", 50, True, lambda g: g.active_pilots),
     ("morale", "Morale", 55, True, lambda g: g.get("morale")),
     ("exp", "Exp", 45, True, lambda g: g.get("experience")),
+    ("location", "Location", 120, False, lambda g: g.location_name),
 ]
 GROUP_COLUMN_BY_ID = {c[0]: c for c in GROUP_COLUMNS}
 
@@ -118,6 +119,10 @@ class EditorApp:
         self.pilot_vars = {}
         self.leader_vars = {}
         self.leader_current = None
+        self.place_ids = {}
+        self.place_labels = {}
+        self.device_ids = {}
+        self.device_labels = {}
         self.units = {}
         self.units_edited = set()
         self.unit_sort_col = "id"
@@ -399,7 +404,7 @@ class EditorApp:
                                        selectmode="browse", height=8)
         for cid, heading, width, _numeric, _get in GROUP_COLUMNS:
             self.group_tree.heading(cid, text=heading, command=lambda c=cid: self.sort_groups_by(c))
-            self.group_tree.column(cid, width=width, anchor="w" if cid in ("name", "aircraft") else "e")
+            self.group_tree.column(cid, width=width, anchor="w" if cid in ("name", "aircraft", "location") else "e")
         self.group_tree.tag_configure("edited", background="#fff2b3")
         scroll = ttk.Scrollbar(left, orient="vertical", command=self.group_tree.yview)
         self.group_tree.configure(yscrollcommand=scroll.set)
@@ -422,11 +427,15 @@ class EditorApp:
         row += 1
         self.group_info = {}
         for name, label in (("aircraft", "Aircraft (read-only)"), ("planes", "Aircraft total (read-only)"),
-                            ("pilots", "Pilot count byte (read-only, meaning unclear)"), ("leader", "Commander (read-only)")):
+                            ("pilots", "Pilot count byte (read-only, meaning unclear)"), ("leader", "Commander (read-only)"),
+                            ("location", "Location")):
             ttk.Label(right, text=label).grid(row=row, column=0, sticky="w", pady=1)
             self.group_info[name] = tk.StringVar()
             ttk.Label(right, textvariable=self.group_info[name]).grid(row=row, column=1, sticky="w", padx=(8, 0))
             row += 1
+        self.group_move_var, self.group_move_box, self.group_move_button, self.group_move_note = self._build_move_row(
+            right, row, self.move_group)
+        row += 3
         ttk.Label(right, text="The game probably recalculates\naverage experience from the pilots.",
                   foreground="gray40").grid(row=row, column=0, columnspan=2, sticky="w", pady=(6, 0))
 
@@ -444,29 +453,39 @@ class EditorApp:
         self.pilot_tree.bind("<<TreeviewSelect>>", lambda e: self.on_pilot_select())
         edit = ttk.Frame(box)
         edit.pack(side="top", fill="x", pady=(4, 0))
-        for f in airgroups.PILOT_FIELDS:
-            ttk.Label(edit, text="Exp" if f.name == "experience" else f.label).pack(side="left")
+        # Four label/entry pairs per row so the full skill names fit.
+        per_row = 4
+        for k, f in enumerate(airgroups.PILOT_FIELDS):
+            row, col = divmod(k, per_row)
+            ttk.Label(edit, text=f.label).grid(row=row, column=2 * col, sticky="w", padx=(0, 2), pady=1)
             self.pilot_vars[f.name] = tk.StringVar()
-            ttk.Entry(edit, textvariable=self.pilot_vars[f.name], width=3).pack(side="left", padx=(1, 4))
-        ttk.Button(edit, text="Apply pilot", command=self.apply_pilot).pack(side="left", padx=4)
+            ttk.Entry(edit, textvariable=self.pilot_vars[f.name], width=4).grid(
+                row=row, column=2 * col + 1, sticky="w", padx=(0, 12), pady=1)
+        k = len(airgroups.PILOT_FIELDS)
+        ttk.Button(edit, text="Apply pilot", command=self.apply_pilot).grid(
+            row=k // per_row, column=2 * (k % per_row), columnspan=2, sticky="w", pady=1)
 
     def _build_leader(self, parent):
         box = ttk.LabelFrame(parent, text="Commander", padding=4)
         box.pack(side="top", fill="x", pady=(6, 0))
         self.leader_name = tk.StringVar(value="(none)")
-        ttk.Label(box, textvariable=self.leader_name, width=18).pack(side="left")
+        ttk.Label(box, textvariable=self.leader_name).grid(row=0, column=0, columnspan=2, sticky="w", pady=1)
         self.leader_age = tk.StringVar()
-        ttk.Label(box, text="Age?").pack(side="left")
-        ttk.Label(box, textvariable=self.leader_age, width=4).pack(side="left")
+        ttk.Label(box, text="Age (unverified)").grid(row=0, column=2, sticky="w", padx=(0, 2), pady=1)
+        ttk.Label(box, textvariable=self.leader_age).grid(row=0, column=3, sticky="w", pady=1)
+        # Same four-per-row grid as the pilot editor, below the name row.
+        per_row = 4
         self.leader_entries = []
-        for f in airgroups.LEADER_FIELDS:
-            ttk.Label(box, text=f.label[:5] if f.label != "Aggression" else "Aggr").pack(side="left")
+        for k, f in enumerate(airgroups.LEADER_FIELDS):
+            row, col = divmod(k, per_row)
+            ttk.Label(box, text=f.label).grid(row=row + 1, column=2 * col, sticky="w", padx=(0, 2), pady=1)
             self.leader_vars[f.name] = tk.StringVar()
-            entry = ttk.Entry(box, textvariable=self.leader_vars[f.name], width=3)
-            entry.pack(side="left", padx=(1, 4))
+            entry = ttk.Entry(box, textvariable=self.leader_vars[f.name], width=4)
+            entry.grid(row=row + 1, column=2 * col + 1, sticky="w", padx=(0, 12), pady=1)
             self.leader_entries.append(entry)
+        k = len(airgroups.LEADER_FIELDS)
         self.leader_button = ttk.Button(box, text="Apply commander", command=self.apply_leader)
-        self.leader_button.pack(side="left", padx=4)
+        self.leader_button.grid(row=k // per_row + 1, column=2 * (k % per_row), columnspan=2, sticky="w", pady=1)
 
     def _build_units_tab(self):
         tab = ttk.Frame(self.notebook, padding=4)
@@ -508,6 +527,19 @@ class EditorApp:
             self.unit_equipment_vars[name] = tk.StringVar()
             ttk.Entry(edit, textvariable=self.unit_equipment_vars[name], width=8).pack(side="left", padx=(2, 8))
         ttk.Button(edit, text="Apply equipment", command=self.apply_unit_equipment).pack(side="left", padx=4)
+        add = ttk.Frame(box)
+        add.pack(side="top", fill="x", pady=(4, 0))
+        ttk.Label(add, text="Add:").pack(side="left")
+        self.unit_add_device_var = tk.StringVar()
+        self.unit_add_box = ttk.Combobox(add, textvariable=self.unit_add_device_var, state="disabled", width=26)
+        self.unit_add_box.pack(side="left", padx=(2, 8))
+        self.unit_add_vars = {}
+        for name, label, default in (("count", "Count", ""), ("disabled", "Disabled", "0")):
+            ttk.Label(add, text=label + ":").pack(side="left")
+            self.unit_add_vars[name] = tk.StringVar(value=default)
+            ttk.Entry(add, textvariable=self.unit_add_vars[name], width=6).pack(side="left", padx=(2, 8))
+        self.unit_add_button = ttk.Button(add, text="Add equipment", command=self.add_unit_equipment)
+        self.unit_add_button.pack(side="left", padx=4)
 
         self.unit_tree = ttk.Treeview(left, columns=[c[0] for c in UNIT_COLUMNS], show="headings",
                                       selectmode="browse", height=8)
@@ -535,14 +567,41 @@ class EditorApp:
         ttk.Button(right, text="Apply", command=self.apply_unit).grid(row=row, column=0, columnspan=2, pady=6)
         row += 1
         self.unit_info = {}
-        for name, label in (("hq", "HQ (read-only)"), ("location", "Location (read-only)"),
-                            ("target", "Target (read-only)"), ("required", "Supplies required (read-only)"),
+        for name, label in (("hq", "HQ (read-only)"), ("location", "Location"),
+                            ("target", "Target (set by a move)"), ("required", "Supplies required (read-only)"),
                             ("support", "Support (approx., read-only)"),
                             ("support_required", "Support required (approx., read-only)")):
             ttk.Label(right, text=label).grid(row=row, column=0, sticky="w", pady=1)
             self.unit_info[name] = tk.StringVar()
             ttk.Label(right, textvariable=self.unit_info[name]).grid(row=row, column=1, sticky="w", padx=(8, 0))
             row += 1
+        self.unit_move_var, self.unit_move_box, self.unit_move_button, self.unit_move_note = self._build_move_row(
+            right, row, self.move_unit)
+
+    def _build_move_row(self, parent, row, command):
+        """Destination box, Move button and a gray note for why moving is not possible."""
+        ttk.Label(parent, text="Move to").grid(row=row, column=0, sticky="w", pady=(8, 2))
+        var = tk.StringVar()
+        box = ttk.Combobox(parent, textvariable=var, state="readonly", width=24)
+        box.grid(row=row, column=1, padx=(8, 0), pady=(8, 2))
+        button = ttk.Button(parent, text="Move", command=command)
+        button.grid(row=row + 1, column=0, columnspan=2, pady=2)
+        note = tk.StringVar()
+        ttk.Label(parent, textvariable=note, foreground="gray40").grid(row=row + 2, column=0, columnspan=2, sticky="w")
+        return var, box, button, note
+
+    def _show_move(self, record, var, box, button, note):
+        """Fill the destination box for a record, or disable it and say why it cannot move."""
+        if record is None or not record.can_move:
+            var.set("")
+            box.configure(values=[], state="disabled")
+            button.state(["disabled"])
+            note.set(f"Cannot move: {record.move_blocker}" if record is not None else "")
+            return
+        box.configure(values=self.place_labels.get(record.side, []), state="readonly")
+        button.state(["!disabled"])
+        note.set("")
+        var.set("")
 
     def _build_factories(self, parent):
         box = ttk.LabelFrame(parent, text="Factories", padding=4)
@@ -602,6 +661,8 @@ class EditorApp:
             glist = airgroups.list_airgroups(save)
             ulist = landunits.list_land_units(save)
             pindex = airgroups.pilots_by_group(save)
+            places = bases.list_places(save)
+            devices = landunits.available_devices(save)
         except (OSError, SaveFormatError, KeyError) as exc:
             messagebox.showerror("Cannot open save", f"{path}\n\n{exc}")
             return False
@@ -626,6 +687,20 @@ class EditorApp:
         self.group_current = None
         self.pilot_current = None
         self.leader_current = None
+        # Built once per load: decrypting every place name is slow.
+        self.place_ids = {}
+        self.place_labels = {}
+        for p in sorted(places, key=lambda p: (p.name.lower(), p.id)):
+            label = f"{p.name} ({p.id})"
+            self.place_ids[label] = p.id
+            self.place_labels.setdefault(bases.SIDES.get(p.side_id, "Unknown"), []).append(label)
+        self.device_ids = {}
+        self.device_labels = {}
+        for side_id, items in devices.items():
+            for device_id, name in items:
+                label = f"{name} ({device_id})"
+                self.device_ids[label] = device_id
+                self.device_labels.setdefault(bases.SIDES[side_id], []).append(label)
         self.units = {u.id: u for u in ulist}
         self.units_edited.clear()
         self.unit_current = None
@@ -1072,6 +1147,8 @@ class EditorApp:
             self.group_title.set("(select an air group)")
             for var in list(self.group_vars.values()) + list(self.group_info.values()):
                 var.set("")
+            self._show_move(None, self.group_move_var, self.group_move_box, self.group_move_button,
+                            self.group_move_note)
             self.show_pilots(None)
             self.show_leader(None)
             return
@@ -1083,8 +1160,33 @@ class EditorApp:
         self.group_info["planes"].set(str(g.planes))
         self.group_info["pilots"].set(str(g.pilot_count))
         self.group_info["leader"].set(f"{g.leader_id} {leader.name}" if leader else str(g.leader_id))
+        self.group_info["location"].set(f"{g.location_id} {g.location_name}")
+        self._show_move(g, self.group_move_var, self.group_move_box, self.group_move_button, self.group_move_note)
         self.show_pilots(g)
         self.show_leader(leader)
+
+    def move_group(self):
+        if self.group_current is None:
+            return
+        g = self.groups[self.group_current]
+        dest = self.place_ids.get(self.group_move_var.get())
+        if dest is None:
+            messagebox.showerror("Cannot move", "Choose a destination first.")
+            return
+        self._move(g, dest, self.groups_edited, self.refresh_group_list, self.show_group)
+
+    def _move(self, record, dest, edited, refresh, show):
+        try:
+            changed = dest != record.location_id
+            record.move_to(dest)
+        except ValueError as exc:
+            messagebox.showerror("Cannot move", str(exc))
+            return
+        if changed:
+            edited.add(record.id)
+            self.dirty = True
+        refresh()
+        show(record)
 
     def apply_group(self):
         if self.group_current is None:
@@ -1227,7 +1329,9 @@ class EditorApp:
             self.unit_title.set("(select a land unit)")
             for var in list(self.unit_vars.values()) + list(self.unit_info.values()):
                 var.set("")
+            self._show_move(None, self.unit_move_var, self.unit_move_box, self.unit_move_button, self.unit_move_note)
             self.show_unit_equipment(None)
+            self._show_add_equipment(None)
             return
         self.unit_title.set(f"{u.display_name} (#{u.id}, {u.type}, class {u.class_id}, {u.side})")
         for f in landunits.FIELDS:
@@ -1238,7 +1342,19 @@ class EditorApp:
         self.unit_info["required"].set(str(u.supplies_required))
         self.unit_info["support"].set(str(u.support))
         self.unit_info["support_required"].set(str(u.support_required))
+        self._show_move(u, self.unit_move_var, self.unit_move_box, self.unit_move_button, self.unit_move_note)
         self.show_unit_equipment(u)
+        self._show_add_equipment(u)
+
+    def move_unit(self):
+        if self.unit_current is None:
+            return
+        u = self.units[self.unit_current]
+        dest = self.place_ids.get(self.unit_move_var.get())
+        if dest is None:
+            messagebox.showerror("Cannot move", "Choose a destination first.")
+            return
+        self._move(u, dest, self.units_edited, self.refresh_unit_list, self.show_unit)
 
     def show_unit_equipment(self, u):
         self.unit_equipment_tree.delete(*self.unit_equipment_tree.get_children())
@@ -1252,6 +1368,16 @@ class EditorApp:
             self.unit_slot = None
             for var in self.unit_equipment_vars.values():
                 var.set("")
+
+    def _show_add_equipment(self, u):
+        """Offer the unit's side's devices in the Add box; disabled when no unit is selected."""
+        self.unit_add_device_var.set("")
+        if u is None:
+            self.unit_add_box.configure(values=[], state="disabled")
+            self.unit_add_button.state(["disabled"])
+        else:
+            self.unit_add_box.configure(values=self.device_labels.get(u.side, []), state="readonly")
+            self.unit_add_button.state(["!disabled"])
 
     def on_unit_equipment_select(self):
         sel = self.unit_equipment_tree.selection()
@@ -1304,6 +1430,37 @@ class EditorApp:
             self.dirty = True
         self.refresh_unit_list()
         self.show_unit_equipment(u)
+
+    def add_unit_equipment(self):
+        if self.unit_current is None:
+            return
+        u = self.units[self.unit_current]
+        device_id = self.device_ids.get(self.unit_add_device_var.get())
+        if device_id is None:
+            messagebox.showerror("Cannot add equipment", "Choose a device first.")
+            return
+        try:
+            count = int(self.unit_add_vars["count"].get().strip())
+            disabled = int(self.unit_add_vars["disabled"].get().strip())
+        except ValueError:
+            messagebox.showerror("Invalid value", "Count and disabled must be whole numbers.")
+            return
+        allowed = {self.device_ids[label] for label in self.device_labels.get(u.side, [])}
+        try:
+            slot = u.add_equipment(device_id, count, disabled, allowed)
+        except ValueError as exc:
+            messagebox.showerror("Cannot add equipment", str(exc))
+            return
+        self.units_edited.add(u.id)
+        self.dirty = True
+        self.unit_add_vars["count"].set("")
+        self.unit_add_vars["disabled"].set("0")
+        self.unit_add_device_var.set("")
+        self.refresh_unit_list()
+        self.unit_slot = slot
+        self.show_unit_equipment(u)
+        self.unit_equipment_vars["count"].set(str(count))
+        self.unit_equipment_vars["disabled"].set(str(disabled))
 
     def apply_title(self):
         if self.save is None:

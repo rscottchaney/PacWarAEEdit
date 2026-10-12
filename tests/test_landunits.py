@@ -135,6 +135,113 @@ class LandUnitTests(unittest.TestCase):
                 u.set_equipment(*args)
         self.assertEqual(bytes(self.sf[SECTION].data), before)
 
+    def test_available_devices_by_side(self):
+        devices = landunits.available_devices(self.sf)
+        ids = {side: {d for d, _ in items} for side, items in devices.items()}
+        self.assertIn(367, ids[1])  # Dutch Rifle Squad
+        self.assertNotIn(367, ids[0])
+        self.assertIn(264, ids[0])  # IJA Infantry Squad
+        self.assertNotIn(264, ids[1])
+        self.assertTrue(252 in ids[0] and 252 in ids[1])  # Support
+        self.assertIn((252, "Support"), devices[1])
+        for side, items in devices.items():
+            self.assertTrue(all(0 < d < 2000 for d, _ in items))
+            self.assertEqual(items, sorted(items, key=lambda i: (i[1].lower(), i[0])))
+
+    def test_add_equipment_changes_only_the_new_slot(self):
+        allowed = {d for d, _ in landunits.available_devices(self.sf)[1]}
+        for unit_id, expected_slot in ((5639, 5), (2671, 4)):  # 2671 has a gap at slot 4
+            before = bytes(self.sf[SECTION].data)
+            u = self.units[unit_id]
+            self.assertEqual(u.add_equipment(367, 12, 2, allowed), expected_slot)
+            k = 2 * expected_slot
+            self.assertEqual(self.diff_offsets(before, unit_id),
+                             # Device 367 spans two bytes; count 12 and disabled 2 fit in the low byte.
+                             {landunits.DEVICE_OFFSET + k, landunits.DEVICE_OFFSET + k + 1,
+                              landunits.COUNT_OFFSET + k, landunits.DISABLED_OFFSET + k})
+            v = {x.id: x for x in landunits.list_land_units(self.roundtrip())}[unit_id]
+            self.assertEqual(v.get_equipment(expected_slot), {"device": "Dutch Rifle Squad", "count": 12,
+                                                              "disabled": 2, "toe_device": "", "toe_count": 0})
+            u.set_equipment(expected_slot, 7, 7)
+            self.assertEqual((u.get_equipment(expected_slot)["count"], u.get_equipment(expected_slot)["disabled"]),
+                             (7, 7))
+
+    def test_add_equipment_failures_leave_bytes_unchanged(self):
+        allowed = {d for d, _ in landunits.available_devices(self.sf)[1]}
+        before = bytes(self.sf[SECTION].data)
+        u = self.units[5639]
+        for args in ((264, 5, 0), (0, 5, 0), (367, 0, 0), (367, 5, 6), (367, 5, -1), (367, 10000, 0),
+                     (True, 5, 0), (367, True, 0), (367, 5, False), (367, 1.5, 0), (367, 5, "0")):
+            with self.assertRaises(ValueError, msg=str(args)):
+                u.add_equipment(*args, allowed)
+        with self.assertRaisesRegex(ValueError, "not available to Allied units"):
+            u.add_equipment(264, 5, 0, allowed)
+        full = self.units[7967]
+        self.assertEqual(len(full.equipment_slots()), landunits.SLOTS)
+        with self.assertRaisesRegex(ValueError, "no empty equipment slot"):
+            full.add_equipment(367, 5, 0, allowed)
+        self.assertEqual(bytes(self.sf[SECTION].data), before)
+
+    def diff_offsets(self, before, record):
+        after = bytes(self.sf[SECTION].data)
+        diff = [i for i in range(len(before)) if before[i] != after[i]]
+        self.assertTrue(all(i // RECORD == record for i in diff), "bytes changed in other records")
+        return {i % RECORD for i in diff}
+
+    def test_move_changes_only_location_hex_and_target(self):
+        before = bytes(self.sf[SECTION].data)
+        sf_before = SaveFile.load(SAVE_015)
+        u = self.units[5560]
+        self.assertTrue(u.can_move)
+        self.assertEqual((u.location_id, u.target_id), (584, 584))
+        u.move_to(581)
+        # Pearl Harbor hex 180,107 -> Midway hex 158,91; the high bytes are zero for both.
+        self.assertEqual(self.diff_offsets(before, 5560), {86, 36, 38, 102})
+        for sec in self.sf.sections:
+            if sec.sid not in (SECTION, bases.INDEX_SECTION):
+                self.assertEqual(sec.data, sf_before[sec.sid].data)
+        # Map position: Midway's pixel (6657, 3445) shifted left and down like other Allied units.
+        index, index_before = self.sf[bases.INDEX_SECTION].data, sf_before[bases.INDEX_SECTION].data
+        diff = {i for i in range(len(index)) if index[i] != index_before[i]}
+        self.assertTrue(diff and all(5560 * 20 <= i < 5560 * 20 + 8 for i in diff), diff)
+        self.assertEqual(bases.place_pixel(self.sf, 5560), (6643, 3454))
+        v = {x.id: x for x in landunits.list_land_units(self.roundtrip())}[5560]
+        self.assertEqual((v.location_id, v.target_id, v.location_name), (581, 581, "Midway Island"))
+        self.assertTrue(v.can_move)
+        self.assertEqual((v._i16(landunits.X_OFFSET), v._i16(landunits.Y_OFFSET)), (158, 91))
+
+    def test_move_to_current_location_is_noop(self):
+        before = bytes(self.sf[SECTION].data)
+        index = bytes(self.sf[bases.INDEX_SECTION].data)
+        self.units[5560].move_to(584)
+        self.assertEqual(bytes(self.sf[SECTION].data), before)
+        self.assertEqual(bytes(self.sf[bases.INDEX_SECTION].data), index)
+
+    def test_move_to_town(self):
+        self.units[5560].move_to(1091)  # Chungking, a type 5 place
+        self.assertEqual(self.units[5560].location_name, "Chungking")
+        # Same spot as the Allied units already at Chungking, e.g. 7588.
+        self.assertEqual(bases.place_pixel(self.sf, 5560), (3199, 1706))
+        self.assertEqual(bases.place_pixel(self.sf, 7588), (3199, 1706))
+
+    def test_move_failures_leave_bytes_unchanged(self):
+        before = bytes(self.sf[SECTION].data)
+        index = bytes(self.sf[bases.INDEX_SECTION].data)
+        japanese = next(p.id for p in bases.list_places(self.sf) if p.side_id == 0)
+        marching, not_arrived = self.units[6652], self.units[8]
+        self.assertEqual(marching.move_blocker, "on the march")
+        self.assertFalse(not_arrived.can_move)
+        cases = [(self.units[5560], japanese),   # wrong side
+                 (self.units[5560], 5639),       # a land unit, not a place
+                 (self.units[5560], 0), (self.units[5560], -1), (self.units[5560], 18000),
+                 (self.units[5560], True), (self.units[5560], "581"),
+                 (marching, 581), (not_arrived, 581)]
+        for unit, dest in cases:
+            with self.assertRaises(ValueError, msg=str((unit.id, dest))):
+                unit.move_to(dest)
+        self.assertEqual(bytes(self.sf[SECTION].data), before)
+        self.assertEqual(bytes(self.sf[bases.INDEX_SECTION].data), index)
+
 
 if __name__ == "__main__":
     unittest.main()

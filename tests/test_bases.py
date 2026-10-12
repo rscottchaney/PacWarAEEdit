@@ -188,6 +188,19 @@ class BaseTests(unittest.TestCase):
             bases.set_title(self.sf, "€")
         bases.set_title(self.sf, "x" * 999)
 
+    def test_list_places_includes_bases_and_towns(self):
+        places = {p.id: p for p in bases.list_places(self.sf)}
+        self.assertEqual(len(bases.list_bases(self.sf)), 781)
+        self.assertTrue(set(self.by_id) <= set(places))
+        self.assertEqual(places[584], bases.Place(584, "Pearl Harbor", 1, 180, 107))
+        self.assertEqual((places[581].name, places[581].x, places[581].y), ("Midway Island", 158, 91))
+        self.assertEqual(places[1091].name, "Chungking")
+        self.assertNotIn(1091, self.by_id)
+        self.assertGreater(len(places), len(self.by_id))
+        self.assertTrue(bases.is_place(self.sf, 1091))
+        self.assertFalse(bases.is_place(self.sf, 5560))
+        self.assertFalse(bases.is_place(self.sf, bases.RECORD_COUNT))
+
 
 if __name__ == "__main__":
     unittest.main()
