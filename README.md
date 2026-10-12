@@ -82,7 +82,9 @@ highlights the group row.
 |---|---|
 | Group morale, maximum range setting, current altitude | verified in-game, editable |
 | Group average experience | verified in-game for a group without pilots, editable; the game probably recalculates it from the pilots |
-| Group train patrol % | value matched the screen, edit unverified, editable |
+| Group patrol levels: ASW, Search, Train, Rest % | verified in-game, editable |
+| Group patrol levels: CAP, LRcap % | follow the game's order, CAP value matched; edit unverified, editable |
+| Search arc start/end (degrees, clockwise; stored in tens) | verified in-game, editable |
 | Aircraft type, aircraft total, pilot count byte (often disagrees with the pilot table), commander link | read-only |
 | Pilot status (1 = Active; 2-4 probably killed/wounded/missing, unverified) | read-only; the Pilots list column counts active pilots |
 | Pilot experience | verified in-game, editable |

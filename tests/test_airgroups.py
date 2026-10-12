@@ -69,6 +69,26 @@ class AirGroupTests(unittest.TestCase):
         self.assertEqual([leader.get(f.name) for f in airgroups.LEADER_FIELDS], [49, 41, 15, 57, 42, 59, 36])
         self.assertEqual(leader.age, 37)
 
+    def test_patrol_levels(self):
+        # 19th TS trains 40%; the naval search groups patrol 50%; the Dutch fighters fly 30% CAP.
+        g = self.groups
+        self.assertEqual([g[4205].get(n) for n in ("cap", "lrcap", "asw", "search", "train", "rest")],
+                         [0, 0, 0, 0, 40, 0])
+        self.assertEqual(g[2946].get("search"), 50)
+        self.assertEqual((g[2910].get("cap"), g[2910].get("train")), (30, 40))
+
+    def test_search_arc_in_degrees(self):
+        g = self.groups[2946]
+        self.assertEqual((g.get("arc_start"), g.get("arc_end")), (0, 0))
+        g.set_many({"arc_start": 90, "arc_end": 180})
+        # The game stored 090-180 as 9 and 18.
+        self.assertEqual((g._data[g._offset + 630], g._data[g._offset + 631]), (9, 18))
+        self.assertEqual((g.get("arc_start"), g.get("arc_end")), (90, 180))
+        for bad in (95, 360, -10):
+            with self.assertRaises(ValueError, msg=bad):
+                g.set("arc_start", bad)
+        self.assertEqual(g.get("arc_start"), 90)
+
     def test_group_edit_roundtrip(self):
         g = self.groups[4205]
         g.set_many({"morale": 80, "altitude": 20000, "range": 3})

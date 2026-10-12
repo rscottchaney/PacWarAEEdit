@@ -41,8 +41,19 @@ GROUP_FIELDS = [
     Field("experience", "Average experience", 185, "B", True, True, 0, 99),
     Field("altitude", "Current altitude", 212, "H", True, True, 0, 50000),
     Field("range", "Maximum range setting", 304, "B", True, True, 0, 99),
-    Field("train", "Train patrol %", 564, "B", True, False, 0, 100),
+    # Patrol levels, in the order of the game's patrol box. ASW, Search, Train and
+    # Rest were confirmed by a probe edit; CAP and LRcap follow that order.
+    Field("cap", "CAP patrol %", 560, "B", True, False, 0, 100),
+    Field("lrcap", "LRcap patrol %", 561, "B", True, False, 0, 100),
+    Field("asw", "ASW patrol %", 562, "B", True, True, 0, 100),
+    Field("search", "Search patrol %", 563, "B", True, True, 0, 100),
+    Field("train", "Train patrol %", 564, "B", True, True, 0, 100),
+    Field("rest", "Rest %", 565, "B", True, True, 0, 100),
+    # Search arc in degrees, clockwise from start to end; stored in tens of degrees.
+    Field("arc_start", "Search arc start (deg)", 630, "B", True, True, 0, 350),
+    Field("arc_end", "Search arc end (deg)", 631, "B", True, True, 0, 350),
 ]
+ARC_FIELDS = {"arc_start", "arc_end"}
 
 SKILLS = ["Air", "NavB", "NavT", "NavS", "Recn", "ASW", "Tran", "GrdB", "LowN", "LowG", "Staf", "Defn"]
 # The game's pilot list shows the second copy of the skills (78..89); the first
@@ -125,6 +136,23 @@ class _Record:
 
 class AirGroup(_Record):
     section, record_size, fields = GROUP_SECTION, GROUP_RECORD_SIZE, GROUP_FIELDS
+
+    def get(self, name):
+        value = super().get(name)
+        return value * 10 if name in ARC_FIELDS else value
+
+    def validate(self, name, value):
+        value = super().validate(name, value)
+        if name in ARC_FIELDS and value % 10:
+            raise ValueError(f"{self._field(name).label} must be a multiple of 10")
+        return value
+
+    def set(self, name, value):
+        if name not in ARC_FIELDS:
+            super().set(name, value)
+            return
+        value = self.validate(name, value)
+        self._data[self._offset + self._field(name).offset] = value // 10
 
     @property
     def aircraft_id(self):
