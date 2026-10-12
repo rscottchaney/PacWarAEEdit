@@ -33,6 +33,8 @@ FIELDS = [
     Field("armor", "Armor", 40, "B", True, True, 0, 10),
     Field("durability", "Durability", 41, "B", True, True, 0, 255),
     Field("load", "Load", 182, "h", True, True, 0, 30000),
+    # Monthly production rate shown as "Rate" on the aircraft and engine production screen.
+    Field("rate", "Production rate", 188, "h", True, True, 0, 1000),
 ]
 SCALAR_FIELDS = list(FIELDS)  # FIELDS minus the range pairs below, for the editor layout
 # Each range is a (hexes, miles) pair stored and shown independently by the game.
@@ -77,6 +79,22 @@ MANEUVER_MOD_OFFSET = 271
 MANEUVER_MOD_BANDS = ["<10K", "10-15K", "16-20K", "21-31K", ">32K"]
 # The game ignores the stored endurance (@38) and derives it from range and cruise
 # speed: miles / (cruise / 60 / 1.15) truncated. Integer maths avoids float error.
+
+
+# Side-wide production pool, in section 0x01 and indexed by aircraft id:
+# (offset of entry 0, stride). Verified against the production screen.
+POOL_SECTION = 0x01
+POOL = (188, 8)
+USED = (28188, 8)
+LAST_TURN = (65848, 4)
+THIS_MONTH = (69848, 4)
+MAX_POOL = 99999
+
+
+def check_pool(value):
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= MAX_POOL:
+        raise ValueError(f"In pool must be a whole number from 0 to {MAX_POOL}")
+    return value
 
 
 def _label(value, verified, guessed):
@@ -201,7 +219,36 @@ class Aircraft:
         byte = self._data[pos]
         self._data[pos] = (byte | CARRIER_BIT) if value else (byte & ~CARRIER_BIT & 0xFF)
 
+    def _pool_pos(self, table):
+        start, stride = table
+        return start + self.id * stride
+
+    def _pool_value(self, table):
+        return struct.unpack_from("<i", self._save[POOL_SECTION].data, self._pool_pos(table))[0]
+
+    @property
+    def pool(self):
+        return self._pool_value(POOL)
+
+    def set_pool(self, value):
+        value = check_pool(value)
+        struct.pack_into("<i", self._save[POOL_SECTION].data, self._pool_pos(POOL), value)
+
     # ---- read-only ------------------------------------------------------
+
+    @property
+    def used(self):
+        return self._pool_value(USED)
+
+    @property
+    def last_turn(self):
+        """Aircraft produced last turn."""
+        return self._pool_value(LAST_TURN)
+
+    @property
+    def this_month(self):
+        """Aircraft produced so far this month."""
+        return self._pool_value(THIS_MONTH)
 
     @property
     def type_id(self):

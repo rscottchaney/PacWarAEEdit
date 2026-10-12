@@ -39,6 +39,8 @@ the ID. Edits use the same Apply button, row highlight and Save As as bases.
 | Field | Status |
 |---|---|
 | Max speed, Cruise speed, Climb, Maneuver, Armor, Durability, Load | verified in-game, editable |
+| Production rate, In pool (side-wide aircraft pool) | verified in-game, editable |
+| Used, produced last turn, produced this month | verified in-game, read-only |
 | Max altitude | verified in-game, editable |
 | Max range (hexes, miles) | verified in-game, editable |
 | Normal/extended radius and the drop-tank variants of max range and radii (hexes, miles; stored and shown independently, 0/0 = none) | values verified as displayed, editable |

@@ -27,6 +27,31 @@ class AircraftTests(unittest.TestCase):
             self.sf.save(path)
             return SaveFile.load(path)
 
+    def test_pool_matches_production_screen(self):
+        # (in pool, used, last turn, this month, rate) from the game's aircraft and engine production screen.
+        expected = {336: (3, 0, 1, 3, 25), 342: (0, 4, 1, 4, 35), 435: (12, 0, 4, 12, 130), 447: (32, 9, 0, 1, 14)}
+        for aid, values in expected.items():
+            a = self.by_id[aid]
+            self.assertEqual((a.pool, a.used, a.last_turn, a.this_month, a.get("rate")), values, a.name)
+
+    def test_pool_edit_roundtrip(self):
+        self.by_id[342].set_pool(50)
+        self.by_id[342].set("rate", 40)
+        again = self.roundtrip()
+        a = {x.id: x for x in aircraft.list_aircraft(again)}[342]
+        self.assertEqual((a.pool, a.used, a.get("rate")), (50, 4, 40))
+        old = bytes(SaveFile.load(SAVE_015)[aircraft.POOL_SECTION].data)
+        new = bytes(again[aircraft.POOL_SECTION].data)
+        pos = aircraft.POOL[0] + 342 * aircraft.POOL[1]
+        self.assertEqual({i for i in range(len(old)) if old[i] != new[i]}, {pos})
+
+    def test_pool_validation(self):
+        before = bytes(self.sf[aircraft.POOL_SECTION].data)
+        for value in (-1, aircraft.MAX_POOL + 1, True, "5"):
+            with self.assertRaises(ValueError, msg=value):
+                self.by_id[342].set_pool(value)
+        self.assertEqual(bytes(self.sf[aircraft.POOL_SECTION].data), before)
+
     def test_list_skips_empty_and_keeps_duplicate_names(self):
         self.assertEqual(len(self.by_id), 555)
         sbd = [a.id for a in self.by_id.values() if a.name == "SBD-3 Dauntless"]

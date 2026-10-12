@@ -37,6 +37,7 @@ AIRCRAFT_COLUMNS = [
     ("type", "Type", 110, False, lambda a: a.type),
     ("from", "From", 60, True, lambda a: a.get_date("from")[::-1]),
     ("to", "To", 60, True, lambda a: a.get_date("to")[::-1]),
+    ("pool", "Pool", 55, True, lambda a: a.pool),
 ]
 AIRCRAFT_COLUMN_BY_ID = {c[0]: c for c in AIRCRAFT_COLUMNS}
 
@@ -191,7 +192,8 @@ class EditorApp:
         ttk.Label(right, textvariable=self.aircraft_title, font=("TkDefaultFont", 11, "bold")).grid(
             row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
         rows = [(f.name, f.label) for f in aircraft.SCALAR_FIELDS] + [("from", "Available from (m/yy)"),
-                                                                ("to", "Available to (m/yy)")]
+                                                                ("to", "Available to (m/yy)"),
+                                                                ("pool", "In pool")]
         row = 1
         for name, label in rows:
             ttk.Label(right, text=label).grid(row=row, column=0, sticky="w", pady=2)
@@ -217,6 +219,8 @@ class EditorApp:
         for name, label in (("type", "Type (read-only)"), ("nation", "Nation (read-only)"),
                             ("upgrade", "Upgrade (read-only)"), ("gun", "Gun value (read-only)"),
                             ("endurance", "Endurance (calculated)"),
+                            ("used", "Used (read-only)"), ("last_turn", "Produced last turn (read-only)"),
+                            ("this_month", "Produced this month (read-only)"),
                             ("mods", "Maneuver mods (read-only)")):
             ttk.Label(right, text=label).grid(row=row, column=0, sticky="w", pady=1)
             self.aircraft_info[name] = tk.StringVar()
@@ -526,11 +530,13 @@ class EditorApp:
             self.aircraft_vars[f.name].set(str(a.get(f.name)))
         for name in ("from", "to"):
             self.aircraft_vars[name].set(aircraft.format_date(*a.get_date(name)))
+        self.aircraft_vars["pool"].set(str(a.pool))
         self.aircraft_carrier_var.set(a.get_carrier())
         info = {"type": a.type, "nation": a.nation,
                 "upgrade": f"{a.upgrade_id} {a.upgrade_name} (unverified)",
                 "gun": str(a.gun_value),
                 "endurance": "-" if a.endurance is None else str(a.endurance),
+                "used": str(a.used), "last_turn": str(a.last_turn), "this_month": str(a.this_month),
                 "mods": ", ".join(f"{band} {m}" for band, m in zip(aircraft.MANEUVER_MOD_BANDS, a.maneuver_mods))}
         for name, text in info.items():
             self.aircraft_info[name].set(text)
@@ -552,16 +558,22 @@ class EditorApp:
                     raise ValueError(f"{f.label} must be a whole number from {f.min} to {f.max} (got {text!r}).")
             for name in ("from", "to"):
                 dates[name] = aircraft.parse_date(self.aircraft_vars[name].get())
+            text = self.aircraft_vars["pool"].get().strip()
+            try:
+                pool = aircraft.check_pool(int(text))
+            except ValueError:
+                raise ValueError(f"In pool must be a whole number from 0 to {aircraft.MAX_POOL} (got {text!r}).")
         except ValueError as exc:
             messagebox.showerror("Invalid value", str(exc))
             return
         carrier = bool(self.aircraft_carrier_var.get())
-        before = ({n: a.get(n) for n in values}, {n: a.get_date(n) for n in dates}, a.get_carrier())
+        before = ({n: a.get(n) for n in values}, {n: a.get_date(n) for n in dates}, a.get_carrier(), a.pool)
         a.set_many(values)
         for name, value in dates.items():
             a.set_date(name, value)
         a.set_carrier(carrier)
-        if before != (values, dates, carrier):
+        a.set_pool(pool)
+        if before != (values, dates, carrier, pool):
             self.aircraft_edited.add(a.id)
             self.dirty = True
         self.refresh_aircraft_list()
