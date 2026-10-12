@@ -40,13 +40,48 @@ FIELDS = [
     Field("fuel", "Fuel", 528, "i", True, True, 0, MAX_VALUE),
     Field("port", "Port size", 422, "h", True, True, 0, 10),
     Field("airfield", "Airfield size", 426, "h", True, True, 0, 10),
+    # The bracketed max sizes on the base screen; current size may exceed them.
+    Field("port_max", "Port max", 420, "h", True, True, 0, 10),
+    Field("airfield_max", "Airfield max", 416, "h", True, True, 0, 10),
     Field("resources", "Resource storage", 508, "i", True, True, 0, MAX_VALUE),
     Field("oil", "Oil storage", 520, "i", True, True, 0, MAX_VALUE),
     Field("forts", "Forts", 430, "h", True, True, 0, 9),
+    Field("port_damage", "Port damage", 442, "h", True, True, 0, 100),
+    Field("runway_damage", "Airfield runway damage", 440, "h", True, True, 0, 100),
+    Field("service_damage", "Airfield service damage", 444, "h", True, True, 0, 100),
+    Field("fuel_requested", "Fuel requested", 532, "i", True, True, 0, MAX_VALUE),
+    # Recalculated by the game every turn, so editing it would not stick.
+    Field("supply_required", "Supply required", 540, "i", False, True, None, None),
+    # Bracketed multipliers on "Value to Japan/Allies"; the game shows base value x multiplier.
+    Field("value_japan", "Value to Japan (x)", 782, "h", True, True, 0, 1000),
+    Field("value_allies", "Value to Allies (x)", 784, "h", True, True, 0, 1000),
+    Field("aviation_support", "Aviation support", 560, "i", False, True, None, None),
     Field("ships_in_port", "Ships in port", 656, "h", False, True, None, None),
     Field("aircraft", "Aircraft at base", 584, "h", False, True, None, None),
 ]
 FIELD_BY_NAME = {f.name: f for f in FIELDS}
+
+# Yes/No switches from the base screen share one bitfield byte. Kept apart from
+# FIELDS because the names clash with the supply/fuel quantity fields. Bits
+# 0x10-0x80 are of unknown meaning and are preserved on write.
+STOCKPILE_OFFSET = 109
+STOCKPILE_FLAGS = [
+    ("supply", "Supply", 0x08),
+    ("fuel", "Fuel", 0x04),
+    ("resources", "Resources", 0x02),
+    ("oil", "Oil", 0x01),
+]
+STOCKPILE_BY_NAME = {name: bit for name, _label, bit in STOCKPILE_FLAGS}
+
+# Build/expand switches: (name, label, live offset, saved-copy offset), all int16.
+# The live value is 0 when switched off; switching on in the game copies the
+# saved value back, and switching off leaves the copy alone. Neither is the size.
+BUILD_SWITCHES = [
+    ("port", "Port", 424, 866),
+    ("airfield", "Airfield", 428, 864),
+    ("forts", "Forts", 432, 868),
+]
+BUILD_BY_NAME = {name: (live, copy) for name, _label, live, copy in BUILD_SWITCHES}
 
 _cipher = None
 
@@ -128,6 +163,47 @@ class Base:
         checked = {name: self.validate(name, v) for name, v in values.items()}
         for name, v in checked.items():
             self.set(name, v)
+
+    def get_stockpile(self):
+        byte = self._save[LOCATION_SECTION].data[self._offset + STOCKPILE_OFFSET]
+        return {name: bool(byte & bit) for name, _label, bit in STOCKPILE_FLAGS}
+
+    def set_stockpile(self, flags):
+        """Set some or all switches, leaving other bits alone; validate before writing."""
+        for name, value in flags.items():
+            if name not in STOCKPILE_BY_NAME:
+                raise ValueError(f"unknown stockpile switch {name!r}")
+            if not isinstance(value, bool):
+                raise ValueError(f"stockpile switch {name!r} must be True or False")
+        data = self._save[LOCATION_SECTION].data
+        pos = self._offset + STOCKPILE_OFFSET
+        byte = data[pos]
+        for name, value in flags.items():
+            bit = STOCKPILE_BY_NAME[name]
+            byte = (byte | bit) if value else (byte & ~bit & 0xFF)
+        data[pos] = byte
+
+    def get_building(self):
+        data = self._save[LOCATION_SECTION].data
+        return {name: struct.unpack_from("<h", data, self._offset + live)[0] != 0
+                for name, _label, live, _copy in BUILD_SWITCHES}
+
+    def set_building(self, flags):
+        """Switch building on or off the way the game does; validate before writing."""
+        for name, value in flags.items():
+            if name not in BUILD_BY_NAME:
+                raise ValueError(f"unknown build switch {name!r}")
+            if not isinstance(value, bool):
+                raise ValueError(f"build switch {name!r} must be True or False")
+        data = self._save[LOCATION_SECTION].data
+        for name, value in flags.items():
+            live, copy = (self._offset + off for off in BUILD_BY_NAME[name])
+            current = struct.unpack_from("<h", data, live)[0]
+            if not value:
+                struct.pack_into("<h", data, live, 0)
+            elif current == 0:
+                # A copy of 0 would read back as off, so fall back to 1 as seen at fresh bases.
+                struct.pack_into("<h", data, live, max(struct.unpack_from("<h", data, copy)[0], 1))
 
 
 def list_bases(save):

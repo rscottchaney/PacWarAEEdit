@@ -19,10 +19,82 @@ Tests: `python -m unittest discover -s tests -v`
 | Field | Status |
 |---|---|
 | Supply, Fuel, Resource storage, Oil storage, Port size, Airfield size, Forts | verified in-game, editable |
-| Ships in port, Aircraft at base | verified, display only |
+| Port max, Airfield max (the bracketed sizes) | values verified in-game, editable |
+| Fuel requested, Value to Japan/Allies multipliers, Port damage, Airfield runway/service damage | verified in-game, editable |
+| Build/expand switches (Port, Airfield, Forts; off writes 0, on restores the saved value as the game does) | verified in-game, editable |
+| Stockpile Yes/No switches (Supply, Fuel, Resources, Oil; one bitfield byte, other bits preserved) | verified in-game, editable |
+| Factories (per base, 20 slots: size, damage, production Yes/No, repair Yes/No; production cannot be switched off for Oil, Resources, Manpower, Repair Shipyard, Light Industry) | verified, editable |
+| Factory Keep/Upgd switch (aircraft and engine factories) and aircraft availability date | verified in-game; switch editable, date display only |
+| Supply required, Aviation support, Ships in port, Aircraft at base | verified, display only (recalculated by the game) |
 
 Name, side and hex coordinates are read-only. The field table is in
 `witpae/bases.py`; adding a field is one line.
+
+## Aircraft
+
+The Aircraft tab lists the aircraft table (section 0x20) with search and
+sortable columns. Several models share a name (one per nation), so always check
+the ID. Edits use the same Apply button, row highlight and Save As as bases.
+
+| Field | Status |
+|---|---|
+| Max speed, Cruise speed, Climb, Maneuver, Armor, Durability, Load | verified in-game, editable |
+| Production rate, In pool (side-wide aircraft pool) | verified in-game, editable |
+| Used, produced last turn, produced this month | verified in-game, read-only |
+| Max altitude | verified in-game, editable |
+| Max range (hexes, miles) | verified in-game, editable |
+| Normal/extended radius and the drop-tank variants of max range and radii (hexes, miles; stored and shown independently, 0/0 = none) | values verified as displayed, editable |
+| Endurance (the game ignores the stored value and calculates it from range and cruise speed) | calculated, read-only |
+| Available from / to, entered as `m/yy` like the game database ("12/41"); `0/0` or `-` means no date (many records store it for "to") | verified in-game, editable |
+| Carrier capable (one bit of a flag byte, other bits preserved) | verified in-game, editable |
+| Type: Fighter and Dive Bomber verified; other labels are guesses and end in `?` | read-only |
+| Nation: IJA, IJN, USN, USA, NZ verified; other labels are guesses and end in `?`; unknown codes show the number | read-only |
+| Weapons (max load and reduced load: name, count, facing F/TR/C/XT), gun value, maneuver modifiers per altitude band | verified, read-only |
+| Upgrade (id and name of the record it points at) | unverified, read-only |
+
+The field table is in `witpae/aircraft.py`.
+
+## Ships
+
+The Ships tab lists the ship class table (section 0x1B). Several records share
+a name because they are refit stages of one class (Lexington is #674 to #679),
+so check the ID and date.
+
+| Field | Status |
+|---|---|
+| Fuel, Endurance, Speed, Cruise speed, Maneuver, Durability, Belt/Deck/Tower armor, Capacity | verified in-game, editable |
+| Weapon and electronics slots: Num, Face (F, C, R, RS, LS, A; other codes are kept as numbers), Mount, Armor, Ammo | verified in-game, editable per slot (Apply weapon); the device itself is read-only |
+| Type (abbreviations from the game executable; DE, TB, PG, LB are guesses ending in `?`) | read-only |
+| Nation (shared with aircraft) | read-only |
+| Displacement, refit date (`m/yy`) | unverified, read-only |
+
+The field table is in `witpae/ships.py`. Nation labels in `witpae/nations.py`
+are verified except China and India, which end in `?`.
+
+## Air Groups
+
+The Air Groups tab lists the air group table (section 0x14; the ID is the group
+number shown in the game). Select a group to edit it, its pilots (section
+0x16) and its commander (section 0x15). Editing a pilot or commander
+highlights the group row.
+
+| Field | Status |
+|---|---|
+| Group morale, maximum range setting, current altitude | verified in-game, editable |
+| Group average experience | verified in-game for a group without pilots, editable; the game probably recalculates it from the pilots |
+| Group patrol levels: ASW, Search, Train, Rest % | verified in-game, editable |
+| Group patrol levels: CAP, LRcap % | follow the game's order, CAP value matched; edit unverified, editable |
+| Search arc start/end (degrees, clockwise; stored in tens) | verified in-game, editable |
+| Aircraft type, aircraft total, pilot count byte (often disagrees with the pilot table), commander link | read-only |
+| Pilot status (1 = Active; 2-4 probably killed/wounded/missing, unverified) | read-only; the Pilots list column counts active pilots |
+| Pilot experience | verified in-game, editable |
+| Pilot 12 skills (Air, NavB, NavT, NavS, Recn, ASW, Tran, GrdB, LowN, LowG, Staf, Defn) | verified in-game, editable; written to both stored copies |
+| Commander leadership, inspiration, naval, air, land, admin, aggression | verified in-game, editable |
+| Pilot and commander "Age?" | unverified, read-only |
+
+Each pilot skill is stored twice (bytes 65..76 and 78..89). The game's pilot
+list shows the second copy, so edits write both. The byte at 122 is left
+alone because its purpose is unknown. The commander box is disabled for groups without a commander.
 
 ## Backups
 

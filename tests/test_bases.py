@@ -1,4 +1,5 @@
 import os
+import struct
 import tempfile
 import unittest
 
@@ -39,10 +40,41 @@ class BaseTests(unittest.TestCase):
         self.assertEqual(b.get("fuel"), 908984)
         self.assertEqual(b.get("port"), 7)
         self.assertEqual(b.get("airfield"), 10)
+        self.assertEqual(b.get("port_max"), 5)
+        self.assertEqual(b.get("airfield_max"), 7)
+        self.assertEqual(b.get("fuel_requested"), 14935)
+        self.assertEqual(b.get("supply_required"), 7053)
+        self.assertEqual(b.get("runway_damage"), 10)
+        self.assertEqual(b.get("service_damage"), 40)
         self.assertEqual(b.get("ships_in_port"), 111)
         self.assertEqual(b.get("aircraft"), 256)
         self.assertEqual((b.x, b.y), (180, 107))
         self.assertEqual(b.side, "Allied")
+
+    def test_max_sizes_match_game(self):
+        # (port max, airfield max) as read off the in-game base screen.
+        expected = {"Los Angeles": (9, 7), "Manila": (6, 7), "Lunga": (1, 5), "Rabaul": (4, 6)}
+        by_name = {b.name: b for b in self.by_id.values()}
+        for name, maxes in expected.items():
+            b = by_name[name]
+            self.assertEqual((b.get("port_max"), b.get("airfield_max")), maxes, name)
+
+    def test_los_angeles_matches_screenshot(self):
+        b = self.by_id[506]
+        self.assertEqual(b.name, "Los Angeles")
+        expected = {"supply_required": 20836, "fuel_requested": 15654, "aviation_support": 302,
+                    "value_japan": 100, "value_allies": 1, "ships_in_port": 26, "aircraft": 19,
+                    "port": 8, "port_max": 9, "airfield": 10, "airfield_max": 7, "forts": 0}
+        for name, value in expected.items():
+            self.assertEqual(b.get(name), value, name)
+
+    def test_singapore_matches_screenshot(self):
+        b = self.by_id[722]
+        self.assertEqual(b.name, "Singapore")
+        expected = {"port_damage": 17, "runway_damage": 0, "service_damage": 0, "aviation_support": 104,
+                    "supply_required": 3417, "fuel_requested": 10644, "value_japan": 20, "value_allies": 90}
+        for name, value in expected.items():
+            self.assertEqual(b.get(name), value, name)
 
     def test_tokyo_side(self):
         self.assertEqual(self.by_id[252].side, "Japanese")
@@ -50,7 +82,7 @@ class BaseTests(unittest.TestCase):
     def test_validation(self):
         b = self.by_id[584]
         for name, value in [("supply", -1), ("supply", 100000000), ("port", 11),
-                            ("forts", 10), ("airfield", "5"), ("aircraft", 1),
+                            ("forts", 10), ("airfield", "5"), ("aircraft", 1), ("supply_required", 1),
                             ("ships_in_port", 1), ("nope", 1)]:
             with self.assertRaises(ValueError, msg=(name, value)):
                 b.set(name, value)
@@ -77,6 +109,66 @@ class BaseTests(unittest.TestCase):
         lo, hi = 584 * bases.RECORD_SIZE, 585 * bases.RECORD_SIZE
         self.assertEqual(old[:lo], new[:lo])
         self.assertEqual(old[hi:], new[hi:])
+
+    def test_building_matches_game(self):
+        # Los Angeles: port expanding and forts building, airfield above its max so off.
+        self.assertEqual(self.by_id[506].get_building(), {"port": True, "airfield": False, "forts": True})
+
+    def test_building_off_and_on_like_game(self):
+        b = self.by_id[506]
+        data = self.sf[bases.LOCATION_SECTION].data
+        pos = 506 * bases.RECORD_SIZE
+        b.set_building({"port": False})
+        self.assertEqual(struct.unpack_from("<hh", data, pos + 424)[0], 0)
+        self.assertEqual(struct.unpack_from("<h", data, pos + 866)[0], 8)  # copy kept
+        b.set_building({"port": True})
+        again = {x.id: x for x in bases.list_bases(self.roundtrip())}[506]
+        self.assertEqual(again.get_building(), {"port": True, "airfield": False, "forts": True})
+        self.assertEqual(bytes(self.roundtrip()[bases.LOCATION_SECTION].data), bytes(self.pristine[bases.LOCATION_SECTION].data))
+
+    def test_building_on_with_empty_copy(self):
+        b = self.by_id[506]
+        b.set_building({"airfield": True})
+        self.assertEqual(struct.unpack_from("<h", self.sf[bases.LOCATION_SECTION].data, 506 * bases.RECORD_SIZE + 428)[0], 1)
+
+    def test_building_validation(self):
+        before = bytes(self.sf[bases.LOCATION_SECTION].data)
+        for flags in [{"nope": True}, {"port": 1}, {"port": False, "forts": "no"}]:
+            with self.assertRaises(ValueError, msg=flags):
+                self.by_id[506].set_building(flags)
+        self.assertEqual(bytes(self.sf[bases.LOCATION_SECTION].data), before)
+
+    def test_stockpile_default_off(self):
+        self.assertEqual(self.by_id[506].get_stockpile(),
+                         {"supply": False, "fuel": False, "resources": False, "oil": False})
+
+    def test_stockpile_roundtrip(self):
+        self.by_id[506].set_stockpile({"supply": True, "oil": True})
+        b2 = {x.id: x for x in bases.list_bases(self.roundtrip())}[506]
+        self.assertEqual(b2.get_stockpile(),
+                         {"supply": True, "fuel": False, "resources": False, "oil": True})
+        data = self.roundtrip()[bases.LOCATION_SECTION].data
+        self.assertEqual(data[506 * bases.RECORD_SIZE + bases.STOCKPILE_OFFSET], 0x09)
+
+    def test_stockpile_preserves_upper_bits(self):
+        pos = 506 * bases.RECORD_SIZE + bases.STOCKPILE_OFFSET
+        data = self.sf[bases.LOCATION_SECTION].data
+        data[pos] = 0xF0
+        b = self.by_id[506]
+        b.set_stockpile({"fuel": True, "resources": True})
+        self.assertEqual(data[pos], 0xF6)
+        b.set_stockpile({"fuel": False, "resources": False})
+        self.assertEqual(data[pos], 0xF0)
+
+    def test_stockpile_validation(self):
+        pos = 506 * bases.RECORD_SIZE + bases.STOCKPILE_OFFSET
+        data = self.sf[bases.LOCATION_SECTION].data
+        b = self.by_id[506]
+        for flags in [{"nope": True}, {"supply": 1}, {"supply": True, "oil": "yes"},
+                      {"supply": True, "nope": False}]:
+            with self.assertRaises(ValueError, msg=flags):
+                b.set_stockpile(flags)
+            self.assertEqual(data[pos], 0, flags)
 
     def test_untouched_identical(self):
         with open(SAVE_015, "rb") as fh:
