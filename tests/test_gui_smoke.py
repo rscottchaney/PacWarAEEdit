@@ -201,6 +201,41 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertTrue(app.load(SAVE_015))
         self.assertEqual(app.groups_edited, set())
 
+    def test_land_units_tab_edit_applies(self):
+        from unittest import mock
+        import witpae_editor
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        self.assertGreater(len(app.unit_tree.get_children()), 1000)
+        self.assertNotIn("584", app.unit_tree.get_children())  # a base
+        app.unit_search_var.set("1/153rd")
+        self.assertIn("5639", app.unit_tree.get_children())
+        app.unit_tree.selection_set("5639")
+        self.root.update()
+        self.assertEqual(app.unit_vars["morale"].get(), "52")
+        self.assertEqual(len(app.unit_equipment_tree.get_children()), 6)
+        app.unit_vars["morale"].set("75")
+        app.apply_unit()
+        self.assertEqual(app.units[5639].get("morale"), 75)
+        self.assertIn(5639, app.units_edited)
+        self.assertTrue(app.dirty)
+        self.assertEqual(app.unit_tree.item("5639", "tags"), ("edited",))
+        self.root.update()  # let the list refresh's reselect event settle first
+        app.unit_equipment_tree.selection_set("0")
+        self.root.update()
+        self.assertEqual(app.unit_equipment_vars["count"].get(), "28")
+        app.unit_equipment_vars["count"].set("25")
+        app.apply_unit_equipment()
+        self.assertEqual(app.units[5639].get_equipment(0)["count"], 25)
+        self.assertEqual(app.unit_equipment_tree.set("0", "count"), "25")
+        app.unit_equipment_vars["disabled"].set("26")
+        with mock.patch.object(witpae_editor.messagebox, "showerror") as err:
+            app.apply_unit_equipment()
+        self.assertTrue(err.called)
+        self.assertEqual(app.units[5639].get_equipment(0)["disabled"], 3)
+        self.assertTrue(app.load(SAVE_015))
+        self.assertEqual(app.units_edited, set())
+
     def test_load_folder_gives_clear_error(self):
         from unittest import mock
         import witpae_editor
