@@ -1,10 +1,11 @@
 """Factory slots of a base (record in section 0x13, 20 slots per base).
 
 Per-slot arrays: type int16 at 136, size int16 at 176, damage int16 at 216,
-production-off byte at 844, repair-off byte at 870, upgrade-off byte at 1073
-(unverified, read-only here). Other slot arrays (original type/size) are never
-touched. Names come from the device section (engine and industry factories) or
-the aircraft section (type >= 2000), both plain latin-1 text.
+production-off byte at 844, repair-off byte at 870, keep byte at 1073 (1 = Keep,
+0 = Upgd on the aircraft assembly screen). Other slot arrays (original
+type/size) are never touched. Names come from the device section (engine and
+industry factories) or the aircraft section (type >= 2000), both plain latin-1
+text.
 """
 
 import struct
@@ -16,6 +17,9 @@ DEVICE_SECTION = 0x1F
 DEVICE_RECORD_SIZE = 236
 AIRCRAFT_SECTION = 0x20
 AIRCRAFT_RECORD_SIZE = 396
+# Availability date of an aircraft model, shown as "(yy/m)" in the game.
+AIRCRAFT_MONTH_OFFSET = 184
+AIRCRAFT_YEAR_OFFSET = 185
 
 SLOTS = 20
 TYPE_OFFSET = 136
@@ -23,7 +27,7 @@ SIZE_OFFSET = 176
 DAMAGE_OFFSET = 216
 PRODUCTION_OFF_OFFSET = 844
 REPAIR_OFF_OFFSET = 870
-UPGRADE_OFF_OFFSET = 1073  # unverified
+KEEP_OFFSET = 1073
 
 AIRCRAFT_BASE = 2000
 MAX_SIZE = 30000
@@ -37,7 +41,7 @@ INDUSTRIES = {
 # The game refuses to switch these off (518-520) or shows no switch (524, 527).
 PRODUCTION_LOCKED = frozenset({518, 519, 520, 524, 527})
 
-Factory = namedtuple("Factory", "slot type name kind size damage production_on repair_on upgrade_on")
+Factory = namedtuple("Factory", "slot type name kind size damage production_on repair_on upgrade_on available")
 
 
 def _plain_name(data, start):
@@ -57,8 +61,22 @@ def factory_name(save, type_id):
     return _plain_name(save[DEVICE_SECTION].data, type_id * DEVICE_RECORD_SIZE)
 
 
+def available(save, type_id):
+    """(year, month) an aircraft model becomes available, or None for other factories."""
+    if type_id < AIRCRAFT_BASE:
+        return None
+    rec = save[AIRCRAFT_SECTION].data
+    start = (type_id - AIRCRAFT_BASE) * AIRCRAFT_RECORD_SIZE
+    return rec[start + AIRCRAFT_YEAR_OFFSET], rec[start + AIRCRAFT_MONTH_OFFSET]
+
+
 def production_locked(type_id):
     return type_id in PRODUCTION_LOCKED
+
+
+def upgrade_locked(type_id):
+    # Industries show "-" in the game's Upgd column.
+    return kind_of(type_id) == "industry"
 
 
 def _start(base):
@@ -84,7 +102,8 @@ def get_factory(base, slot):
         struct.unpack_from("<h", data, start + DAMAGE_OFFSET + 2 * slot)[0],
         data[start + PRODUCTION_OFF_OFFSET + slot] == 0,
         data[start + REPAIR_OFF_OFFSET + slot] == 0,
-        data[start + UPGRADE_OFF_OFFSET + slot] == 0,
+        data[start + KEEP_OFFSET + slot] == 0,
+        available(base._save, type_id),
     )
 
 
@@ -93,15 +112,21 @@ def list_factories(base):
     return [f for f in (get_factory(base, k) for k in range(SLOTS)) if f is not None]
 
 
-def set_factory(base, slot, size, damage, production_on, repair_on):
-    """Set one slot's editable fields; validate everything before writing."""
+def set_factory(base, slot, size, damage, production_on, repair_on, upgrade_on=None):
+    """Set one slot's editable fields; validate everything before writing.
+
+    upgrade_on=None leaves the Keep/Upgd switch as it is.
+    """
     factory = get_factory(base, slot)
     if factory is None:
         raise ValueError(f"slot {slot} is empty")
     for label, value in (("Size", size), ("Damage", damage)):
         if isinstance(value, bool) or not isinstance(value, int):
             raise ValueError(f"{label} must be an integer")
-    for label, value in (("Production", production_on), ("Repair", repair_on)):
+    flags = [("Production", production_on), ("Repair", repair_on)]
+    if upgrade_on is not None:
+        flags.append(("Upgrade", upgrade_on))
+    for label, value in flags:
         if not isinstance(value, bool):
             raise ValueError(f"{label} must be True or False")
     if not 0 <= size <= MAX_SIZE:
@@ -111,9 +136,13 @@ def set_factory(base, slot, size, damage, production_on, repair_on):
     # Only block switching off; a locked slot already stored as off must stay editable.
     if not production_on and factory.production_on and production_locked(factory.type):
         raise ValueError(f"{factory.name} production cannot be switched off")
+    if upgrade_on is not None and upgrade_on != factory.upgrade_on and upgrade_locked(factory.type):
+        raise ValueError(f"{factory.name} has no upgrade switch")
     data = base._save[LOCATION_SECTION].data
     start = _start(base)
     struct.pack_into("<h", data, start + SIZE_OFFSET + 2 * slot, size)
     struct.pack_into("<h", data, start + DAMAGE_OFFSET + 2 * slot, damage)
     data[start + PRODUCTION_OFF_OFFSET + slot] = 0 if production_on else 1
     data[start + REPAIR_OFF_OFFSET + slot] = 0 if repair_on else 1
+    if upgrade_on is not None:
+        data[start + KEEP_OFFSET + slot] = 0 if upgrade_on else 1

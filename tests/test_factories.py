@@ -37,6 +37,29 @@ class FactoryTests(unittest.TestCase):
             self.assertEqual(f.damage, 0)
             self.assertTrue(f.production_on and f.repair_on)
 
+    def test_aircraft_available_date(self):
+        fl = factories.list_factories(self.la)
+        # Dates as shown on the game's aircraft assembly screen, e.g. "P-38G Lightning (42/10)".
+        self.assertEqual([(f.name, f.available) for f in fl[7:10]],
+                         [("SBD-3 Dauntless", (41, 12)), ("P-38G Lightning", (42, 10)),
+                          ("P-38H Lightning", (43, 2))])
+        self.assertIsNone(fl[0].available)
+
+    def test_upgrade_switch(self):
+        start = LA * bases.RECORD_SIZE + factories.KEEP_OFFSET
+        data = self.sf[bases.LOCATION_SECTION].data
+        factories.set_factory(self.la, 8, 20, 0, True, True, False)
+        self.assertEqual(data[start + 8], 1)  # Keep
+        factories.set_factory(self.la, 8, 20, 0, True, True)
+        self.assertEqual(data[start + 8], 1)  # None leaves it alone
+        factories.set_factory(self.la, 8, 20, 0, True, True, True)
+        self.assertEqual(data[start + 8], 0)  # Upgd
+        before = self.rec(self.sf)
+        for upgrade in (False, 1):
+            with self.assertRaises(ValueError, msg=upgrade):
+                factories.set_factory(self.la, 3, 860, 0, True, True, upgrade)  # Heavy Industry
+        self.assertEqual(self.rec(self.sf), before)
+
     def test_engine_kind(self):
         fl = {f.type: f for f in factories.list_factories(self.by_id[252])}
         self.assertEqual(fl[1932].name, "Nakajima Ha-35")

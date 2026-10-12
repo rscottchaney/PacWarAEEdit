@@ -139,7 +139,7 @@ class EditorApp:
         box.pack(side="bottom", fill="x", pady=(6, 0))
         cols = [("slot", "Slot", 40), ("name", "Name", 150), ("kind", "Kind", 65), ("size", "Size", 55),
                 ("damage", "Damage", 60), ("production", "Production", 75), ("repair", "Repair", 55),
-                ("upgrade", "Upgrade (unverified)", 120)]
+                ("upgrade", "Upgrade", 60), ("available", "Available", 65)]
         self.factory_tree = ttk.Treeview(box, columns=[c[0] for c in cols], show="headings",
                                          selectmode="browse", height=6)
         for cid, heading, width in cols:
@@ -153,6 +153,7 @@ class EditorApp:
         self.factory_damage_var = tk.StringVar()
         self.factory_production_var = tk.BooleanVar()
         self.factory_repair_var = tk.BooleanVar()
+        self.factory_upgrade_var = tk.BooleanVar()
         ttk.Label(edit, text="Size:").pack(side="left")
         ttk.Entry(edit, textvariable=self.factory_size_var, width=8).pack(side="left", padx=(2, 8))
         ttk.Label(edit, text="Damage:").pack(side="left")
@@ -160,6 +161,8 @@ class EditorApp:
         self.factory_production_check = ttk.Checkbutton(edit, text="Production", variable=self.factory_production_var)
         self.factory_production_check.pack(side="left", padx=4)
         ttk.Checkbutton(edit, text="Repair", variable=self.factory_repair_var).pack(side="left", padx=4)
+        self.factory_upgrade_check = ttk.Checkbutton(edit, text="Upgrade", variable=self.factory_upgrade_var)
+        self.factory_upgrade_check.pack(side="left", padx=4)
         ttk.Button(edit, text="Apply factory", command=self.apply_factory).pack(side="left", padx=8)
 
     # ---- loading -------------------------------------------------------
@@ -277,7 +280,9 @@ class EditorApp:
         yn = lambda v: "Yes" if v else "No"
         for f in factories.list_factories(base):
             self.factory_tree.insert("", "end", iid=str(f.slot), values=(
-                f.slot, f.name, f.kind, f.size, f.damage, yn(f.production_on), yn(f.repair_on), yn(f.upgrade_on)))
+                f.slot, f.name, f.kind, f.size, f.damage, yn(f.production_on), yn(f.repair_on),
+                "-" if factories.upgrade_locked(f.type) else ("Upgd" if f.upgrade_on else "Keep"),
+                f"{f.available[0]}/{f.available[1]}" if f.available else ""))
         slot = self.factory_slot
         if slot is not None and self.factory_tree.exists(str(slot)):
             self.factory_tree.selection_set(str(slot))
@@ -291,13 +296,17 @@ class EditorApp:
             self.factory_damage_var.set("")
             self.factory_production_var.set(True)
             self.factory_repair_var.set(True)
+            self.factory_upgrade_var.set(False)
             self.factory_production_check.state(["disabled"])
+            self.factory_upgrade_check.state(["disabled"])
             return
         self.factory_size_var.set(str(factory.size))
         self.factory_damage_var.set(str(factory.damage))
         self.factory_production_var.set(factory.production_on)
         self.factory_repair_var.set(factory.repair_on)
+        self.factory_upgrade_var.set(factory.upgrade_on)
         self.factory_production_check.state(["disabled" if factories.production_locked(factory.type) else "!disabled"])
+        self.factory_upgrade_check.state(["disabled" if factories.upgrade_locked(factory.type) else "!disabled"])
 
     def on_factory_select(self):
         sel = self.factory_tree.selection()
@@ -319,7 +328,8 @@ class EditorApp:
             return
         try:
             factories.set_factory(base, self.factory_slot, size, damage,
-                                  bool(self.factory_production_var.get()), bool(self.factory_repair_var.get()))
+                                  bool(self.factory_production_var.get()), bool(self.factory_repair_var.get()),
+                                  None if factories.upgrade_locked(before.type) else bool(self.factory_upgrade_var.get()))
         except ValueError as exc:
             messagebox.showerror("Invalid value", str(exc))
             return

@@ -67,6 +67,9 @@ class GuiSmokeTests(unittest.TestCase):
         app.factory_tree.selection_set("2")  # Oil
         self.root.update()
         self.assertTrue(app.factory_production_check.instate(["disabled"]))
+        self.assertTrue(app.factory_upgrade_check.instate(["disabled"]))
+        self.assertEqual(app.factory_tree.set("2", "upgrade"), "-")
+        self.assertEqual(app.factory_tree.set("8", "available"), "42/10")
         app.factory_tree.selection_set("4")  # Refinery
         self.root.update()
         self.assertFalse(app.factory_production_check.instate(["disabled"]))

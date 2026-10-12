@@ -23,7 +23,7 @@ Tests: `python -m unittest discover -s tests -v`
 | Fuel requested, Value to Japan/Allies multipliers, Port damage, Airfield runway/service damage | verified in-game, editable |
 | Stockpile Yes/No switches (Supply, Fuel, Resources, Oil; one bitfield byte, other bits preserved) | verified in-game, editable |
 | Factories (per base, 20 slots: size, damage, production Yes/No, repair Yes/No; production cannot be switched off for Oil, Resources, Manpower, Repair Shipyard, Light Industry) | verified, editable |
-| Factory upgrade switch | unverified, read-only |
+| Factory Keep/Upgd switch (aircraft and engine factories) and aircraft availability date | verified in-game; switch editable, date display only |
 | Supply required, Aviation support, Ships in port, Aircraft at base | verified, display only (recalculated by the game) |
 
 Name, side and hex coordinates are read-only. The field table is in
