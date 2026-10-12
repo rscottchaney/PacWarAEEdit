@@ -10,7 +10,7 @@ import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from witpae import bases, factories
+from witpae import aircraft, bases, factories
 from witpae.container import SaveFile, SaveFormatError
 from witpae.fileio import save_with_backup
 
@@ -30,6 +30,16 @@ COLUMNS = [
 ]
 COLUMN_BY_ID = {c[0]: c for c in COLUMNS}
 
+AIRCRAFT_COLUMNS = [
+    ("id", "ID", 55, True, lambda a: a.id),
+    ("name", "Name", 170, False, lambda a: a.name),
+    ("nation", "Nation", 70, False, lambda a: a.nation),
+    ("type", "Type", 110, False, lambda a: a.type),
+    ("from", "From", 60, True, lambda a: a.get_date("from")[::-1]),
+    ("to", "To", 60, True, lambda a: a.get_date("to")[::-1]),
+]
+AIRCRAFT_COLUMN_BY_ID = {c[0]: c for c in AIRCRAFT_COLUMNS}
+
 
 class EditorApp:
     def __init__(self, root):
@@ -47,6 +57,12 @@ class EditorApp:
         self.building_vars = {}
         self.current = None
         self.factory_slot = None
+        self.aircraft = {}
+        self.aircraft_edited = set()
+        self.aircraft_sort_col = "id"
+        self.aircraft_sort_reverse = False
+        self.aircraft_vars = {}
+        self.aircraft_current = None
 
         self._build_menu()
         self._build_header()
@@ -81,8 +97,11 @@ class EditorApp:
         head.columnconfigure(1, weight=1)
 
     def _build_body(self):
-        body = ttk.Frame(self.root, padding=4)
-        body.pack(side="top", fill="both", expand=True)
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.pack(side="top", fill="both", expand=True)
+        body = ttk.Frame(self.notebook, padding=4)
+        self.notebook.add(body, text="Bases")
+        self._build_aircraft_tab()
 
         left = ttk.Frame(body)
         left.pack(side="left", fill="both", expand=True)
@@ -143,6 +162,79 @@ class EditorApp:
         self.apply_btn = ttk.Button(right, text="Apply", command=self.apply)
         self.apply_btn.grid(row=build_row + 1, column=0, columnspan=2, pady=(10, 0))
 
+    def _build_aircraft_tab(self):
+        tab = ttk.Frame(self.notebook, padding=4)
+        self.notebook.add(tab, text="Aircraft")
+        left = ttk.Frame(tab)
+        left.pack(side="left", fill="both", expand=True)
+        bar = ttk.Frame(left)
+        bar.pack(side="top", fill="x")
+        ttk.Label(bar, text="Search:").pack(side="left")
+        self.aircraft_search_var = tk.StringVar()
+        self.aircraft_search_var.trace_add("write", lambda *a: self.refresh_aircraft_list())
+        ttk.Entry(bar, textvariable=self.aircraft_search_var, width=20).pack(side="left", padx=4)
+        self.aircraft_tree = ttk.Treeview(left, columns=[c[0] for c in AIRCRAFT_COLUMNS], show="headings",
+                                          selectmode="browse")
+        for cid, heading, width, _numeric, _get in AIRCRAFT_COLUMNS:
+            self.aircraft_tree.heading(cid, text=heading, command=lambda c=cid: self.sort_aircraft_by(c))
+            self.aircraft_tree.column(cid, width=width, anchor="w" if cid in ("name", "nation", "type") else "e")
+        self.aircraft_tree.tag_configure("edited", background="#fff2b3")
+        scroll = ttk.Scrollbar(left, orient="vertical", command=self.aircraft_tree.yview)
+        self.aircraft_tree.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+        self.aircraft_tree.pack(side="left", fill="both", expand=True)
+        self.aircraft_tree.bind("<<TreeviewSelect>>", lambda e: self.on_aircraft_select())
+
+        right = ttk.LabelFrame(tab, text="Aircraft", padding=8)
+        right.pack(side="right", fill="y", padx=(8, 0))
+        self.aircraft_title = tk.StringVar(value="(select an aircraft)")
+        ttk.Label(right, textvariable=self.aircraft_title, font=("TkDefaultFont", 11, "bold")).grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
+        rows = [(f.name, f.label) for f in aircraft.SCALAR_FIELDS] + [("from", "Available from (m/yy)"),
+                                                                ("to", "Available to (m/yy)")]
+        row = 1
+        for name, label in rows:
+            ttk.Label(right, text=label).grid(row=row, column=0, sticky="w", pady=2)
+            self.aircraft_vars[name] = tk.StringVar()
+            ttk.Entry(right, textvariable=self.aircraft_vars[name], width=14).grid(
+                row=row, column=1, padx=(8, 0), pady=2)
+            row += 1
+        for name, label, _hex, _miles in aircraft.RANGES:
+            ttk.Label(right, text=label + " (hex, mi)").grid(row=row, column=0, sticky="w", pady=2)
+            pair = ttk.Frame(right)
+            pair.grid(row=row, column=1, padx=(8, 0), pady=2, sticky="w")
+            for suffix in ("_hex", "_miles"):
+                self.aircraft_vars[name + suffix] = tk.StringVar()
+                ttk.Entry(pair, textvariable=self.aircraft_vars[name + suffix], width=6).pack(side="left", padx=(0, 2))
+            row += 1
+        self.aircraft_carrier_var = tk.BooleanVar()
+        ttk.Checkbutton(right, text="Carrier capable", variable=self.aircraft_carrier_var).grid(
+            row=row, column=0, columnspan=2, sticky="w", pady=2)
+        row += 1
+        ttk.Button(right, text="Apply", command=self.apply_aircraft).grid(row=row, column=0, columnspan=2, pady=6)
+        row += 1
+        self.aircraft_info = {}
+        for name, label in (("type", "Type (read-only)"), ("nation", "Nation (read-only)"),
+                            ("upgrade", "Upgrade (read-only)"), ("gun", "Gun value (read-only)"),
+                            ("endurance", "Endurance (calculated)"),
+                            ("mods", "Maneuver mods (read-only)")):
+            ttk.Label(right, text=label).grid(row=row, column=0, sticky="w", pady=1)
+            self.aircraft_info[name] = tk.StringVar()
+            ttk.Label(right, textvariable=self.aircraft_info[name]).grid(row=row, column=1, sticky="w", padx=(8, 0))
+            row += 1
+        self.aircraft_weapon_trees = {}
+        for key, title in (("max", "Weapons, max load"), ("reduced", "Weapons, reduced load")):
+            box = ttk.LabelFrame(right, text=title, padding=2)
+            box.grid(row=row, column=0, columnspan=2, sticky="we", pady=(4, 0))
+            tree = ttk.Treeview(box, columns=("name", "count", "facing"), show="headings", height=5,
+                                selectmode="none")
+            for cid, heading, width in (("name", "Name", 150), ("count", "Count", 50), ("facing", "Facing", 50)):
+                tree.heading(cid, text=heading)
+                tree.column(cid, width=width, anchor="w" if cid == "name" else "e")
+            tree.pack(fill="x")
+            self.aircraft_weapon_trees[key] = tree
+            row += 1
+
     def _build_factories(self, parent):
         box = ttk.LabelFrame(parent, text="Factories", padding=4)
         box.pack(side="bottom", fill="x", pady=(6, 0))
@@ -196,6 +288,7 @@ class EditorApp:
         try:
             save = SaveFile.load(path)
             blist = bases.list_bases(save)
+            alist = aircraft.list_aircraft(save)
         except (OSError, SaveFormatError, KeyError) as exc:
             messagebox.showerror("Cannot open save", f"{path}\n\n{exc}")
             return False
@@ -205,11 +298,16 @@ class EditorApp:
         self.dirty = False
         self.current = None
         self.factory_slot = None
+        self.aircraft = {a.id: a for a in alist}
+        self.aircraft_edited.clear()
+        self.aircraft_current = None
         self.file_label.set(f"File: {os.path.basename(path)}    Key variant: {save.variant}")
         self.title_var.set(save.description)
-        self.status.set(f"{path} - {len(blist)} bases")
+        self.status.set(f"{path} - {len(blist)} bases, {len(alist)} aircraft")
         self.refresh_list()
         self.show_detail(None)
+        self.refresh_aircraft_list()
+        self.show_aircraft(None)
         return True
 
     def confirm_discard(self):
@@ -379,6 +477,95 @@ class EditorApp:
             self.dirty = True
         self.refresh_list()
         self.show_detail(base)
+
+    # ---- aircraft ------------------------------------------------------
+
+    def _aircraft_row(self, a):
+        return [aircraft.format_date(*a.get_date(cid)) if cid in ("from", "to") else get(a)
+                for cid, _h, _w, _n, get in AIRCRAFT_COLUMNS]
+
+    def _aircraft_sort_key(self, a):
+        _cid, _h, _w, numeric, get = AIRCRAFT_COLUMN_BY_ID[self.aircraft_sort_col]
+        v = get(a)
+        # Ties fall back to the id so the order is stable.
+        return (v if numeric else str(v).lower(), a.id)
+
+    def refresh_aircraft_list(self):
+        selected = self.aircraft_current
+        self.aircraft_tree.delete(*self.aircraft_tree.get_children())
+        needle = self.aircraft_search_var.get().strip().lower()
+        rows = [a for a in self.aircraft.values() if needle in a.name.lower()]
+        rows.sort(key=self._aircraft_sort_key, reverse=self.aircraft_sort_reverse)
+        for a in rows:
+            tags = ("edited",) if a.id in self.aircraft_edited else ()
+            self.aircraft_tree.insert("", "end", iid=str(a.id), values=self._aircraft_row(a), tags=tags)
+        if selected is not None and self.aircraft_tree.exists(str(selected)):
+            self.aircraft_tree.selection_set(str(selected))
+
+    def sort_aircraft_by(self, col):
+        self.aircraft_sort_reverse = (not self.aircraft_sort_reverse) if col == self.aircraft_sort_col else False
+        self.aircraft_sort_col = col
+        self.refresh_aircraft_list()
+
+    def on_aircraft_select(self):
+        sel = self.aircraft_tree.selection()
+        self.show_aircraft(self.aircraft[int(sel[0])] if sel else None)
+
+    def show_aircraft(self, a):
+        self.aircraft_current = a.id if a else None
+        for tree in self.aircraft_weapon_trees.values():
+            tree.delete(*tree.get_children())
+        if a is None:
+            self.aircraft_title.set("(select an aircraft)")
+            for var in list(self.aircraft_vars.values()) + list(self.aircraft_info.values()):
+                var.set("")
+            self.aircraft_carrier_var.set(False)
+            return
+        self.aircraft_title.set(f"{a.name} (#{a.id})")
+        for f in aircraft.FIELDS:
+            self.aircraft_vars[f.name].set(str(a.get(f.name)))
+        for name in ("from", "to"):
+            self.aircraft_vars[name].set(aircraft.format_date(*a.get_date(name)))
+        self.aircraft_carrier_var.set(a.get_carrier())
+        info = {"type": a.type, "nation": a.nation,
+                "upgrade": f"{a.upgrade_id} {a.upgrade_name} (unverified)",
+                "gun": str(a.gun_value),
+                "endurance": "-" if a.endurance is None else str(a.endurance),
+                "mods": ", ".join(f"{band} {m}" for band, m in zip(aircraft.MANEUVER_MOD_BANDS, a.maneuver_mods))}
+        for name, text in info.items():
+            self.aircraft_info[name].set(text)
+        for key, weapons in (("max", a.max_weapons), ("reduced", a.reduced_weapons)):
+            for w in weapons:
+                self.aircraft_weapon_trees[key].insert("", "end", values=w)
+
+    def apply_aircraft(self):
+        if self.aircraft_current is None:
+            return
+        a = self.aircraft[self.aircraft_current]
+        values, dates = {}, {}
+        try:
+            for f in aircraft.FIELDS:
+                text = self.aircraft_vars[f.name].get().strip()
+                try:
+                    values[f.name] = a.validate(f.name, int(text))
+                except ValueError:
+                    raise ValueError(f"{f.label} must be a whole number from {f.min} to {f.max} (got {text!r}).")
+            for name in ("from", "to"):
+                dates[name] = aircraft.parse_date(self.aircraft_vars[name].get())
+        except ValueError as exc:
+            messagebox.showerror("Invalid value", str(exc))
+            return
+        carrier = bool(self.aircraft_carrier_var.get())
+        before = ({n: a.get(n) for n in values}, {n: a.get_date(n) for n in dates}, a.get_carrier())
+        a.set_many(values)
+        for name, value in dates.items():
+            a.set_date(name, value)
+        a.set_carrier(carrier)
+        if before != (values, dates, carrier):
+            self.aircraft_edited.add(a.id)
+            self.dirty = True
+        self.refresh_aircraft_list()
+        self.show_aircraft(a)
 
     def apply_title(self):
         if self.save is None:

@@ -30,6 +30,28 @@ Tests: `python -m unittest discover -s tests -v`
 Name, side and hex coordinates are read-only. The field table is in
 `witpae/bases.py`; adding a field is one line.
 
+## Aircraft
+
+The Aircraft tab lists the aircraft table (section 0x20) with search and
+sortable columns. Several models share a name (one per nation), so always check
+the ID. Edits use the same Apply button, row highlight and Save As as bases.
+
+| Field | Status |
+|---|---|
+| Max speed, Cruise speed, Climb, Maneuver, Armor, Durability, Load | verified in-game, editable |
+| Max altitude | verified in-game, editable |
+| Max range (hexes, miles) | verified in-game, editable |
+| Normal/extended radius and the drop-tank variants of max range and radii (hexes, miles; stored and shown independently, 0/0 = none) | values verified as displayed, editable |
+| Endurance (the game ignores the stored value and calculates it from range and cruise speed) | calculated, read-only |
+| Available from / to, entered as `m/yy` like the game database ("12/41"); `0/0` or `-` means no date (many records store it for "to") | verified in-game, editable |
+| Carrier capable (one bit of a flag byte, other bits preserved) | verified in-game, editable |
+| Type: Fighter and Dive Bomber verified; other labels are guesses and end in `?` | read-only |
+| Nation: IJA, IJN, USN, USA, NZ verified; other labels are guesses and end in `?`; unknown codes show the number | read-only |
+| Weapons (max load and reduced load: name, count, facing F/TR/C/XT), gun value, maneuver modifiers per altitude band | verified, read-only |
+| Upgrade (id and name of the record it points at) | unverified, read-only |
+
+The field table is in `witpae/aircraft.py`.
+
 ## Backups
 
 Always keep a copy of your saves before editing. Prefer saving to a new file

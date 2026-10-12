@@ -89,6 +89,35 @@ class GuiSmokeTests(unittest.TestCase):
         app.show_detail(None)
         self.assertEqual(app.factory_tree.get_children(), ())
 
+    def test_aircraft_tab_edit_applies(self):
+        from unittest import mock
+        import witpae_editor
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        self.assertEqual(len(app.aircraft_tree.get_children()), 555)
+        app.aircraft_search_var.set("SBD-3")
+        self.assertIn("260", app.aircraft_tree.get_children())
+        self.assertIn("487", app.aircraft_tree.get_children())
+        app.aircraft_tree.selection_set("487")
+        self.root.update()
+        self.assertEqual(app.aircraft_vars["speed"].get(), "250")
+        self.assertEqual(app.aircraft_vars["from"].get(), "12/41")
+        self.assertEqual(len(app.aircraft_weapon_trees["max"].get_children()), 4)
+        app.aircraft_vars["speed"].set("260")
+        app.apply_aircraft()
+        self.assertEqual(app.aircraft[487].get("speed"), 260)
+        self.assertIn(487, app.aircraft_edited)
+        self.assertTrue(app.dirty)
+        self.assertEqual(app.aircraft_tree.item("487", "tags"), ("edited",))
+        app.aircraft_vars["from"].set("13/41")
+        with mock.patch.object(witpae_editor.messagebox, "showerror") as err:
+            app.apply_aircraft()
+        self.assertTrue(err.called)
+        self.assertEqual(app.aircraft[487].get_date("from"), (12, 41))
+        app.sort_aircraft_by("from")
+        self.assertTrue(app.load(SAVE_015))
+        self.assertEqual(app.aircraft_edited, set())
+
     def test_load_folder_gives_clear_error(self):
         from unittest import mock
         import witpae_editor
