@@ -2,7 +2,7 @@ import os
 import tempfile
 import unittest
 
-from witpae import airgroups
+from witpae import airgroups, bases
 from witpae.container import SaveFile
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
@@ -143,6 +143,57 @@ class AirGroupTests(unittest.TestCase):
     def test_get_leader_bounds(self):
         for bad in (0, -1, 50000, 70000):
             self.assertIsNone(airgroups.get_leader(self.sf, bad))
+
+    def test_move_changes_location_and_base(self):
+        before = {sec.sid: bytes(sec.data) for sec in self.sf.sections}
+        g = self.groups[3626]
+        self.assertEqual((g.location_id, g.location_name, g.side, g.can_move), (584, "Pearl Harbor", "Allied", True))
+        g.move_to(581)
+        for k, data in before.items():
+            if k != airgroups.GROUP_SECTION:
+                self.assertEqual(bytes(self.sf[k].data), data)
+        # Pearl Harbor 584 -> Midway 581: the low bytes of location and base change.
+        self.assertEqual(self.changed(self.sf, airgroups.GROUP_SECTION, airgroups.GROUP_RECORD_SIZE, 3626), {40, 42})
+        reloaded = {x.id: x for x in airgroups.list_airgroups(self.roundtrip())}[3626]
+        self.assertEqual((reloaded.location_id, reloaded.location_name), (581, "Midway Island"))
+        self.assertEqual(reloaded._i16(airgroups.BASE_OFFSET), 581)
+        g.move_to(1091)  # a type 5 town
+        self.assertEqual(g.location_name, "Chungking")
+
+    def test_move_keeps_a_detachment_base(self):
+        det = self.groups[7]  # Chitose Ku S-1 Det: at Roi-Namur 490, base 486
+        self.assertEqual((det.location_id, det._i16(airgroups.BASE_OFFSET)), (490, 486))
+        dest = next(p.id for p in bases.list_places(self.sf) if p.side_id == 0 and p.id not in (490, 486))
+        det.move_to(dest)
+        self.assertEqual(self.changed(self.sf, airgroups.GROUP_SECTION, airgroups.GROUP_RECORD_SIZE, 7) - {40, 41},
+                         set())
+        self.assertEqual((det.location_id, det._i16(airgroups.BASE_OFFSET)), (dest, 486))
+
+    def test_move_to_current_location_is_noop(self):
+        before = bytes(self.sf[airgroups.GROUP_SECTION].data)
+        self.groups[3626].move_to(584)
+        self.assertEqual(bytes(self.sf[airgroups.GROUP_SECTION].data), before)
+
+    def test_ship_borne_and_not_arrived_groups_cannot_move(self):
+        ship = self.groups[144]
+        self.assertEqual((ship.location_id, ship.location_name, ship.move_blocker),
+                         (19441, "Teihoku Maru", "aboard a ship"))
+        self.assertEqual((self.groups[482].location_name, self.groups[1694].location_name), ("Akagi", "Lexington"))
+        arriving = self.groups[2]
+        self.assertEqual((arriving.location_id, arriving.location_name, arriving.move_blocker), (0, "", "not arrived"))
+        before = bytes(self.sf[airgroups.GROUP_SECTION].data)
+        for g in (ship, arriving):
+            with self.assertRaises(ValueError):
+                g.move_to(584)
+        self.assertEqual(bytes(self.sf[airgroups.GROUP_SECTION].data), before)
+
+    def test_move_failures_leave_bytes_unchanged(self):
+        before = bytes(self.sf[airgroups.GROUP_SECTION].data)
+        japanese = next(p.id for p in bases.list_places(self.sf) if p.side_id == 0)
+        for dest in (japanese, 5560, 0, -1, 18000, True, "581"):
+            with self.assertRaises(ValueError, msg=str(dest)):
+                self.groups[3626].move_to(dest)
+        self.assertEqual(bytes(self.sf[airgroups.GROUP_SECTION].data), before)
 
 
 if __name__ == "__main__":

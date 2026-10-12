@@ -85,6 +85,7 @@ highlights the group row.
 | Group patrol levels: ASW, Search, Train, Rest % | verified in-game, editable |
 | Group patrol levels: CAP, LRcap % | follow the game's order, CAP value matched; edit unverified, editable |
 | Search arc start/end (degrees, clockwise; stored in tens) | verified in-game, editable |
+| Location (Move button) | verified in-game, editable: only to bases and towns on the same side; groups aboard ships (the Location column shows the ship name) or not yet arrived are read-only. A move also sets the group's base ("Based at") when it matched the location; detachments based elsewhere keep their base. Moves to towns verified in-game |
 | Aircraft type, aircraft total, pilot count byte (often disagrees with the pilot table), commander link | read-only |
 | Pilot status (1 = Active; 2-4 probably killed/wounded/missing, unverified) | read-only; the Pilots list column counts active pilots |
 | Pilot experience | verified in-game, editable |
@@ -100,7 +101,9 @@ alone because its purpose is unknown. The commander box is disabled for groups w
 
 The Land Units tab lists land units (record types INF, ART, ENG, CD, HQ and the
 guessed AA and ARM) from the same location table as bases, so the ID is the
-location id. Names are shown without the unit-kind suffix the game appends.
+location id. Names are shown with the game's unit-kind suffix where the unit
+class is known (otherwise the category in brackets), and the HQ column shows
+game-style HQ names.
 
 | Field | Status |
 |---|---|
@@ -108,7 +111,9 @@ location id. Names are shown without the unit-kind suffix the game appends.
 | Disruption (0..99; same offset as runway damage on bases) | verified in-game, editable |
 | Equipment count and disabled count per slot (disabled cannot exceed count) | verified in-game, editable |
 | Support and support required | matched 2 of 3 units on screen, approximate, read-only |
-| HQ, location, target, supplies required (recalculated by the game), equipment devices, TOE device and TOE count | verified, read-only |
+| Location (Move button) | verified in-game, editable: only to bases and towns on the same side; units not yet arrived or on the march are read-only. A move also sets the unit's hex, its target and its map position (the game names the location after the nearest base to that position). Moves to towns verified in-game |
+| Add equipment (Add box, count, disabled): only devices that some land unit of the same side already uses (current or TOE); written to the first empty slot with no TOE entry | verified in-game (kept after a turn), editable |
+| HQ, target, supplies required (recalculated by the game), the device of an existing slot, TOE device and TOE count | verified, read-only |
 | Types HQ, INF, ART, ENG, CD verified; AA and ARM are guesses ending in `?` | read-only |
 
 Load cost and AV are computed by the game.
