@@ -44,6 +44,12 @@ UPGRADE_OFFSET = 308
 UPGRADE_COPY_OFFSET = 574
 LEADER_OFFSET = 32
 PLANES_OFFSET = 210
+# For a group that has arrived, ready + maintenance + reserve + damaged == planes (the total).
+# Byte 208 is not part of this and is never written.
+READY_OFFSET = 204
+MAINTENANCE_OFFSET = 206
+RESERVE_OFFSET = 207
+DAMAGED_OFFSET = 209
 PILOT_COUNT_OFFSET = 546
 PILOT_GROUP_OFFSET = 32
 PILOT_AGE_OFFSET = 43
@@ -283,6 +289,54 @@ class AirGroup(Record):
     @property
     def pilot_count(self):
         return self._u8(PILOT_COUNT_OFFSET)
+
+    @property
+    def arrived(self):
+        return self.location_id != 0
+
+    @property
+    def ready(self):
+        return self._i16(READY_OFFSET)
+
+    @property
+    def maintenance(self):
+        return self._u8(MAINTENANCE_OFFSET)
+
+    @property
+    def reserve(self):
+        return self._u8(RESERVE_OFFSET)
+
+    @property
+    def damaged(self):
+        return self._u8(DAMAGED_OFFSET)
+
+    def set_plane_status(self, ready, maintenance, damaged, reserve):
+        """Split the group's planes between the four states; the total is unchanged.
+
+        Validates everything before writing. Only the four count fields are written.
+        """
+        counts = (ready, maintenance, damaged, reserve)
+        if any(isinstance(c, bool) or not isinstance(c, int) for c in counts):
+            raise ValueError("Plane counts must be integers")
+        if any(c < 0 for c in counts):
+            raise ValueError("Plane counts cannot be negative")
+        if not self.arrived:
+            raise ValueError(f"{self.name} has not arrived")
+        total = self.planes
+        if sum(counts) != total:
+            raise ValueError(f"Ready, maintenance, damaged and reserve must add up to {total}")
+        struct.pack_into("<h", self._data, self._offset + READY_OFFSET, ready)
+        self._data[self._offset + MAINTENANCE_OFFSET] = maintenance
+        self._data[self._offset + RESERVE_OFFSET] = reserve
+        self._data[self._offset + DAMAGED_OFFSET] = damaged
+
+    def repair_all(self):
+        """Move maintenance and damaged planes into ready; reserve is unchanged."""
+        if not self.arrived:
+            raise ValueError(f"{self.name} has not arrived")
+        if self.maintenance == 0 and self.damaged == 0:
+            return
+        self.set_plane_status(self.ready + self.maintenance + self.damaged, 0, 0, self.reserve)
 
 
 class Pilot(Record):
