@@ -71,6 +71,29 @@ so check the ID and date.
 The field table is in `witpae/ships.py`. Nation labels in `witpae/nations.py`
 are verified except China and India, which end in `?`.
 
+## Air Groups
+
+The Air Groups tab lists the air group table (section 0x14; the ID is the group
+number shown in the game). Select a group to edit it, its pilots (section
+0x16) and its commander (section 0x15). Editing a pilot or commander
+highlights the group row.
+
+| Field | Status |
+|---|---|
+| Group morale, maximum range setting, current altitude | verified in-game, editable |
+| Group average experience | verified in-game for a group without pilots, editable; the game probably recalculates it from the pilots |
+| Group train patrol % | value matched the screen, edit unverified, editable |
+| Aircraft type, aircraft total, pilot count byte (often disagrees with the pilot table), commander link | read-only |
+| Pilot status (1 = Active; 2-4 probably killed/wounded/missing, unverified) | read-only; the Pilots list column counts active pilots |
+| Pilot experience | verified in-game, editable |
+| Pilot 12 skills (Air, NavB, NavT, NavS, Recn, ASW, Tran, GrdB, LowN, LowG, Staf, Defn) | verified in-game, editable; written to both stored copies |
+| Commander leadership, inspiration, naval, air, land, admin, aggression | verified in-game, editable |
+| Pilot and commander "Age?" | unverified, read-only |
+
+Each pilot skill is stored twice (bytes 65..76 and 78..89). The game's pilot
+list shows the second copy, so edits write both. The byte at 122 is left
+alone because its purpose is unknown. The commander box is disabled for groups without a commander.
+
 ## Backups
 
 Always keep a copy of your saves before editing. Prefer saving to a new file

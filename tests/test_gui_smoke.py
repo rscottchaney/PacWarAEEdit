@@ -157,6 +157,50 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertTrue(app.load(SAVE_015))
         self.assertEqual(app.ships_edited, set())
 
+    def test_air_groups_tab_edit_applies(self):
+        from witpae import airgroups
+        import witpae_editor
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        self.assertEqual(len(app.group_tree.get_children()), 2895)
+        app.group_search_var.set("19th TS")
+        self.assertIn("4205", app.group_tree.get_children())
+        app.group_tree.selection_set("4205")
+        self.root.update()
+        self.assertEqual(app.group_vars["morale"].get(), "50")
+        self.assertEqual(set(app.pilot_tree.get_children()), {"5041", "18570"})
+        self.assertEqual(app.leader_name.get(), "Dionne E.")
+        app.group_vars["morale"].set("60")
+        app.apply_group()
+        self.assertEqual(app.groups[4205].get("morale"), 60)
+        self.assertIn(4205, app.groups_edited)
+        self.assertTrue(app.dirty)
+        self.assertEqual(app.group_tree.item("4205", "tags"), ("edited",))
+        self.root.update()  # let the list refresh's reselect event settle first
+        app.pilot_tree.selection_set("18570")
+        self.root.update()
+        self.assertEqual(app.pilot_vars["skill_air"].get(), "20")
+        app.pilot_vars["skill_air"].set("33")
+        app.apply_pilot()
+        pilot = next(p for p in app.pilot_index[4205] if p.id == 18570)
+        self.assertEqual(pilot.get("skill_air"), 33)
+        self.assertEqual(app.pilot_tree.set("18570", "skill_air"), "33")
+        app.leader_vars["leadership"].set("77")
+        app.apply_leader()
+        self.assertEqual(airgroups.get_leader(app.save, 27701).get("leadership"), 77)
+        app.leader_vars["leadership"].set("100")
+        from unittest import mock
+        with mock.patch.object(witpae_editor.messagebox, "showerror") as err:
+            app.apply_leader()
+        self.assertTrue(err.called)
+        self.assertEqual(airgroups.get_leader(app.save, 27701).get("leadership"), 77)
+        app.group_search_var.set("")
+        app.group_tree.selection_set("4156")  # no commander
+        self.root.update()
+        self.assertTrue(app.leader_button.instate(["disabled"]))
+        self.assertTrue(app.load(SAVE_015))
+        self.assertEqual(app.groups_edited, set())
+
     def test_load_folder_gives_clear_error(self):
         from unittest import mock
         import witpae_editor

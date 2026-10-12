@@ -10,7 +10,7 @@ import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from witpae import aircraft, bases, factories, ships
+from witpae import aircraft, airgroups, bases, factories, ships
 from witpae.container import SaveFile, SaveFormatError
 from witpae.fileio import save_with_backup
 
@@ -52,6 +52,18 @@ SHIP_COLUMNS = [
 ]
 SHIP_COLUMN_BY_ID = {c[0]: c for c in SHIP_COLUMNS}
 
+GROUP_COLUMNS = [
+    ("id", "ID", 55, True, lambda g: g.id),
+    ("name", "Name", 170, False, lambda g: g.name),
+    ("aircraft", "Aircraft", 120, False, lambda g: g.aircraft_name),
+    ("planes", "Planes", 55, True, lambda g: g.planes),
+    # Active pilots from the pilot table; the group's own count byte disagrees for many groups.
+    ("pilots", "Pilots", 50, True, lambda g: g.active_pilots),
+    ("morale", "Morale", 55, True, lambda g: g.get("morale")),
+    ("exp", "Exp", 45, True, lambda g: g.get("experience")),
+]
+GROUP_COLUMN_BY_ID = {c[0]: c for c in GROUP_COLUMNS}
+
 
 class EditorApp:
     def __init__(self, root):
@@ -82,6 +94,17 @@ class EditorApp:
         self.ship_vars = {}
         self.ship_current = None
         self.ship_slot = None
+        self.groups = {}
+        self.pilot_index = {}
+        self.groups_edited = set()
+        self.group_sort_col = "id"
+        self.group_sort_reverse = False
+        self.group_vars = {}
+        self.group_current = None
+        self.pilot_current = None
+        self.pilot_vars = {}
+        self.leader_vars = {}
+        self.leader_current = None
 
         self._build_menu()
         self._build_header()
@@ -122,6 +145,7 @@ class EditorApp:
         self.notebook.add(body, text="Bases")
         self._build_aircraft_tab()
         self._build_ships_tab()
+        self._build_groups_tab()
 
         left = ttk.Frame(body)
         left.pack(side="left", fill="both", expand=True)
@@ -329,6 +353,100 @@ class EditorApp:
                 ttk.Entry(edit, textvariable=var, width=width).pack(side="left", padx=(2, 6))
         ttk.Button(edit, text="Apply weapon", command=self.apply_ship_weapon).pack(side="left", padx=4)
 
+    def _build_groups_tab(self):
+        tab = ttk.Frame(self.notebook, padding=4)
+        self.notebook.add(tab, text="Air Groups")
+        right = ttk.LabelFrame(tab, text="Air group", padding=8)
+        right.pack(side="right", fill="y", padx=(8, 0))
+        left = ttk.Frame(tab)
+        left.pack(side="left", fill="both", expand=True)
+
+        bar = ttk.Frame(left)
+        bar.pack(side="top", fill="x")
+        ttk.Label(bar, text="Search:").pack(side="left")
+        self.group_search_var = tk.StringVar()
+        self.group_search_var.trace_add("write", lambda *a: self.refresh_group_list())
+        ttk.Entry(bar, textvariable=self.group_search_var, width=20).pack(side="left", padx=4)
+
+        # Pilots and commander sit below the list so the tab stays short enough for small screens.
+        lower = ttk.Frame(left)
+        lower.pack(side="bottom", fill="x", pady=(6, 0))
+        self._build_pilots(lower)
+        self._build_leader(lower)
+
+        self.group_tree = ttk.Treeview(left, columns=[c[0] for c in GROUP_COLUMNS], show="headings",
+                                       selectmode="browse", height=8)
+        for cid, heading, width, _numeric, _get in GROUP_COLUMNS:
+            self.group_tree.heading(cid, text=heading, command=lambda c=cid: self.sort_groups_by(c))
+            self.group_tree.column(cid, width=width, anchor="w" if cid in ("name", "aircraft") else "e")
+        self.group_tree.tag_configure("edited", background="#fff2b3")
+        scroll = ttk.Scrollbar(left, orient="vertical", command=self.group_tree.yview)
+        self.group_tree.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+        self.group_tree.pack(side="left", fill="both", expand=True)
+        self.group_tree.bind("<<TreeviewSelect>>", lambda e: self.on_group_select())
+
+        self.group_title = tk.StringVar(value="(select an air group)")
+        ttk.Label(right, textvariable=self.group_title, font=("TkDefaultFont", 11, "bold")).grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
+        row = 1
+        for f in airgroups.GROUP_FIELDS:
+            ttk.Label(right, text=f.label + ("" if f.verified else " (unverified)")).grid(
+                row=row, column=0, sticky="w", pady=2)
+            self.group_vars[f.name] = tk.StringVar()
+            ttk.Entry(right, textvariable=self.group_vars[f.name], width=10).grid(
+                row=row, column=1, padx=(8, 0), pady=2)
+            row += 1
+        ttk.Button(right, text="Apply", command=self.apply_group).grid(row=row, column=0, columnspan=2, pady=6)
+        row += 1
+        self.group_info = {}
+        for name, label in (("aircraft", "Aircraft (read-only)"), ("planes", "Aircraft total (read-only)"),
+                            ("pilots", "Pilot count byte (read-only, meaning unclear)"), ("leader", "Commander (read-only)")):
+            ttk.Label(right, text=label).grid(row=row, column=0, sticky="w", pady=1)
+            self.group_info[name] = tk.StringVar()
+            ttk.Label(right, textvariable=self.group_info[name]).grid(row=row, column=1, sticky="w", padx=(8, 0))
+            row += 1
+        ttk.Label(right, text="The game probably recalculates\naverage experience from the pilots.",
+                  foreground="gray40").grid(row=row, column=0, columnspan=2, sticky="w", pady=(6, 0))
+
+    def _build_pilots(self, parent):
+        box = ttk.LabelFrame(parent, text="Pilots", padding=4)
+        box.pack(side="top", fill="x")
+        cols = [("id", "ID", 50), ("name", "Name", 100), ("status", "Status", 60), ("experience", "Exp", 35)] + [
+            ("skill_" + n.lower(), n, 38) for n in airgroups.SKILLS]
+        self.pilot_tree = ttk.Treeview(box, columns=[c[0] for c in cols], show="headings",
+                                       selectmode="browse", height=4)
+        for cid, heading, width in cols:
+            self.pilot_tree.heading(cid, text=heading)
+            self.pilot_tree.column(cid, width=width, anchor="w" if cid == "name" else "e")
+        self.pilot_tree.pack(side="top", fill="x")
+        self.pilot_tree.bind("<<TreeviewSelect>>", lambda e: self.on_pilot_select())
+        edit = ttk.Frame(box)
+        edit.pack(side="top", fill="x", pady=(4, 0))
+        for f in airgroups.PILOT_FIELDS:
+            ttk.Label(edit, text="Exp" if f.name == "experience" else f.label).pack(side="left")
+            self.pilot_vars[f.name] = tk.StringVar()
+            ttk.Entry(edit, textvariable=self.pilot_vars[f.name], width=3).pack(side="left", padx=(1, 4))
+        ttk.Button(edit, text="Apply pilot", command=self.apply_pilot).pack(side="left", padx=4)
+
+    def _build_leader(self, parent):
+        box = ttk.LabelFrame(parent, text="Commander", padding=4)
+        box.pack(side="top", fill="x", pady=(6, 0))
+        self.leader_name = tk.StringVar(value="(none)")
+        ttk.Label(box, textvariable=self.leader_name, width=18).pack(side="left")
+        self.leader_age = tk.StringVar()
+        ttk.Label(box, text="Age?").pack(side="left")
+        ttk.Label(box, textvariable=self.leader_age, width=4).pack(side="left")
+        self.leader_entries = []
+        for f in airgroups.LEADER_FIELDS:
+            ttk.Label(box, text=f.label[:5] if f.label != "Aggression" else "Aggr").pack(side="left")
+            self.leader_vars[f.name] = tk.StringVar()
+            entry = ttk.Entry(box, textvariable=self.leader_vars[f.name], width=3)
+            entry.pack(side="left", padx=(1, 4))
+            self.leader_entries.append(entry)
+        self.leader_button = ttk.Button(box, text="Apply commander", command=self.apply_leader)
+        self.leader_button.pack(side="left", padx=4)
+
     def _build_factories(self, parent):
         box = ttk.LabelFrame(parent, text="Factories", padding=4)
         box.pack(side="bottom", fill="x", pady=(6, 0))
@@ -384,6 +502,8 @@ class EditorApp:
             blist = bases.list_bases(save)
             alist = aircraft.list_aircraft(save)
             slist = ships.list_ships(save)
+            glist = airgroups.list_airgroups(save)
+            pindex = airgroups.pilots_by_group(save)
         except (OSError, SaveFormatError, KeyError) as exc:
             messagebox.showerror("Cannot open save", f"{path}\n\n{exc}")
             return False
@@ -400,15 +520,25 @@ class EditorApp:
         self.ships_edited.clear()
         self.ship_current = None
         self.ship_slot = None
+        self.groups = {g.id: g for g in glist}
+        self.pilot_index = pindex
+        for g in glist:
+            g.active_pilots = sum(1 for p in pindex.get(g.id, []) if p.status == 1)
+        self.groups_edited.clear()
+        self.group_current = None
+        self.pilot_current = None
+        self.leader_current = None
         self.file_label.set(f"File: {os.path.basename(path)}    Key variant: {save.variant}")
         self.title_var.set(save.description)
-        self.status.set(f"{path} - {len(blist)} bases, {len(alist)} aircraft, {len(slist)} ship classes")
+        self.status.set(f"{path} - {len(blist)} bases, {len(alist)} aircraft, {len(slist)} ship classes, {len(glist)} air groups")
         self.refresh_list()
         self.show_detail(None)
         self.refresh_aircraft_list()
         self.show_aircraft(None)
         self.refresh_ship_list()
         self.show_ship(None)
+        self.refresh_group_list()
+        self.show_group(None)
         return True
 
     def confirm_discard(self):
@@ -799,6 +929,159 @@ class EditorApp:
             self.dirty = True
         self.refresh_ship_list()
         self.show_ship_weapons(x)
+
+    # ---- air groups ----------------------------------------------------
+
+    def _group_sort_key(self, g):
+        _cid, _h, _w, numeric, get = GROUP_COLUMN_BY_ID[self.group_sort_col]
+        v = get(g)
+        return (v if numeric else str(v).lower(), g.id)
+
+    def refresh_group_list(self):
+        selected = self.group_current
+        self.group_tree.delete(*self.group_tree.get_children())
+        needle = self.group_search_var.get().strip().lower()
+        rows = [g for g in self.groups.values() if needle in g.name.lower()]
+        rows.sort(key=self._group_sort_key, reverse=self.group_sort_reverse)
+        for g in rows:
+            tags = ("edited",) if g.id in self.groups_edited else ()
+            self.group_tree.insert("", "end", iid=str(g.id), values=[get(g) for *_, get in GROUP_COLUMNS],
+                                   tags=tags)
+        if selected is not None and self.group_tree.exists(str(selected)):
+            self.group_tree.selection_set(str(selected))
+
+    def sort_groups_by(self, col):
+        self.group_sort_reverse = (not self.group_sort_reverse) if col == self.group_sort_col else False
+        self.group_sort_col = col
+        self.refresh_group_list()
+
+    def on_group_select(self):
+        sel = self.group_tree.selection()
+        self.show_group(self.groups[int(sel[0])] if sel else None)
+
+    def show_group(self, g):
+        previous = self.group_current
+        self.group_current = g.id if g else None
+        if g is None or g.id != previous:
+            self.pilot_current = None
+        if g is None:
+            self.group_title.set("(select an air group)")
+            for var in list(self.group_vars.values()) + list(self.group_info.values()):
+                var.set("")
+            self.show_pilots(None)
+            self.show_leader(None)
+            return
+        self.group_title.set(f"{g.name} (#{g.id})")
+        for f in airgroups.GROUP_FIELDS:
+            self.group_vars[f.name].set(str(g.get(f.name)))
+        leader = airgroups.get_leader(self.save, g.leader_id)
+        self.group_info["aircraft"].set(f"{g.aircraft_id} {g.aircraft_name}")
+        self.group_info["planes"].set(str(g.planes))
+        self.group_info["pilots"].set(str(g.pilot_count))
+        self.group_info["leader"].set(f"{g.leader_id} {leader.name}" if leader else str(g.leader_id))
+        self.show_pilots(g)
+        self.show_leader(leader)
+
+    def apply_group(self):
+        if self.group_current is None:
+            return
+        g = self.groups[self.group_current]
+        values = {}
+        for f in airgroups.GROUP_FIELDS:
+            text = self.group_vars[f.name].get().strip()
+            try:
+                values[f.name] = g.validate(f.name, int(text))
+            except ValueError:
+                messagebox.showerror("Invalid value",
+                                     f"{f.label} must be a whole number from {f.min} to {f.max} (got {text!r}).")
+                return
+        before = {n: g.get(n) for n in values}
+        g.set_many(values)
+        if before != values:
+            self.groups_edited.add(g.id)
+            self.dirty = True
+        self.refresh_group_list()
+        self.show_group(g)
+
+    def _read_entries(self, record, fields, vars_):
+        """Checked values from a row of entries, or None after showing the error."""
+        values = {}
+        for f in fields:
+            text = vars_[f.name].get().strip()
+            try:
+                values[f.name] = record.validate(f.name, int(text))
+            except ValueError:
+                messagebox.showerror("Invalid value",
+                                     f"{f.label} must be a whole number from {f.min} to {f.max} (got {text!r}).")
+                return None
+        return values
+
+    def show_pilots(self, g):
+        self.pilot_tree.delete(*self.pilot_tree.get_children())
+        if g is not None:
+            for p in self.pilot_index.get(g.id, []):
+                self.pilot_tree.insert("", "end", iid=str(p.id), values=[p.id, p.name, p.status_label] + [
+                    p.get(f.name) for f in airgroups.PILOT_FIELDS])
+        if g is not None and self.pilot_current is not None and self.pilot_tree.exists(str(self.pilot_current)):
+            self.pilot_tree.selection_set(str(self.pilot_current))
+        else:
+            self.pilot_current = None
+            for var in self.pilot_vars.values():
+                var.set("")
+
+    def _selected_pilot(self):
+        if self.group_current is None or self.pilot_current is None:
+            return None
+        return next((p for p in self.pilot_index.get(self.group_current, []) if p.id == self.pilot_current), None)
+
+    def on_pilot_select(self):
+        sel = self.pilot_tree.selection()
+        if not sel or self.group_current is None:
+            return
+        self.pilot_current = int(sel[0])
+        pilot = self._selected_pilot()
+        for f in airgroups.PILOT_FIELDS:
+            self.pilot_vars[f.name].set(str(pilot.get(f.name)))
+
+    def apply_pilot(self):
+        pilot = self._selected_pilot()
+        if pilot is None:
+            return
+        values = self._read_entries(pilot, airgroups.PILOT_FIELDS, self.pilot_vars)
+        if values is None:
+            return
+        before = {n: pilot.get(n) for n in values}
+        pilot.set_many(values)
+        if before != values:
+            self.groups_edited.add(self.group_current)
+            self.dirty = True
+        self.refresh_group_list()
+        self.show_pilots(self.groups[self.group_current])
+
+    def show_leader(self, leader):
+        self.leader_current = leader
+        state = "!disabled" if leader else "disabled"
+        for widget in self.leader_entries + [self.leader_button]:
+            widget.state([state])
+        self.leader_name.set(leader.name if leader else "(none)")
+        self.leader_age.set(str(leader.age) if leader else "")
+        for f in airgroups.LEADER_FIELDS:
+            self.leader_vars[f.name].set(str(leader.get(f.name)) if leader else "")
+
+    def apply_leader(self):
+        leader = self.leader_current
+        if leader is None or self.group_current is None:
+            return
+        values = self._read_entries(leader, airgroups.LEADER_FIELDS, self.leader_vars)
+        if values is None:
+            return
+        before = {n: leader.get(n) for n in values}
+        leader.set_many(values)
+        if before != values:
+            self.groups_edited.add(self.group_current)
+            self.dirty = True
+        self.refresh_group_list()
+        self.show_leader(leader)
 
     def apply_title(self):
         if self.save is None:
