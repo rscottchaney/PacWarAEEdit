@@ -42,7 +42,13 @@ FIELDS = [
 # The game appends a suffix chosen by the unit class byte; the mapping is in the
 # game's code, so it is filled in from names seen in game.
 CLASS_OFFSET = 576
-CLASS_SUFFIXES = {75: "Bn", 92: "FA Bn", 96: "Def Bn", 102: "Engr Bn", 109: "Base Force", 114: "Cst Art Bn"}
+# An empty suffix means the game shows the unit by name alone.
+CLASS_SUFFIXES = {30: "", 31: "AA Rgt", 32: "AA Bn", 37: "Cst AA Rgt", 40: "", 46: "Army", 48: "Corps", 49: "Fleet",
+                  70: "", 71: "Div", 72: "Bde", 73: "RCT", 74: "Rgt", 75: "Bn", 77: "Cav Div", 78: "Corps",
+                  80: "", 81: "Div", 82: "Bde", 83: "Rgt", 84: "Bn", 91: "FA Rgt", 92: "FA Bn", 93: "Mtn Gun Rgt",
+                  94: "AT Rgt", 95: "Bn", 96: "Def Bn", 99: "Rgt", 100: "", 101: "Engr Rgt", 102: "Engr Bn",
+                  103: "Const Rgt", 108: "EAB", 109: "Base Force", 110: "", 112: "Cst Gun Bn", 113: "Cst Art Rgt",
+                  114: "Cst Art Bn", 115: "Fort"}
 # Broad category byte, shown when the class suffix is not known yet.
 CATEGORY_OFFSET = 30
 CATEGORIES = {3: "AA/Coastal", 4: "HQ", 11: "Armor", 12: "Cavalry", 13: "Airborne", 14: "Infantry",
@@ -100,10 +106,10 @@ class LandUnit(Record):
     def display_name(self):
         """Name as the game shows it where the class suffix is known, else name plus category."""
         name = self.name.strip()
-        if self.type_id == 4:  # HQs are shown by name alone
-            return name
         suffix = CLASS_SUFFIXES.get(self.class_id)
-        return f"{name} {suffix}" if suffix else f"{name} ({self.category})"
+        if suffix is None:
+            return f"{name} ({self.category})"
+        return f"{name} {suffix}" if suffix else name
 
     @property
     def hq_id(self):

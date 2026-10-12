@@ -61,11 +61,26 @@ class LandUnitTests(unittest.TestCase):
         # Names as shown on the game's ground unit list and detail screens.
         expected = {5621: "131st FA Bn", 5639: "1/153rd Infantry Bn", 5635: "1/250th Cst Art Bn",
                     5630: "1/151st Combat Engr Bn", 5542: "Johnston (Det.) Def Bn", 5055: "101st USN Base Force",
-                    102: "Pacific Fleet"}
+                    102: "Pacific Fleet", 6622: "29 Battery/3 HAA", 7836: "41st AA Rgt",
+                    7468: "408th PVO AA Bn", 7372: "61st Tank Div", 7072: "73rd Tank Bde",
+                    7164: "29th Motorcycle Rgt", 7377: "82nd Tank Bn", 5802: "Lijfwacht Cav Sqn",
+                    6632: "Malayan Air Wing", 6673: "Madras Fort", 5506: "11th PA Infantry Div",
+                    6225: "11th NZ Bde", 5574: "11th Cavalry (Hrse) Rgt", 7583: "11th Chinese Corps",
+                    7418: "1233rd Cannon Rgt", 7645: "120th Red Chinese Div", 5638: "153rd(Sep) Infantry Rgt",
+                    5558: "251st Cst AA Rgt", 6414: "24th Indian Mtn Gun Rgt",
+                    7816: "1st Const Rgt", 6014: "1st Australian Bde", 6301: "1st Burma Auxiliary AA Rgt",
+                    5511: "57th PS Infantry RCT", 7828: "57th AT Rgt", 5601: "56th Cst Art Rgt",
+                    5525: "803rd EAB", 6170: "7th RAA Cst Art Rgt",
+                    5517: "88th PS FA Rgt", 6970: "8th Cav Div", 7447: "8th Mongolian Cav Div",
+                    5642: "G/153rd Infantry Co", 6675: "Fort William", 6181: "Geraldton Fort",
+                    7090: "192nd OM Gun Bn", 5585: "19th Combat Engr Rgt",
+                    6865: "15th Army", 7538: "14th Group Army", 109: "Malaya Army", 171: "III Indian Corps",
+                    7516: "7th War Area", 5805: "Batavia Cst Gun Bn", 6178: "Banks Fort",
+                    205: "Soviet Pacific Fleet", 5528: "Subic Bay Defenses"}
         for unit_id, name in expected.items():
             self.assertEqual(self.units[unit_id].display_name, name)
         # Unknown classes fall back to the category.
-        self.assertEqual(self.units[5638].display_name, "153rd(Sep) Infantry (Infantry)")
+        self.assertEqual(self.units[2132].display_name, "IJN (AA/Coastal)")
 
     def test_disruption_and_support(self):
         u = self.units[10143]
