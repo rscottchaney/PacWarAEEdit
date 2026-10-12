@@ -10,7 +10,7 @@ import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from witpae import aircraft, airgroups, bases, factories, ships
+from witpae import aircraft, airgroups, bases, factories, landunits, ships
 from witpae.container import SaveFile, SaveFormatError
 from witpae.fileio import save_with_backup
 
@@ -64,6 +64,19 @@ GROUP_COLUMNS = [
 ]
 GROUP_COLUMN_BY_ID = {c[0]: c for c in GROUP_COLUMNS}
 
+UNIT_COLUMNS = [
+    ("id", "ID", 55, True, lambda u: u.id),
+    ("name", "Name", 190, False, lambda u: u.display_name),
+    ("type", "Type", 50, False, lambda u: u.type),
+    ("hq", "HQ", 110, False, lambda u: u.hq_name),
+    ("location", "Location", 110, False, lambda u: u.location_name),
+    ("exp", "Exp", 45, True, lambda u: u.get("experience")),
+    ("morale", "Morale", 55, True, lambda u: u.get("morale")),
+    ("fatigue", "Fatigue", 55, True, lambda u: u.get("fatigue")),
+    ("supplies", "Supplies", 70, True, lambda u: u.get("supplies")),
+]
+UNIT_COLUMN_BY_ID = {c[0]: c for c in UNIT_COLUMNS}
+
 
 class EditorApp:
     def __init__(self, root):
@@ -105,6 +118,13 @@ class EditorApp:
         self.pilot_vars = {}
         self.leader_vars = {}
         self.leader_current = None
+        self.units = {}
+        self.units_edited = set()
+        self.unit_sort_col = "id"
+        self.unit_sort_reverse = False
+        self.unit_vars = {}
+        self.unit_current = None
+        self.unit_slot = None
 
         self._build_menu()
         self._build_header()
@@ -146,6 +166,7 @@ class EditorApp:
         self._build_aircraft_tab()
         self._build_ships_tab()
         self._build_groups_tab()
+        self._build_units_tab()
 
         left = ttk.Frame(body)
         left.pack(side="left", fill="both", expand=True)
@@ -447,6 +468,82 @@ class EditorApp:
         self.leader_button = ttk.Button(box, text="Apply commander", command=self.apply_leader)
         self.leader_button.pack(side="left", padx=4)
 
+    def _build_units_tab(self):
+        tab = ttk.Frame(self.notebook, padding=4)
+        self.notebook.add(tab, text="Land Units")
+        right = ttk.LabelFrame(tab, text="Land unit", padding=8)
+        right.pack(side="right", fill="y", padx=(8, 0))
+        left = ttk.Frame(tab)
+        left.pack(side="left", fill="both", expand=True)
+
+        bar = ttk.Frame(left)
+        bar.pack(side="top", fill="x")
+        ttk.Label(bar, text="Search:").pack(side="left")
+        self.unit_search_var = tk.StringVar()
+        self.unit_search_var.trace_add("write", lambda *a: self.refresh_unit_list())
+        ttk.Entry(bar, textvariable=self.unit_search_var, width=20).pack(side="left", padx=4)
+        ttk.Label(bar, text="Side:").pack(side="left")
+        self.unit_side_var = tk.StringVar(value="All")
+        side_box = ttk.Combobox(bar, textvariable=self.unit_side_var, values=["All", "Allied", "Japanese"],
+                                state="readonly", width=9)
+        side_box.pack(side="left", padx=4)
+        side_box.bind("<<ComboboxSelected>>", lambda e: self.refresh_unit_list())
+
+        box = ttk.LabelFrame(left, text="Equipment", padding=4)
+        box.pack(side="bottom", fill="x", pady=(6, 0))
+        cols = [("slot", "Slot", 40), ("device", "Device", 150), ("count", "Count", 55),
+                ("disabled", "Disabled", 60), ("toe_device", "TOE device", 150), ("toe_count", "TOE count", 65)]
+        self.unit_equipment_tree = ttk.Treeview(box, columns=[c[0] for c in cols], show="headings",
+                                                selectmode="browse", height=6)
+        for cid, heading, width in cols:
+            self.unit_equipment_tree.heading(cid, text=heading)
+            self.unit_equipment_tree.column(cid, width=width, anchor="w" if "device" in cid else "e")
+        self.unit_equipment_tree.pack(side="top", fill="x")
+        self.unit_equipment_tree.bind("<<TreeviewSelect>>", lambda e: self.on_unit_equipment_select())
+        edit = ttk.Frame(box)
+        edit.pack(side="top", fill="x", pady=(4, 0))
+        self.unit_equipment_vars = {}
+        for name, label in (("count", "Count"), ("disabled", "Disabled")):
+            ttk.Label(edit, text=label + ":").pack(side="left")
+            self.unit_equipment_vars[name] = tk.StringVar()
+            ttk.Entry(edit, textvariable=self.unit_equipment_vars[name], width=8).pack(side="left", padx=(2, 8))
+        ttk.Button(edit, text="Apply equipment", command=self.apply_unit_equipment).pack(side="left", padx=4)
+
+        self.unit_tree = ttk.Treeview(left, columns=[c[0] for c in UNIT_COLUMNS], show="headings",
+                                      selectmode="browse", height=8)
+        for cid, heading, width, _numeric, _get in UNIT_COLUMNS:
+            self.unit_tree.heading(cid, text=heading, command=lambda c=cid: self.sort_units_by(c))
+            self.unit_tree.column(cid, width=width, anchor="w" if cid in ("name", "type", "hq", "location") else "e")
+        self.unit_tree.tag_configure("edited", background="#fff2b3")
+        scroll = ttk.Scrollbar(left, orient="vertical", command=self.unit_tree.yview)
+        self.unit_tree.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+        self.unit_tree.pack(side="left", fill="both", expand=True)
+        self.unit_tree.bind("<<TreeviewSelect>>", lambda e: self.on_unit_select())
+
+        self.unit_title = tk.StringVar(value="(select a land unit)")
+        ttk.Label(right, textvariable=self.unit_title, font=("TkDefaultFont", 11, "bold")).grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
+        row = 1
+        for f in landunits.FIELDS:
+            ttk.Label(right, text=f.label + ("" if f.verified else " (unverified)")).grid(
+                row=row, column=0, sticky="w", pady=2)
+            self.unit_vars[f.name] = tk.StringVar()
+            ttk.Entry(right, textvariable=self.unit_vars[f.name], width=12).grid(
+                row=row, column=1, padx=(8, 0), pady=2)
+            row += 1
+        ttk.Button(right, text="Apply", command=self.apply_unit).grid(row=row, column=0, columnspan=2, pady=6)
+        row += 1
+        self.unit_info = {}
+        for name, label in (("hq", "HQ (read-only)"), ("location", "Location (read-only)"),
+                            ("target", "Target (read-only)"), ("required", "Supplies required (read-only)"),
+                            ("support", "Support (approx., read-only)"),
+                            ("support_required", "Support required (approx., read-only)")):
+            ttk.Label(right, text=label).grid(row=row, column=0, sticky="w", pady=1)
+            self.unit_info[name] = tk.StringVar()
+            ttk.Label(right, textvariable=self.unit_info[name]).grid(row=row, column=1, sticky="w", padx=(8, 0))
+            row += 1
+
     def _build_factories(self, parent):
         box = ttk.LabelFrame(parent, text="Factories", padding=4)
         box.pack(side="bottom", fill="x", pady=(6, 0))
@@ -503,6 +600,7 @@ class EditorApp:
             alist = aircraft.list_aircraft(save)
             slist = ships.list_ships(save)
             glist = airgroups.list_airgroups(save)
+            ulist = landunits.list_land_units(save)
             pindex = airgroups.pilots_by_group(save)
         except (OSError, SaveFormatError, KeyError) as exc:
             messagebox.showerror("Cannot open save", f"{path}\n\n{exc}")
@@ -528,9 +626,13 @@ class EditorApp:
         self.group_current = None
         self.pilot_current = None
         self.leader_current = None
+        self.units = {u.id: u for u in ulist}
+        self.units_edited.clear()
+        self.unit_current = None
+        self.unit_slot = None
         self.file_label.set(f"File: {os.path.basename(path)}    Key variant: {save.variant}")
         self.title_var.set(save.description)
-        self.status.set(f"{path} - {len(blist)} bases, {len(alist)} aircraft, {len(slist)} ship classes, {len(glist)} air groups")
+        self.status.set(f"{path} - {len(blist)} bases, {len(alist)} aircraft, {len(slist)} ship classes, {len(glist)} air groups, {len(ulist)} land units")
         self.refresh_list()
         self.show_detail(None)
         self.refresh_aircraft_list()
@@ -539,6 +641,8 @@ class EditorApp:
         self.show_ship(None)
         self.refresh_group_list()
         self.show_group(None)
+        self.refresh_unit_list()
+        self.show_unit(None)
         return True
 
     def confirm_discard(self):
@@ -1082,6 +1186,124 @@ class EditorApp:
             self.dirty = True
         self.refresh_group_list()
         self.show_leader(leader)
+
+    # ---- land units ----------------------------------------------------
+
+    def _unit_sort_key(self, u):
+        _cid, _h, _w, numeric, get = UNIT_COLUMN_BY_ID[self.unit_sort_col]
+        v = get(u)
+        return (v if numeric else str(v).lower(), u.id)
+
+    def refresh_unit_list(self):
+        selected = self.unit_current
+        self.unit_tree.delete(*self.unit_tree.get_children())
+        needle = self.unit_search_var.get().strip().lower()
+        side = self.unit_side_var.get()
+        rows = [u for u in self.units.values()
+                if needle in u.display_name.lower() and (side == "All" or u.side == side)]
+        rows.sort(key=self._unit_sort_key, reverse=self.unit_sort_reverse)
+        for u in rows:
+            tags = ("edited",) if u.id in self.units_edited else ()
+            self.unit_tree.insert("", "end", iid=str(u.id), values=[get(u) for *_, get in UNIT_COLUMNS],
+                                  tags=tags)
+        if selected is not None and self.unit_tree.exists(str(selected)):
+            self.unit_tree.selection_set(str(selected))
+
+    def sort_units_by(self, col):
+        self.unit_sort_reverse = (not self.unit_sort_reverse) if col == self.unit_sort_col else False
+        self.unit_sort_col = col
+        self.refresh_unit_list()
+
+    def on_unit_select(self):
+        sel = self.unit_tree.selection()
+        self.show_unit(self.units[int(sel[0])] if sel else None)
+
+    def show_unit(self, u):
+        previous = self.unit_current
+        self.unit_current = u.id if u else None
+        if u is None or u.id != previous:
+            self.unit_slot = None
+        if u is None:
+            self.unit_title.set("(select a land unit)")
+            for var in list(self.unit_vars.values()) + list(self.unit_info.values()):
+                var.set("")
+            self.show_unit_equipment(None)
+            return
+        self.unit_title.set(f"{u.display_name} (#{u.id}, {u.type}, class {u.class_id}, {u.side})")
+        for f in landunits.FIELDS:
+            self.unit_vars[f.name].set(str(u.get(f.name)))
+        self.unit_info["hq"].set(f"{u.hq_id} {u.hq_name}")
+        self.unit_info["location"].set(f"{u.location_id} {u.location_name}")
+        self.unit_info["target"].set(f"{u.target_id} {u.target_name}")
+        self.unit_info["required"].set(str(u.supplies_required))
+        self.unit_info["support"].set(str(u.support))
+        self.unit_info["support_required"].set(str(u.support_required))
+        self.show_unit_equipment(u)
+
+    def show_unit_equipment(self, u):
+        self.unit_equipment_tree.delete(*self.unit_equipment_tree.get_children())
+        if u is not None:
+            for slot, e in u.list_equipment():
+                self.unit_equipment_tree.insert("", "end", iid=str(slot), values=(
+                    slot, e["device"], e["count"], e["disabled"], e["toe_device"], e["toe_count"]))
+        if u is not None and self.unit_slot is not None and self.unit_equipment_tree.exists(str(self.unit_slot)):
+            self.unit_equipment_tree.selection_set(str(self.unit_slot))
+        else:
+            self.unit_slot = None
+            for var in self.unit_equipment_vars.values():
+                var.set("")
+
+    def on_unit_equipment_select(self):
+        sel = self.unit_equipment_tree.selection()
+        if not sel or self.unit_current is None:
+            return
+        self.unit_slot = int(sel[0])
+        e = self.units[self.unit_current].get_equipment(self.unit_slot)
+        self.unit_equipment_vars["count"].set(str(e["count"]))
+        self.unit_equipment_vars["disabled"].set(str(e["disabled"]))
+
+    def apply_unit(self):
+        if self.unit_current is None:
+            return
+        u = self.units[self.unit_current]
+        values = {}
+        for f in landunits.FIELDS:
+            text = self.unit_vars[f.name].get().strip()
+            try:
+                values[f.name] = u.validate(f.name, int(text))
+            except ValueError:
+                messagebox.showerror("Invalid value",
+                                     f"{f.label} must be a whole number from {f.min} to {f.max} (got {text!r}).")
+                return
+        before = {n: u.get(n) for n in values}
+        u.set_many(values)
+        if before != values:
+            self.units_edited.add(u.id)
+            self.dirty = True
+        self.refresh_unit_list()
+        self.show_unit(u)
+
+    def apply_unit_equipment(self):
+        if self.unit_current is None or self.unit_slot is None:
+            return
+        u = self.units[self.unit_current]
+        try:
+            count = int(self.unit_equipment_vars["count"].get().strip())
+            disabled = int(self.unit_equipment_vars["disabled"].get().strip())
+        except ValueError:
+            messagebox.showerror("Invalid value", "Count and disabled must be whole numbers.")
+            return
+        before = u.get_equipment(self.unit_slot)
+        try:
+            u.set_equipment(self.unit_slot, count, disabled)
+        except ValueError as exc:
+            messagebox.showerror("Invalid value", str(exc))
+            return
+        if (before["count"], before["disabled"]) != (count, disabled):
+            self.units_edited.add(u.id)
+            self.dirty = True
+        self.refresh_unit_list()
+        self.show_unit_equipment(u)
 
     def apply_title(self):
         if self.save is None:

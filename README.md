@@ -96,6 +96,23 @@ Each pilot skill is stored twice (bytes 65..76 and 78..89). The game's pilot
 list shows the second copy, so edits write both. The byte at 122 is left
 alone because its purpose is unknown. The commander box is disabled for groups without a commander.
 
+## Land Units
+
+The Land Units tab lists land units (record types INF, ART, ENG, CD, HQ and the
+guessed AA and ARM) from the same location table as bases, so the ID is the
+location id. Names are shown without the unit-kind suffix the game appends.
+
+| Field | Status |
+|---|---|
+| Experience, morale, fatigue (0..99), supplies | verified in-game, editable |
+| Disruption (0..99; same offset as runway damage on bases) | verified in-game, editable |
+| Equipment count and disabled count per slot (disabled cannot exceed count) | verified in-game, editable |
+| Support and support required | matched 2 of 3 units on screen, approximate, read-only |
+| HQ, location, target, supplies required (recalculated by the game), equipment devices, TOE device and TOE count | verified, read-only |
+| Types HQ, INF, ART, ENG, CD verified; AA and ARM are guesses ending in `?` | read-only |
+
+Load cost and AV are computed by the game.
+
 ## Backups
 
 Always keep a copy of your saves before editing. Prefer saving to a new file

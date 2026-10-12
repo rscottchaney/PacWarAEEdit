@@ -71,7 +71,7 @@ LEADER_FIELDS = [
 ]
 
 
-class _Record:
+class Record:
     """A record in a fixed-size table, with get/validate/set over a Field table."""
     section = record_size = None
     fields = ()
@@ -134,7 +134,7 @@ class _Record:
         return self._data[self._offset + pos]
 
 
-class AirGroup(_Record):
+class AirGroup(Record):
     section, record_size, fields = GROUP_SECTION, GROUP_RECORD_SIZE, GROUP_FIELDS
 
     def get(self, name):
@@ -179,7 +179,7 @@ class AirGroup(_Record):
         return self._u8(PILOT_COUNT_OFFSET)
 
 
-class Pilot(_Record):
+class Pilot(Record):
     section, record_size, fields = PILOT_SECTION, PILOT_RECORD_SIZE, PILOT_FIELDS
 
     def _mirror(self, field):
@@ -204,7 +204,7 @@ class Pilot(_Record):
         return "Active" if self.status == 1 else f"Status {self.status}"
 
 
-class Leader(_Record):
+class Leader(Record):
     section, record_size, fields = LEADER_SECTION, LEADER_RECORD_SIZE, LEADER_FIELDS
 
     @property
