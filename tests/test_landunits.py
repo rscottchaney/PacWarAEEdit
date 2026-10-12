@@ -79,6 +79,9 @@ class LandUnitTests(unittest.TestCase):
                     205: "Soviet Pacific Fleet", 5528: "Subic Bay Defenses"}
         for unit_id, name in expected.items():
             self.assertEqual(self.units[unit_id].display_name, name)
+        # The HQ column uses the HQ's game-style name too.
+        self.assertEqual(self.units[7164].hq_name, "35th Army")
+        self.assertEqual(self.units[7225].hq_name, "Soviet Far East Cmd")
         # Unknown classes fall back to the category.
         self.assertEqual(self.units[2132].display_name, "IJN (AA/Coastal)")
 

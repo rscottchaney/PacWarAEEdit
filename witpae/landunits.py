@@ -117,7 +117,10 @@ class LandUnit(Record):
 
     @property
     def hq_name(self):
-        return self._location_name(self.hq_id)
+        """The HQ's name as the game shows it; the stored name if the id is not an HQ record."""
+        hq = LandUnit(self._save, self.hq_id, self._location_name(self.hq_id), self._names)
+        ok = 0 <= self.hq_id < RECORD_COUNT and hq._offset + RECORD_SIZE <= len(self._data)
+        return hq.display_name if ok and hq.type_id == 4 else hq.name
 
     @property
     def location_id(self):
