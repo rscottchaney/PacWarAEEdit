@@ -1,4 +1,5 @@
 import os
+import struct
 import tempfile
 import unittest
 
@@ -108,6 +109,34 @@ class BaseTests(unittest.TestCase):
         lo, hi = 584 * bases.RECORD_SIZE, 585 * bases.RECORD_SIZE
         self.assertEqual(old[:lo], new[:lo])
         self.assertEqual(old[hi:], new[hi:])
+
+    def test_building_matches_game(self):
+        # Los Angeles: port expanding and forts building, airfield above its max so off.
+        self.assertEqual(self.by_id[506].get_building(), {"port": True, "airfield": False, "forts": True})
+
+    def test_building_off_and_on_like_game(self):
+        b = self.by_id[506]
+        data = self.sf[bases.LOCATION_SECTION].data
+        pos = 506 * bases.RECORD_SIZE
+        b.set_building({"port": False})
+        self.assertEqual(struct.unpack_from("<hh", data, pos + 424)[0], 0)
+        self.assertEqual(struct.unpack_from("<h", data, pos + 866)[0], 8)  # copy kept
+        b.set_building({"port": True})
+        again = {x.id: x for x in bases.list_bases(self.roundtrip())}[506]
+        self.assertEqual(again.get_building(), {"port": True, "airfield": False, "forts": True})
+        self.assertEqual(bytes(self.roundtrip()[bases.LOCATION_SECTION].data), bytes(self.pristine[bases.LOCATION_SECTION].data))
+
+    def test_building_on_with_empty_copy(self):
+        b = self.by_id[506]
+        b.set_building({"airfield": True})
+        self.assertEqual(struct.unpack_from("<h", self.sf[bases.LOCATION_SECTION].data, 506 * bases.RECORD_SIZE + 428)[0], 1)
+
+    def test_building_validation(self):
+        before = bytes(self.sf[bases.LOCATION_SECTION].data)
+        for flags in [{"nope": True}, {"port": 1}, {"port": False, "forts": "no"}]:
+            with self.assertRaises(ValueError, msg=flags):
+                self.by_id[506].set_building(flags)
+        self.assertEqual(bytes(self.sf[bases.LOCATION_SECTION].data), before)
 
     def test_stockpile_default_off(self):
         self.assertEqual(self.by_id[506].get_stockpile(),

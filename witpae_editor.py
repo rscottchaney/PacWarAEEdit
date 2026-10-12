@@ -44,6 +44,7 @@ class EditorApp:
         self.sort_reverse = False
         self.field_vars = {}
         self.stockpile_vars = {}
+        self.building_vars = {}
         self.current = None
         self.factory_slot = None
 
@@ -131,8 +132,16 @@ class EditorApp:
             var = tk.BooleanVar()
             self.stockpile_vars[name] = var
             ttk.Checkbutton(stock_box, text=label, variable=var).pack(anchor="w")
+        build_row = stock_row + 1
+        ttk.Label(right, text="Build/expand").grid(row=build_row, column=0, sticky="nw", pady=2)
+        build_box = ttk.Frame(right)
+        build_box.grid(row=build_row, column=1, sticky="w", padx=(8, 0), pady=2)
+        for name, label, _live, _copy in bases.BUILD_SWITCHES:
+            var = tk.BooleanVar()
+            self.building_vars[name] = var
+            ttk.Checkbutton(build_box, text=label, variable=var).pack(anchor="w")
         self.apply_btn = ttk.Button(right, text="Apply", command=self.apply)
-        self.apply_btn.grid(row=stock_row + 1, column=0, columnspan=2, pady=(10, 0))
+        self.apply_btn.grid(row=build_row + 1, column=0, columnspan=2, pady=(10, 0))
 
     def _build_factories(self, parent):
         box = ttk.LabelFrame(parent, text="Factories", padding=4)
@@ -258,7 +267,7 @@ class EditorApp:
             self.detail_title.set("(select a base)")
             for var in self.field_vars.values():
                 var.set("")
-            for var in self.stockpile_vars.values():
+            for var in list(self.stockpile_vars.values()) + list(self.building_vars.values()):
                 var.set(False)
             self.show_factories(None)
             return
@@ -267,6 +276,8 @@ class EditorApp:
             self.field_vars[f.name].set(str(base.get(f.name)))
         for name, on in base.get_stockpile().items():
             self.stockpile_vars[name].set(on)
+        for name, on in base.get_building().items():
+            self.building_vars[name].set(on)
         if base.id != previous:
             self.factory_slot = None
         self.show_factories(base)
@@ -358,9 +369,12 @@ class EditorApp:
         before = {n: base.get(n) for n in values}
         flags = {n: bool(v.get()) for n, v in self.stockpile_vars.items()}
         flags_before = base.get_stockpile()
+        building = {n: bool(v.get()) for n, v in self.building_vars.items()}
+        building_before = base.get_building()
         base.set_many(values)
         base.set_stockpile(flags)
-        if before != values or flags_before != flags:
+        base.set_building(building)
+        if before != values or flags_before != flags or building_before != building:
             self.edited.add(base.id)
             self.dirty = True
         self.refresh_list()
