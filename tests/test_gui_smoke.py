@@ -126,6 +126,37 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertTrue(app.load(SAVE_015))
         self.assertEqual(app.aircraft_edited, set())
 
+    def test_ships_tab_edit_applies(self):
+        import witpae_editor
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        self.assertEqual(len(app.ship_tree.get_children()), 1721)
+        app.ship_search_var.set("Lexington")
+        self.assertEqual(set(app.ship_tree.get_children()), {str(i) for i in range(674, 680)})
+        self.assertEqual(app.ship_tree.set("675", "date"), "3/42")
+        app.ship_tree.selection_set("674")
+        self.root.update()
+        self.assertEqual(app.ship_vars["speed"].get(), "33")
+        self.assertEqual(len(app.ship_weapon_tree.get_children()), 13)
+        app.ship_vars["speed"].set("35")
+        app.apply_ship()
+        self.assertEqual(app.ships[674].get("speed"), 35)
+        self.assertIn(674, app.ships_edited)
+        self.assertTrue(app.dirty)
+        self.assertEqual(app.ship_tree.item("674", "tags"), ("edited",))
+        self.root.update()  # let the list refresh's reselect event settle first
+        app.ship_weapon_tree.selection_set("2")
+        self.root.update()
+        self.assertEqual(app.ship_weapon_vars["face"].get(), "RS")
+        app.ship_weapon_vars["num"].set("8")
+        app.ship_weapon_vars["face"].set("LS")
+        app.apply_ship_weapon()
+        w = app.ships[674].get_weapon(2)
+        self.assertEqual((w["num"], w["face"]), (8, 4))
+        self.assertEqual(app.ship_weapon_tree.selection(), ("2",))
+        self.assertTrue(app.load(SAVE_015))
+        self.assertEqual(app.ships_edited, set())
+
     def test_load_folder_gives_clear_error(self):
         from unittest import mock
         import witpae_editor

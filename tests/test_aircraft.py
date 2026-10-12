@@ -132,7 +132,8 @@ class AircraftTests(unittest.TestCase):
         self.assertEqual(aircraft.type_label(12), "Torpedo Bomber?")
         self.assertEqual(aircraft.type_label(99), "99")
         self.assertEqual(aircraft.nation_label(2), "IJN")
-        self.assertEqual(aircraft.nation_label(9), "UK?")
+        self.assertEqual(aircraft.nation_label(9), "UK")
+        self.assertEqual(aircraft.nation_label(12), "China?")
         self.assertEqual(aircraft.nation_label(77), "77")
 
     def test_upgrade(self):

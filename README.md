@@ -54,6 +54,23 @@ the ID. Edits use the same Apply button, row highlight and Save As as bases.
 
 The field table is in `witpae/aircraft.py`.
 
+## Ships
+
+The Ships tab lists the ship class table (section 0x1B). Several records share
+a name because they are refit stages of one class (Lexington is #674 to #679),
+so check the ID and date.
+
+| Field | Status |
+|---|---|
+| Fuel, Endurance, Speed, Cruise speed, Maneuver, Durability, Belt/Deck/Tower armor, Capacity | verified in-game, editable |
+| Weapon and electronics slots: Num, Face (F, C, R, RS, LS, A; other codes are kept as numbers), Mount, Armor, Ammo | verified in-game, editable per slot (Apply weapon); the device itself is read-only |
+| Type (abbreviations from the game executable; DE, TB, PG, LB are guesses ending in `?`) | read-only |
+| Nation (shared with aircraft) | read-only |
+| Displacement, refit date (`m/yy`) | unverified, read-only |
+
+The field table is in `witpae/ships.py`. Nation labels in `witpae/nations.py`
+are verified except China and India, which end in `?`.
+
 ## Backups
 
 Always keep a copy of your saves before editing. Prefer saving to a new file

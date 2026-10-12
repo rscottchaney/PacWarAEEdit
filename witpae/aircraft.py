@@ -9,6 +9,7 @@ to records of the device table (section 0x1F).
 import struct
 
 from .bases import Field
+from .nations import label as lookup_label, nation_label
 from .factories import (
     AIRCRAFT_MONTH_OFFSET, AIRCRAFT_RECORD_SIZE, AIRCRAFT_SECTION, AIRCRAFT_YEAR_OFFSET,
     DEVICE_RECORD_SIZE, DEVICE_SECTION, _plain_name,
@@ -57,14 +58,12 @@ DATES = {
     "to": (TO_MONTH_OFFSET, TO_YEAR_OFFSET),
 }
 
-# Only the first two entries of each table have been confirmed in game; the
-# rest are guesses and are shown with a trailing "?".
+# Only Fighter and Dive Bomber have been confirmed in game; the
+# other types are guesses and are shown with a trailing "?".
 TYPES = {0: "Fighter", 3: "Dive Bomber"}
 GUESSED_TYPES = {1: "Fighter-Bomber", 2: "Night Fighter", 4: "Level Bomber", 5: "Recon",
                  8: "Transport", 9: "Patrol", 10: "Float Plane", 11: "Float Fighter",
                  12: "Torpedo Bomber"}
-NATIONS = {1: "IJA", 2: "IJN", 4: "USN", 5: "USA", 8: "NZ"}
-GUESSED_NATIONS = {7: "Aus", 9: "UK", 11: "Dutch", 12: "China", 13: "Soviet", 18: "Canada"}
 
 SLOTS = 10
 # (device id, count, facing) offsets of the max-load and reduced-load tables.
@@ -97,20 +96,8 @@ def check_pool(value):
     return value
 
 
-def _label(value, verified, guessed):
-    if value in verified:
-        return verified[value]
-    if value in guessed:
-        return guessed[value] + "?"
-    return str(value)
-
-
 def type_label(type_id):
-    return _label(type_id, TYPES, GUESSED_TYPES)
-
-
-def nation_label(nation_id):
-    return _label(nation_id, NATIONS, GUESSED_NATIONS)
+    return lookup_label(type_id, TYPES, GUESSED_TYPES)
 
 
 def parse_date(text):

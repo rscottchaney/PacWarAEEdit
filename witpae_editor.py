@@ -10,7 +10,7 @@ import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from witpae import aircraft, bases, factories
+from witpae import aircraft, bases, factories, ships
 from witpae.container import SaveFile, SaveFormatError
 from witpae.fileio import save_with_backup
 
@@ -41,6 +41,17 @@ AIRCRAFT_COLUMNS = [
 ]
 AIRCRAFT_COLUMN_BY_ID = {c[0]: c for c in AIRCRAFT_COLUMNS}
 
+SHIP_COLUMNS = [
+    ("id", "ID", 55, True, lambda s: s.id),
+    ("name", "Name", 170, False, lambda s: s.name),
+    ("type", "Type", 70, False, lambda s: s.type),
+    ("nation", "Nation", 70, False, lambda s: s.nation),
+    ("date", "Date", 60, True, lambda s: s.date[::-1]),
+    ("speed", "Speed", 50, True, lambda s: s.get("speed")),
+    ("durability", "Durability", 70, True, lambda s: s.get("durability")),
+]
+SHIP_COLUMN_BY_ID = {c[0]: c for c in SHIP_COLUMNS}
+
 
 class EditorApp:
     def __init__(self, root):
@@ -64,6 +75,13 @@ class EditorApp:
         self.aircraft_sort_reverse = False
         self.aircraft_vars = {}
         self.aircraft_current = None
+        self.ships = {}
+        self.ships_edited = set()
+        self.ship_sort_col = "id"
+        self.ship_sort_reverse = False
+        self.ship_vars = {}
+        self.ship_current = None
+        self.ship_slot = None
 
         self._build_menu()
         self._build_header()
@@ -103,6 +121,7 @@ class EditorApp:
         body = ttk.Frame(self.notebook, padding=4)
         self.notebook.add(body, text="Bases")
         self._build_aircraft_tab()
+        self._build_ships_tab()
 
         left = ttk.Frame(body)
         left.pack(side="left", fill="both", expand=True)
@@ -239,6 +258,77 @@ class EditorApp:
             self.aircraft_weapon_trees[key] = tree
             row += 1
 
+    def _build_ships_tab(self):
+        tab = ttk.Frame(self.notebook, padding=4)
+        self.notebook.add(tab, text="Ships")
+        left = ttk.Frame(tab)
+        left.pack(side="left", fill="both", expand=True)
+        bar = ttk.Frame(left)
+        bar.pack(side="top", fill="x")
+        ttk.Label(bar, text="Search:").pack(side="left")
+        self.ship_search_var = tk.StringVar()
+        self.ship_search_var.trace_add("write", lambda *a: self.refresh_ship_list())
+        ttk.Entry(bar, textvariable=self.ship_search_var, width=20).pack(side="left", padx=4)
+        self.ship_tree = ttk.Treeview(left, columns=[c[0] for c in SHIP_COLUMNS], show="headings",
+                                      selectmode="browse")
+        for cid, heading, width, _numeric, _get in SHIP_COLUMNS:
+            self.ship_tree.heading(cid, text=heading, command=lambda c=cid: self.sort_ships_by(c))
+            self.ship_tree.column(cid, width=width, anchor="w" if cid in ("name", "type", "nation") else "e")
+        self.ship_tree.tag_configure("edited", background="#fff2b3")
+        scroll = ttk.Scrollbar(left, orient="vertical", command=self.ship_tree.yview)
+        self.ship_tree.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+        self.ship_tree.pack(side="left", fill="both", expand=True)
+        self.ship_tree.bind("<<TreeviewSelect>>", lambda e: self.on_ship_select())
+
+        right = ttk.LabelFrame(tab, text="Ship class", padding=8)
+        right.pack(side="right", fill="y", padx=(8, 0))
+        self.ship_title = tk.StringVar(value="(select a ship class)")
+        ttk.Label(right, textvariable=self.ship_title, font=("TkDefaultFont", 11, "bold")).grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
+        row = 1
+        for f in ships.FIELDS:
+            ttk.Label(right, text=f.label).grid(row=row, column=0, sticky="w", pady=2)
+            self.ship_vars[f.name] = tk.StringVar()
+            ttk.Entry(right, textvariable=self.ship_vars[f.name], width=14).grid(
+                row=row, column=1, padx=(8, 0), pady=2)
+            row += 1
+        ttk.Button(right, text="Apply", command=self.apply_ship).grid(row=row, column=0, columnspan=2, pady=6)
+        row += 1
+        self.ship_info = {}
+        for name, label in (("type", "Type (read-only)"), ("nation", "Nation (read-only)"),
+                            ("displacement", "Displacement (unverified, read-only)"),
+                            ("date", "Date (unverified, read-only)")):
+            ttk.Label(right, text=label).grid(row=row, column=0, sticky="w", pady=1)
+            self.ship_info[name] = tk.StringVar()
+            ttk.Label(right, textvariable=self.ship_info[name]).grid(row=row, column=1, sticky="w", padx=(8, 0))
+            row += 1
+        box = ttk.LabelFrame(right, text="Weapons and electronics", padding=2)
+        box.grid(row=row, column=0, columnspan=2, sticky="we", pady=(4, 0))
+        cols = [("name", "Name", 150), ("num", "Num", 40), ("face", "Face", 40), ("mount", "Mount", 50),
+                ("armor", "Armor", 50), ("ammo", "Ammo", 50)]
+        self.ship_weapon_tree = ttk.Treeview(box, columns=[c[0] for c in cols], show="headings",
+                                             selectmode="browse", height=8)
+        for cid, heading, width in cols:
+            self.ship_weapon_tree.heading(cid, text=heading)
+            self.ship_weapon_tree.column(cid, width=width, anchor="w" if cid == "name" else "e")
+        self.ship_weapon_tree.pack(side="top", fill="x")
+        self.ship_weapon_tree.bind("<<TreeviewSelect>>", lambda e: self.on_ship_weapon_select())
+        edit = ttk.Frame(box)
+        edit.pack(side="top", fill="x", pady=(4, 0))
+        self.ship_weapon_vars = {}
+        for name, label, width in (("num", "Num", 5), ("face", "Face", 5), ("mount", "Mount", 5),
+                                   ("armor", "Armor", 5), ("ammo", "Ammo", 5)):
+            ttk.Label(edit, text=label + ":").pack(side="left")
+            var = tk.StringVar()
+            self.ship_weapon_vars[name] = var
+            if name == "face":
+                ttk.Combobox(edit, textvariable=var, values=list(ships.FACES.values()), width=width).pack(
+                    side="left", padx=(2, 6))
+            else:
+                ttk.Entry(edit, textvariable=var, width=width).pack(side="left", padx=(2, 6))
+        ttk.Button(edit, text="Apply weapon", command=self.apply_ship_weapon).pack(side="left", padx=4)
+
     def _build_factories(self, parent):
         box = ttk.LabelFrame(parent, text="Factories", padding=4)
         box.pack(side="bottom", fill="x", pady=(6, 0))
@@ -293,6 +383,7 @@ class EditorApp:
             save = SaveFile.load(path)
             blist = bases.list_bases(save)
             alist = aircraft.list_aircraft(save)
+            slist = ships.list_ships(save)
         except (OSError, SaveFormatError, KeyError) as exc:
             messagebox.showerror("Cannot open save", f"{path}\n\n{exc}")
             return False
@@ -305,13 +396,19 @@ class EditorApp:
         self.aircraft = {a.id: a for a in alist}
         self.aircraft_edited.clear()
         self.aircraft_current = None
+        self.ships = {x.id: x for x in slist}
+        self.ships_edited.clear()
+        self.ship_current = None
+        self.ship_slot = None
         self.file_label.set(f"File: {os.path.basename(path)}    Key variant: {save.variant}")
         self.title_var.set(save.description)
-        self.status.set(f"{path} - {len(blist)} bases, {len(alist)} aircraft")
+        self.status.set(f"{path} - {len(blist)} bases, {len(alist)} aircraft, {len(slist)} ship classes")
         self.refresh_list()
         self.show_detail(None)
         self.refresh_aircraft_list()
         self.show_aircraft(None)
+        self.refresh_ship_list()
+        self.show_ship(None)
         return True
 
     def confirm_discard(self):
@@ -578,6 +675,130 @@ class EditorApp:
             self.dirty = True
         self.refresh_aircraft_list()
         self.show_aircraft(a)
+
+    # ---- ships ---------------------------------------------------------
+
+    def _ship_row(self, x):
+        return [aircraft.format_date(*x.date) if cid == "date" else get(x)
+                for cid, _h, _w, _n, get in SHIP_COLUMNS]
+
+    def _ship_sort_key(self, x):
+        _cid, _h, _w, numeric, get = SHIP_COLUMN_BY_ID[self.ship_sort_col]
+        v = get(x)
+        return (v if numeric else str(v).lower(), x.id)
+
+    def refresh_ship_list(self):
+        selected = self.ship_current
+        self.ship_tree.delete(*self.ship_tree.get_children())
+        needle = self.ship_search_var.get().strip().lower()
+        rows = [x for x in self.ships.values() if needle in x.name.lower()]
+        rows.sort(key=self._ship_sort_key, reverse=self.ship_sort_reverse)
+        for x in rows:
+            tags = ("edited",) if x.id in self.ships_edited else ()
+            self.ship_tree.insert("", "end", iid=str(x.id), values=self._ship_row(x), tags=tags)
+        if selected is not None and self.ship_tree.exists(str(selected)):
+            self.ship_tree.selection_set(str(selected))
+
+    def sort_ships_by(self, col):
+        self.ship_sort_reverse = (not self.ship_sort_reverse) if col == self.ship_sort_col else False
+        self.ship_sort_col = col
+        self.refresh_ship_list()
+
+    def on_ship_select(self):
+        sel = self.ship_tree.selection()
+        self.show_ship(self.ships[int(sel[0])] if sel else None)
+
+    def show_ship(self, x):
+        previous = self.ship_current
+        self.ship_current = x.id if x else None
+        if x is None or x.id != previous:
+            self.ship_slot = None
+        if x is None:
+            self.ship_title.set("(select a ship class)")
+            for var in list(self.ship_vars.values()) + list(self.ship_info.values()):
+                var.set("")
+            self.show_ship_weapons(None)
+            return
+        self.ship_title.set(f"{x.name} (#{x.id}, {aircraft.format_date(*x.date)})")
+        for f in ships.FIELDS:
+            self.ship_vars[f.name].set(str(x.get(f.name)))
+        self.ship_info["type"].set(x.type)
+        self.ship_info["nation"].set(x.nation)
+        self.ship_info["displacement"].set(str(x.displacement))
+        self.ship_info["date"].set(aircraft.format_date(*x.date))
+        self.show_ship_weapons(x)
+
+    def show_ship_weapons(self, x):
+        self.ship_weapon_tree.delete(*self.ship_weapon_tree.get_children())
+        if x is not None:
+            for slot, w in x.list_weapons():
+                self.ship_weapon_tree.insert("", "end", iid=str(slot), values=(
+                    w["name"], w["num"], ships.face_label(w["face"]), w["mount"], w["armor"], w["ammo"]))
+        if x is not None and self.ship_slot is not None and self.ship_weapon_tree.exists(str(self.ship_slot)):
+            self.ship_weapon_tree.selection_set(str(self.ship_slot))
+        else:
+            self.ship_slot = None
+            self._fill_ship_weapon_edit(None)
+
+    def _fill_ship_weapon_edit(self, w):
+        for name, var in self.ship_weapon_vars.items():
+            var.set("" if w is None else (ships.face_label(w[name]) if name == "face" else str(w[name])))
+
+    def on_ship_weapon_select(self):
+        sel = self.ship_weapon_tree.selection()
+        if not sel or self.ship_current is None:
+            return
+        self.ship_slot = int(sel[0])
+        self._fill_ship_weapon_edit(self.ships[self.ship_current].get_weapon(self.ship_slot))
+
+    def apply_ship(self):
+        if self.ship_current is None:
+            return
+        x = self.ships[self.ship_current]
+        values = {}
+        for f in ships.FIELDS:
+            text = self.ship_vars[f.name].get().strip()
+            try:
+                values[f.name] = x.validate(f.name, int(text))
+            except ValueError:
+                messagebox.showerror("Invalid value",
+                                     f"{f.label} must be a whole number from {f.min} to {f.max} (got {text!r}).")
+                return
+        before = {n: x.get(n) for n in values}
+        x.set_many(values)
+        if before != values:
+            self.ships_edited.add(x.id)
+            self.dirty = True
+        self.refresh_ship_list()
+        self.show_ship(x)
+
+    def apply_ship_weapon(self):
+        if self.ship_current is None or self.ship_slot is None:
+            return
+        x = self.ships[self.ship_current]
+        values = {}
+        try:
+            for name, var in self.ship_weapon_vars.items():
+                text = var.get().strip()
+                if name == "face":
+                    values[name] = ships.parse_face(text)
+                else:
+                    label = ships.WEAPON_FIELDS[name][0]
+                    try:
+                        values[name] = int(text)
+                    except ValueError:
+                        raise ValueError(f"{label} must be a whole number (got {text!r}).") from None
+            x.check_weapon(self.ship_slot, **values)
+        except ValueError as exc:
+            messagebox.showerror("Invalid value", str(exc))
+            return
+        before = x.get_weapon(self.ship_slot)
+        x.set_weapon(self.ship_slot, **values)
+        if any(before[n] != v for n, v in values.items()):
+            self.ships_edited.add(x.id)
+            self.dirty = True
+        self.refresh_ship_list()
+        self.show_ship_weapons(x)
 
     def apply_title(self):
         if self.save is None:
