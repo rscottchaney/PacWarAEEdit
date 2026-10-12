@@ -76,7 +76,8 @@ are verified except China and India, which end in `?`.
 The Air Groups tab lists the air group table (section 0x14; the ID is the group
 number shown in the game). Select a group to edit it, its pilots (section
 0x16) and its commander (section 0x15). Editing a pilot or commander
-highlights the group row.
+highlights the group row. The Side filter uses the group's side byte
+(offset 26), so groups aboard ships or not yet arrived are filtered too.
 
 | Field | Status |
 |---|---|
@@ -86,7 +87,9 @@ highlights the group row.
 | Group patrol levels: CAP, LRcap % | follow the game's order, CAP value matched; edit unverified, editable |
 | Search arc start/end (degrees, clockwise; stored in tens) | verified in-game, editable |
 | Location (Move button) | verified in-game, editable: only to bases and towns on the same side; groups aboard ships (the Location column shows the ship name) or not yet arrived are read-only. A move also sets the group's base ("Based at") when it matched the location; detachments based elsewhere keep their base. Moves to towns verified in-game |
-| Aircraft type, aircraft total, pilot count byte (often disagrees with the pilot table), commander link | read-only |
+| Aircraft total, pilot count byte (often disagrees with the pilot table), commander link | read-only |
+| Aircraft (Change button) | verified in-game (kept after a turn), editable, own side only (aircraft side byte 228); writes only the aircraft id, like the AE Editor's Air Class. Plane counts and the upgrade target are unchanged, so set the upgrade too if the old target would be a step backwards. |
+| Upgrade to (Set upgrade button) | verified in-game, editable, own side only: the model the game swaps in when the pool has enough planes; both stored copies (@308, @574) are written. |
 | Pilot status (1 = Active; 2-4 probably killed/wounded/missing, unverified) | read-only; the Pilots list column counts active pilots |
 | Pilot experience | verified in-game, editable |
 | Pilot 12 skills (Air, NavB, NavT, NavS, Recn, ASW, Tran, GrdB, LowN, LowG, Staf, Defn) | verified in-game, editable; written to both stored copies |
