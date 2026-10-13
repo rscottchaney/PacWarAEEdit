@@ -9,7 +9,8 @@ alone because their purpose is unknown.
 
 import struct
 
-from .aircraft import AIRCRAFT_RECORD_SIZE, AIRCRAFT_SECTION
+from .aircraft import AIRCRAFT_RECORD_SIZE, AIRCRAFT_SECTION, RECORD_COUNT as AIRCRAFT_RECORD_COUNT
+from .aircraft import SIDE_OFFSET as AIRCRAFT_SIDE_OFFSET
 from .bases import (
     LOCATION_SECTION, NAME_SIZE, RECORD_SIZE, SIDES, Field, decode_name, is_place, place_side_id,
 )
@@ -18,6 +19,8 @@ from .factories import _plain_name
 GROUP_SECTION = 0x14
 GROUP_RECORD_SIZE = 680
 GROUP_RECORD_COUNT = 30001
+# 0 = Japanese, 1 = Allied; matches the side of the base for every group at one.
+SIDE_OFFSET = 26
 LOCATION_OFFSET = 40
 # The group's base ("Based at" on its screen). Detachments keep their parent's base or
 # carrier here while they sit elsewhere.
@@ -36,8 +39,17 @@ PILOT_RECORD_SIZE = 180
 PILOT_RECORD_COUNT = 70000
 
 AIRCRAFT_OFFSET = 30
+# Upgrade target, stored twice (copies); both equal the current aircraft when no upgrade is pending.
+UPGRADE_OFFSET = 308
+UPGRADE_COPY_OFFSET = 574
 LEADER_OFFSET = 32
 PLANES_OFFSET = 210
+# For a group that has arrived, ready + maintenance + reserve + damaged == planes (the total).
+# Byte 208 is not part of this and is never written.
+READY_OFFSET = 204
+MAINTENANCE_OFFSET = 206
+RESERVE_OFFSET = 207
+DAMAGED_OFFSET = 209
 PILOT_COUNT_OFFSET = 546
 PILOT_GROUP_OFFSET = 32
 PILOT_AGE_OFFSET = 43
@@ -176,7 +188,9 @@ class AirGroup(Record):
 
     @property
     def aircraft_name(self):
-        aid = self.aircraft_id
+        return self._aircraft_name(self.aircraft_id)
+
+    def _aircraft_name(self, aid):
         data = self._save[AIRCRAFT_SECTION].data
         if not 0 <= aid < len(data) // AIRCRAFT_RECORD_SIZE:
             return ""
@@ -219,10 +233,7 @@ class AirGroup(Record):
 
     @property
     def side(self):
-        """Side of the current location; groups have no side field of their own."""
-        if not self.can_move:
-            return "Unknown"
-        return SIDES.get(place_side_id(self._save, self.location_id), "Unknown")
+        return SIDES.get(self._u8(SIDE_OFFSET), "Unknown")
 
     def move_to(self, place_id):
         """Move to a base or town on the same side; the base follows unless it already differed."""
@@ -237,12 +248,95 @@ class AirGroup(Record):
         struct.pack_into("<h", self._data, self._offset + LOCATION_OFFSET, place_id)
 
     @property
+    def upgrade_id(self):
+        return self._i16(UPGRADE_OFFSET)
+
+    @property
+    def upgrade_name(self):
+        return self._aircraft_name(self.upgrade_id)
+
+    def set_aircraft(self, aircraft_id):
+        """Change the aircraft type (the editor's "Air Class") to a model of the group's own side.
+
+        Writes only the aircraft id; plane counts and the upgrade target are untouched.
+        """
+        self._check_aircraft(aircraft_id)
+        struct.pack_into("<h", self._data, self._offset + AIRCRAFT_OFFSET, aircraft_id)
+
+    def set_upgrade(self, aircraft_id):
+        """Set the upgrade target to a model of the group's own side; writes both stored copies."""
+        self._check_aircraft(aircraft_id)
+        for pos in (UPGRADE_OFFSET, UPGRADE_COPY_OFFSET):
+            struct.pack_into("<h", self._data, self._offset + pos, aircraft_id)
+
+    def _check_aircraft(self, aircraft_id):
+        """Raise ValueError unless this is a named aircraft record of the group's side."""
+        if isinstance(aircraft_id, bool) or not isinstance(aircraft_id, int):
+            raise ValueError("aircraft id must be an integer")
+        data = self._save[AIRCRAFT_SECTION].data
+        if not 0 < aircraft_id < min(AIRCRAFT_RECORD_COUNT, len(data) // AIRCRAFT_RECORD_SIZE):
+            raise ValueError(f"{aircraft_id!r} is not an aircraft")
+        start = aircraft_id * AIRCRAFT_RECORD_SIZE
+        if not _plain_name(data, start):
+            raise ValueError(f"{aircraft_id!r} is not an aircraft")
+        if data[start + AIRCRAFT_SIDE_OFFSET] != self._u8(SIDE_OFFSET):
+            raise ValueError(f"{aircraft_id} is not an {self.side} aircraft")
+
+    @property
     def planes(self):
         return self._u8(PLANES_OFFSET)
 
     @property
     def pilot_count(self):
         return self._u8(PILOT_COUNT_OFFSET)
+
+    @property
+    def arrived(self):
+        return self.location_id != 0
+
+    @property
+    def ready(self):
+        return self._i16(READY_OFFSET)
+
+    @property
+    def maintenance(self):
+        return self._u8(MAINTENANCE_OFFSET)
+
+    @property
+    def reserve(self):
+        return self._u8(RESERVE_OFFSET)
+
+    @property
+    def damaged(self):
+        return self._u8(DAMAGED_OFFSET)
+
+    def set_plane_status(self, ready, maintenance, damaged, reserve):
+        """Split the group's planes between the four states; the total is unchanged.
+
+        Validates everything before writing. Only the four count fields are written.
+        """
+        counts = (ready, maintenance, damaged, reserve)
+        if any(isinstance(c, bool) or not isinstance(c, int) for c in counts):
+            raise ValueError("Plane counts must be integers")
+        if any(c < 0 for c in counts):
+            raise ValueError("Plane counts cannot be negative")
+        if not self.arrived:
+            raise ValueError(f"{self.name} has not arrived")
+        total = self.planes
+        if sum(counts) != total:
+            raise ValueError(f"Ready, maintenance, damaged and reserve must add up to {total}")
+        struct.pack_into("<h", self._data, self._offset + READY_OFFSET, ready)
+        self._data[self._offset + MAINTENANCE_OFFSET] = maintenance
+        self._data[self._offset + RESERVE_OFFSET] = reserve
+        self._data[self._offset + DAMAGED_OFFSET] = damaged
+
+    def repair_all(self):
+        """Move maintenance and damaged planes into ready; reserve is unchanged."""
+        if not self.arrived:
+            raise ValueError(f"{self.name} has not arrived")
+        if self.maintenance == 0 and self.damaged == 0:
+            return
+        self.set_plane_status(self.ready + self.maintenance + self.damaged, 0, 0, self.reserve)
 
 
 class Pilot(Record):

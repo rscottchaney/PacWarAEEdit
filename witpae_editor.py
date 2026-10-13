@@ -123,6 +123,8 @@ class EditorApp:
         self.place_labels = {}
         self.device_ids = {}
         self.device_labels = {}
+        self.aircraft_ids = {}
+        self.aircraft_labels = {}
         self.units = {}
         self.units_edited = set()
         self.unit_sort_col = "id"
@@ -393,6 +395,12 @@ class EditorApp:
         self.group_search_var = tk.StringVar()
         self.group_search_var.trace_add("write", lambda *a: self.refresh_group_list())
         ttk.Entry(bar, textvariable=self.group_search_var, width=20).pack(side="left", padx=4)
+        ttk.Label(bar, text="Side:").pack(side="left")
+        self.group_side_var = tk.StringVar(value="All")
+        side_box = ttk.Combobox(bar, textvariable=self.group_side_var, values=["All", "Allied", "Japanese"],
+                                state="readonly", width=9)
+        side_box.pack(side="left", padx=4)
+        side_box.bind("<<ComboboxSelected>>", lambda e: self.refresh_group_list())
 
         # Pilots and commander sit below the list so the tab stays short enough for small screens.
         lower = ttk.Frame(left)
@@ -426,18 +434,58 @@ class EditorApp:
         ttk.Button(right, text="Apply", command=self.apply_group).grid(row=row, column=0, columnspan=2, pady=6)
         row += 1
         self.group_info = {}
-        for name, label in (("aircraft", "Aircraft (read-only)"), ("planes", "Aircraft total (read-only)"),
+        for name, label in (("aircraft", "Aircraft"), ("upgrade", "Upgrade to"), ("planes", "Aircraft total (read-only)"),
                             ("pilots", "Pilot count byte (read-only, meaning unclear)"), ("leader", "Commander (read-only)"),
                             ("location", "Location")):
             ttk.Label(right, text=label).grid(row=row, column=0, sticky="w", pady=1)
             self.group_info[name] = tk.StringVar()
             ttk.Label(right, textvariable=self.group_info[name]).grid(row=row, column=1, sticky="w", padx=(8, 0))
             row += 1
+        self._build_planes(right, row)
+        row += 1
         self.group_move_var, self.group_move_box, self.group_move_button, self.group_move_note = self._build_move_row(
             right, row, self.move_group)
         row += 3
+        ttk.Label(right, text="Change aircraft").grid(row=row, column=0, sticky="w", pady=(8, 2))
+        self.group_aircraft_var = tk.StringVar()
+        self.group_aircraft_box = ttk.Combobox(right, textvariable=self.group_aircraft_var, state="disabled", width=24)
+        self.group_aircraft_box.grid(row=row, column=1, padx=(8, 0), pady=(8, 2))
+        self.group_aircraft_button = ttk.Button(right, text="Change", command=self.change_group_aircraft)
+        self.group_aircraft_button.grid(row=row + 1, column=0, columnspan=2, pady=2)
+        row += 2
+        ttk.Label(right, text="Upgrade to").grid(row=row, column=0, sticky="w", pady=(8, 2))
+        self.group_upgrade_var = tk.StringVar()
+        self.group_upgrade_box = ttk.Combobox(right, textvariable=self.group_upgrade_var, state="disabled", width=24)
+        self.group_upgrade_box.grid(row=row, column=1, padx=(8, 0), pady=(8, 2))
+        self.group_upgrade_button = ttk.Button(right, text="Set upgrade", command=self.change_group_upgrade)
+        self.group_upgrade_button.grid(row=row + 1, column=0, columnspan=2, pady=2)
+        row += 2
         ttk.Label(right, text="The game probably recalculates\naverage experience from the pilots.",
                   foreground="gray40").grid(row=row, column=0, columnspan=2, sticky="w", pady=(6, 0))
+
+    def _build_planes(self, parent, row):
+        """Ready / maintenance / damaged / reserve split of the group's planes; the total stays fixed."""
+        box = ttk.LabelFrame(parent, text="Planes", padding=4)
+        box.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(8, 2))
+        self.plane_vars, self.plane_entries = {}, []
+        for k, (name, label) in enumerate((("ready", "Ready"), ("maintenance", "Maintenance"),
+                                           ("damaged", "Damaged"), ("reserve", "Reserve"))):
+            r, c = divmod(k, 2)
+            ttk.Label(box, text=label).grid(row=r, column=2 * c, sticky="w", padx=(0, 2), pady=1)
+            self.plane_vars[name] = tk.StringVar()
+            entry = ttk.Entry(box, textvariable=self.plane_vars[name], width=5, state="disabled")
+            entry.grid(row=r, column=2 * c + 1, sticky="w", padx=(0, 10), pady=1)
+            self.plane_entries.append(entry)
+        ttk.Label(box, text="Total").grid(row=2, column=0, sticky="w", pady=1)
+        self.plane_total = tk.StringVar()
+        ttk.Label(box, textvariable=self.plane_total).grid(row=2, column=1, sticky="w", pady=1)
+        self.plane_apply_button = ttk.Button(box, text="Apply planes", command=self.apply_planes, state="disabled")
+        self.plane_apply_button.grid(row=3, column=0, columnspan=2, sticky="w", pady=(2, 0))
+        self.plane_repair_button = ttk.Button(box, text="Repair all", command=self.repair_planes, state="disabled")
+        self.plane_repair_button.grid(row=3, column=2, columnspan=2, sticky="w", pady=(2, 0))
+        self.plane_note = tk.StringVar()
+        ttk.Label(box, textvariable=self.plane_note, foreground="gray40").grid(
+            row=4, column=0, columnspan=4, sticky="w")
 
     def _build_pilots(self, parent):
         box = ttk.LabelFrame(parent, text="Pilots", padding=4)
@@ -701,6 +749,13 @@ class EditorApp:
                 label = f"{name} ({device_id})"
                 self.device_ids[label] = device_id
                 self.device_labels.setdefault(bases.SIDES[side_id], []).append(label)
+        self.aircraft_ids = {}
+        self.aircraft_labels = {}
+        for a in sorted(alist, key=lambda a: (a.name.lower(), a.id)):
+            month, year = a.get_date("from")
+            label = f"{a.name} ({a.id}, {aircraft.format_date(month, year)})"
+            self.aircraft_ids[label] = a.id
+            self.aircraft_labels.setdefault(bases.SIDES.get(a.side_id, "Unknown"), []).append(label)
         self.units = {u.id: u for u in ulist}
         self.units_edited.clear()
         self.unit_current = None
@@ -1120,7 +1175,9 @@ class EditorApp:
         selected = self.group_current
         self.group_tree.delete(*self.group_tree.get_children())
         needle = self.group_search_var.get().strip().lower()
-        rows = [g for g in self.groups.values() if needle in g.name.lower()]
+        side = self.group_side_var.get()
+        rows = [g for g in self.groups.values()
+                if needle in g.name.lower() and (side == "All" or g.side == side)]
         rows.sort(key=self._group_sort_key, reverse=self.group_sort_reverse)
         for g in rows:
             tags = ("edited",) if g.id in self.groups_edited else ()
@@ -1149,6 +1206,8 @@ class EditorApp:
                 var.set("")
             self._show_move(None, self.group_move_var, self.group_move_box, self.group_move_button,
                             self.group_move_note)
+            self._show_aircraft_choice(None)
+            self._show_planes(None)
             self.show_pilots(None)
             self.show_leader(None)
             return
@@ -1157,13 +1216,98 @@ class EditorApp:
             self.group_vars[f.name].set(str(g.get(f.name)))
         leader = airgroups.get_leader(self.save, g.leader_id)
         self.group_info["aircraft"].set(f"{g.aircraft_id} {g.aircraft_name}")
+        self.group_info["upgrade"].set(f"{g.upgrade_id} {g.upgrade_name}")
         self.group_info["planes"].set(str(g.planes))
         self.group_info["pilots"].set(str(g.pilot_count))
         self.group_info["leader"].set(f"{g.leader_id} {leader.name}" if leader else str(g.leader_id))
         self.group_info["location"].set(f"{g.location_id} {g.location_name}")
         self._show_move(g, self.group_move_var, self.group_move_box, self.group_move_button, self.group_move_note)
+        self._show_aircraft_choice(g)
+        self._show_planes(g)
         self.show_pilots(g)
         self.show_leader(leader)
+
+    def _show_planes(self, g):
+        counts = {} if g is None else {"ready": g.ready, "maintenance": g.maintenance,
+                                       "damaged": g.damaged, "reserve": g.reserve}
+        for name, var in self.plane_vars.items():
+            var.set(str(counts[name]) if g is not None else "")
+        self.plane_total.set(str(g.planes) if g is not None else "")
+        state = "normal" if g is not None and g.arrived else "disabled"
+        for entry in self.plane_entries:
+            entry.configure(state=state)
+        for button in (self.plane_apply_button, self.plane_repair_button):
+            button.state(["disabled"] if state == "disabled" else ["!disabled"])
+        self.plane_note.set("not arrived" if g is not None and not g.arrived else "")
+
+    def apply_planes(self):
+        if self.group_current is None:
+            return
+        g = self.groups[self.group_current]
+        counts = []
+        for name in ("ready", "maintenance", "damaged", "reserve"):
+            text = self.plane_vars[name].get().strip()
+            try:
+                counts.append(int(text))
+            except ValueError:
+                messagebox.showerror("Invalid value", f"{name.capitalize()} must be a whole number (got {text!r}).")
+                return
+        self._change_planes(g, lambda: g.set_plane_status(*counts))
+
+    def repair_planes(self):
+        if self.group_current is None:
+            return
+        g = self.groups[self.group_current]
+        self._change_planes(g, g.repair_all)
+
+    def _change_planes(self, g, change):
+        before = (g.ready, g.maintenance, g.damaged, g.reserve)
+        try:
+            change()
+        except ValueError as exc:
+            messagebox.showerror("Cannot change planes", str(exc))
+            return
+        if before != (g.ready, g.maintenance, g.damaged, g.reserve):
+            self.groups_edited.add(g.id)
+            self.dirty = True
+        self.refresh_group_list()
+        self.show_group(g)
+
+    def _show_aircraft_choice(self, g):
+        for var, box, button in ((self.group_aircraft_var, self.group_aircraft_box, self.group_aircraft_button),
+                                 (self.group_upgrade_var, self.group_upgrade_box, self.group_upgrade_button)):
+            var.set("")
+            if g is None:
+                box.configure(values=[], state="disabled")
+                button.state(["disabled"])
+            else:
+                box.configure(values=self.aircraft_labels.get(g.side, []), state="readonly")
+                button.state(["!disabled"])
+
+    def change_group_aircraft(self):
+        self._change_group_model(self.group_aircraft_var, airgroups.AirGroup.set_aircraft, "Cannot change aircraft")
+
+    def change_group_upgrade(self):
+        self._change_group_model(self.group_upgrade_var, airgroups.AirGroup.set_upgrade, "Cannot set upgrade")
+
+    def _change_group_model(self, var, setter, title):
+        if self.group_current is None:
+            messagebox.showerror(title, "Select an air group first.")
+            return
+        g = self.groups[self.group_current]
+        aircraft_id = self.aircraft_ids.get(var.get())
+        if aircraft_id is None:
+            messagebox.showerror(title, "Choose an aircraft first.")
+            return
+        try:
+            setter(g, aircraft_id)
+        except ValueError as exc:
+            messagebox.showerror(title, str(exc))
+            return
+        self.groups_edited.add(g.id)
+        self.dirty = True
+        self.refresh_group_list()
+        self.show_group(g)
 
     def move_group(self):
         if self.group_current is None:

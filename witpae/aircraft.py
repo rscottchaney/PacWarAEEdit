@@ -19,6 +19,8 @@ RECORD_COUNT = 1000
 TYPE_OFFSET = 25
 UPGRADE_OFFSET = 26
 NATION_OFFSET = 284
+# 0 = Japanese, 1 = Allied; matches the side of every group flying the model.
+SIDE_OFFSET = 228
 CARRIER_OFFSET = 232
 CARRIER_BIT = 0x08
 TO_MONTH_OFFSET = 282
@@ -244,6 +246,10 @@ class Aircraft:
     @property
     def type(self):
         return type_label(self.type_id)
+
+    @property
+    def side_id(self):
+        return self._u8(SIDE_OFFSET)
 
     @property
     def nation_id(self):

@@ -163,6 +163,10 @@ class GuiSmokeTests(unittest.TestCase):
         app = witpae_editor.EditorApp(self.root)
         self.assertTrue(app.load(SAVE_015))
         self.assertEqual(len(app.group_tree.get_children()), 2895)
+        for side, count in (("Allied", 2004), ("Japanese", 891), ("All", 2895)):
+            app.group_side_var.set(side)
+            app.refresh_group_list()
+            self.assertEqual(len(app.group_tree.get_children()), count, side)
         app.group_search_var.set("19th TS")
         self.assertIn("4205", app.group_tree.get_children())
         app.group_tree.selection_set("4205")
@@ -314,6 +318,82 @@ class GuiSmokeTests(unittest.TestCase):
         with mock.patch.object(witpae_editor.messagebox, "showerror") as err:
             app.move_unit()
         self.assertTrue(err.called)
+
+    def test_change_air_group_aircraft(self):
+        from unittest import mock
+        import witpae_editor
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        self.assertTrue(app.group_aircraft_button.instate(["disabled"]))
+        app.group_tree.selection_set("4020")
+        self.root.update()
+        self.assertFalse(app.group_aircraft_button.instate(["disabled"]))
+        values = app.group_aircraft_box.cget("values")
+        self.assertIn("P-40E Warhawk (342, 12/41)", values)
+        self.assertNotIn("A6M2 Zero (603, 12/41)", values)
+        self.assertTrue(all(app.save and app.aircraft[app.aircraft_ids[v]].side_id == 1 for v in values))
+        app.group_aircraft_var.set("P-40E Warhawk (155, 3/42)")
+        app.change_group_aircraft()
+        self.assertEqual((app.groups[4020].aircraft_id, app.groups[4020].upgrade_id), (155, 342))
+        self.assertIn(4020, app.groups_edited)
+        self.assertTrue(app.dirty)
+        self.assertEqual(app.group_tree.set("4020", "aircraft"), "P-40E Warhawk")
+        self.assertEqual(app.group_info["aircraft"].get(), "155 P-40E Warhawk")
+        self.assertEqual(app.group_info["upgrade"].get(), "342 P-40E Warhawk")
+        self.assertEqual(app.group_upgrade_box.cget("values"), values)
+        app.group_upgrade_var.set("P-40B Warhawk (341, 12/41)")
+        app.change_group_upgrade()
+        self.assertEqual((app.groups[4020].aircraft_id, app.groups[4020].upgrade_id), (155, 341))
+        self.assertEqual(app.group_info["upgrade"].get(), "341 P-40B Warhawk")
+        app.group_aircraft_var.set("")
+        app.group_upgrade_var.set("")
+        with mock.patch("witpae_editor.messagebox.showerror") as err:
+            app.change_group_aircraft()
+            app.change_group_upgrade()
+        self.assertEqual(err.call_count, 2)
+
+    def test_air_group_plane_status(self):
+        from unittest import mock
+        import witpae_editor
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        self.assertTrue(app.plane_apply_button.instate(["disabled"]))
+        app.group_tree.selection_set("4020")
+        self.root.update()
+        self.assertEqual([app.plane_vars[k].get() for k in ("ready", "maintenance", "damaged", "reserve")],
+                         ["11", "6", "3", "0"])
+        self.assertEqual(app.plane_total.get(), "20")
+        self.assertFalse(app.plane_apply_button.instate(["disabled"]))
+        app.plane_vars["ready"].set("8")
+        app.plane_vars["maintenance"].set("5")
+        app.plane_vars["damaged"].set("6")
+        app.plane_vars["reserve"].set("1")
+        app.apply_planes()
+        g = app.groups[4020]
+        self.assertEqual((g.ready, g.maintenance, g.damaged, g.reserve, g.planes), (8, 5, 6, 1, 20))
+        self.assertIn(4020, app.groups_edited)
+        self.assertTrue(app.dirty)
+        self.assertEqual(app.plane_vars["damaged"].get(), "6")
+        # A wrong sum and a non-number are refused and change nothing.
+        app.plane_vars["ready"].set("9")
+        with mock.patch.object(witpae_editor.messagebox, "showerror") as err:
+            app.apply_planes()
+        self.assertTrue(err.called)
+        app.plane_vars["ready"].set("x")
+        with mock.patch.object(witpae_editor.messagebox, "showerror") as err:
+            app.apply_planes()
+        self.assertTrue(err.called)
+        self.assertEqual((g.ready, g.maintenance, g.damaged, g.reserve), (8, 5, 6, 1))
+        app.repair_planes()
+        self.assertEqual((g.ready, g.maintenance, g.damaged, g.reserve), (19, 0, 0, 1))
+        self.assertEqual(app.plane_vars["ready"].get(), "19")
+        app.group_tree.selection_set("2")  # not arrived
+        self.root.update()
+        self.assertTrue(app.plane_apply_button.instate(["disabled"]))
+        self.assertTrue(app.plane_repair_button.instate(["disabled"]))
+        self.assertTrue(all(e.instate(["disabled"]) for e in app.plane_entries))
+        self.assertEqual(app.plane_vars["ready"].get(), "10")
+        self.assertIn("not arrived", app.plane_note.get())
 
     def test_load_folder_gives_clear_error(self):
         from unittest import mock
