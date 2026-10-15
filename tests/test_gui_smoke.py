@@ -41,6 +41,31 @@ class GuiSmokeTests(unittest.TestCase):
         app.sort_by("supply")
         self.root.update()
 
+    def test_pbem_save_cannot_be_saved_even_after_retitling(self):
+        import tempfile
+        from unittest import mock
+        import witpae_editor
+        from witpae import bases
+        from witpae.container import SaveFile
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "pbem.pws")
+            sf = SaveFile.load(SAVE_015)
+            bases.set_title(sf, "(PBEM) game")
+            sf.save(src)
+            app = witpae_editor.EditorApp(self.root)
+            self.assertTrue(app.load(src))
+            self.assertTrue(app.pbem)
+            self.assertIn("PBEM", app.status.get())
+            app.title_var.set("not pbem")
+            out = os.path.join(tmp, "out.pws")
+            with mock.patch.object(witpae_editor.messagebox, "showerror") as err,                     mock.patch.object(witpae_editor.filedialog, "asksaveasfilename", return_value=out) as ask:
+                app.save_as()
+            err.assert_called_once()
+            ask.assert_not_called()
+            self.assertFalse(os.path.exists(out))
+            self.assertTrue(app.load(SAVE_015))
+            self.assertFalse(app.pbem)
+
     def test_stockpile_checkbox_applies(self):
         import witpae_editor
         app = witpae_editor.EditorApp(self.root)

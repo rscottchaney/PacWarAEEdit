@@ -12,6 +12,9 @@ File > Open defaults to `..\SAVE`. Pick a base, edit its fields, press Apply
 file asks first and copies the old file to `<name>.bak`. The save title can
 also be edited (under 1000 bytes, latin-1).
 
+PBEM games (title starting with `(PBEM)` when loaded) can be browsed, but saving them is
+refused, even after a retitle, because an edited copy would desynchronise the other player.
+
 Tests: `python -m unittest discover -s tests -v`
 
 ## Fields
