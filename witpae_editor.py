@@ -12,7 +12,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from witpae import aircraft, airgroups, bases, factories, landunits, ships
 from witpae.container import SaveFile, SaveFormatError
-from witpae.fileio import save_with_backup
+from witpae.fileio import is_pbem, save_with_backup
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_DIR = os.path.normpath(os.path.join(HERE, "..", "SAVE"))
@@ -88,6 +88,7 @@ class EditorApp:
         self.bases = {}
         self.edited = set()
         self.dirty = False
+        self.pbem = False
         self.sort_col = "id"
         self.sort_reverse = False
         self.field_vars = {}
@@ -715,6 +716,8 @@ class EditorApp:
             messagebox.showerror("Cannot open save", f"{path}\n\n{exc}")
             return False
         self.save, self.path = save, path
+        # Judged on the title as loaded, so retitling the save cannot lift the block.
+        self.pbem = is_pbem(save)
         self.bases = {b.id: b for b in blist}
         self.edited.clear()
         self.dirty = False
@@ -762,7 +765,8 @@ class EditorApp:
         self.unit_slot = None
         self.file_label.set(f"File: {os.path.basename(path)}    Key variant: {save.variant}")
         self.title_var.set(save.description)
-        self.status.set(f"{path} - {len(blist)} bases, {len(alist)} aircraft, {len(slist)} ship classes, {len(glist)} air groups, {len(ulist)} land units")
+        self.status.set(f"{path} - {len(blist)} bases, {len(alist)} aircraft, {len(slist)} ship classes, {len(glist)} air groups, {len(ulist)} land units"
+                        + (" - PBEM game: saving is disabled" if self.pbem else ""))
         self.refresh_list()
         self.show_detail(None)
         self.refresh_aircraft_list()
@@ -1621,6 +1625,10 @@ class EditorApp:
 
     def save_as(self):
         if self.save is None:
+            return
+        if self.pbem:
+            messagebox.showerror("Save refused", "This is a PBEM game. Saving an edited copy would desynchronise "
+                                 "the other player, so PBEM saves are never written.")
             return
         # A typed but unapplied title would otherwise be silently dropped.
         if self.title_var.get() != self.save.description:
