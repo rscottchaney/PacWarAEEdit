@@ -255,21 +255,111 @@ class AirGroupTests(unittest.TestCase):
         self.assertEqual((g.ready, g.maintenance, g.damaged, g.reserve, g.planes), (11, 6, 3, 0, 20))
         self.assertFalse(self.groups[2].arrived)
 
-    def test_set_plane_status_changes_only_count_bytes(self):
+    # Groups whose stored repair total (402) is off from their plane records in this save.
+    OFF_REPAIR_TOTAL = {2700, 2913, 2937, 2941, 2993, 3076, 3102, 3184, 4017}
+
+    def plane_records(self, sf, group_id):
+        data = sf[airgroups.PLANE_SECTION].data
+        size = airgroups.PLANE_RECORD_SIZE
+        return {i: bytes(data[i * size:(i + 1) * size]) for i in range(len(data) // size)
+                if int.from_bytes(data[i * size + 10:i * size + 12], "little", signed=True) == group_id}
+
+    def status_counts(self, sf, group_id):
+        c = [0, 0, 0, 0]
+        for rec in self.plane_records(sf, group_id).values():
+            for k, status in enumerate((6, 4, 1, 2)):
+                c[k] += rec[160] == status
+        return tuple(c)
+
+    def check_group_consistent(self, sf, g):
+        """Assert the status counts and total match the plane records; return whether 402 does too."""
+        records = self.plane_records(sf, g.id).values()
+        self.assertEqual(self.status_counts(sf, g.id), (g.ready, g.maintenance, g.damaged, g.reserve), g.id)
+        self.assertEqual(len(records), g.planes, g.id)
+        return g._i16(airgroups.REPAIR_OFFSET) == sum(r[162] for r in records)
+
+    def changed_groups(self, before, after):
+        old, new = before[0x14].data, after[0x14].data
+        size = airgroups.GROUP_RECORD_SIZE
+        return {i // size: i % size for i in range(len(old)) if old[i] != new[i]}
+
+    def test_plane_records_match_group_counts_in_the_save(self):
+        arrived = [g for g in self.groups.values() if g.arrived]
+        off = {g.id for g in arrived if not self.check_group_consistent(self.sf, g)}
+        self.assertEqual(off, self.OFF_REPAIR_TOTAL)
+
+    def test_set_plane_status_rewrites_only_changed_records(self):
         g = self.groups[4020]
-        self.assert_only_offsets((204, 206, 207, 209),
-                                 lambda g: g.set_plane_status(ready=8, maintenance=5, damaged=5, reserve=2))
-        self.assertEqual((g.ready, g.maintenance, g.damaged, g.reserve, g.planes), (8, 5, 5, 2, 20))
-        # Only the bytes whose value changed show up: here 204, 206 and 209.
-        self.sf = SaveFile.load(SAVE_015)
-        self.groups = {x.id: x for x in airgroups.list_airgroups(self.sf)}
-        self.assert_only_offsets((204, 206, 209),
-                                 lambda g: g.set_plane_status(ready=9, maintenance=4, damaged=7, reserve=0))
+        self.assertTrue(self.check_group_consistent(self.sf, g))
+        before = SaveFile.load(SAVE_015)
+        old = self.plane_records(before, 4020)
+        g.set_plane_status(ready=8, maintenance=5, damaged=5, reserve=2)
+        for loaded in (self.sf, self.roundtrip()):
+            h = {x.id: x for x in airgroups.list_airgroups(loaded)}[4020]
+            self.assertEqual((h.ready, h.maintenance, h.damaged, h.reserve, h.planes), (8, 5, 5, 2, 20))
+            self.assertTrue(self.check_group_consistent(loaded, h))
+            new = self.plane_records(loaded, 4020)
+            self.assertEqual(sorted(new), sorted(old))
+            changed = [i for i in old if old[i] != new[i]]
+            # 3 ready + 1 maintenance planes become 2 damaged + 2 reserve.
+            self.assertEqual(len(changed), 4)
+            for i in old:
+                if i not in changed:
+                    continue
+                self.assertNotEqual(old[i][160], new[i][160])
+                self.assertFalse({k for k in range(len(old[i])) if old[i][k] != new[i][k]} - {160, 161, 162})
+                self.assertEqual(tuple(new[i][161:163]), {1: (1, 1), 2: (0, 0)}[new[i][160]])
+            # Only this group's record and the plane section differ elsewhere.
+            for sec in before.sections:
+                if sec.sid not in (airgroups.GROUP_SECTION, airgroups.PLANE_SECTION):
+                    self.assertEqual(bytes(sec.data), bytes(loaded[sec.sid].data), sec.sid)
+            self.assertEqual(set(self.changed_groups(before, loaded)), {4020})
+
+    def test_set_plane_status_keeps_unchanged_statuses(self):
+        g = self.groups[4020]
+        old = self.plane_records(self.sf, 4020)
+        g.set_plane_status(ready=9, maintenance=4, damaged=7, reserve=0)
+        new = self.plane_records(self.sf, 4020)
+        # 2 ready and 2 maintenance planes become damaged; nothing else moves.
+        self.assertEqual(len([i for i in old if old[i] != new[i]]), 4)
+        self.assertTrue(self.check_group_consistent(self.sf, g))
+        self.assertEqual(g._i16(airgroups.REPAIR_OFFSET), sum(r[162] for r in new.values()))
+
+    def test_set_plane_status_to_same_split_writes_nothing(self):
+        before = {s.sid: bytes(s.data) for s in self.sf.sections}
+        g = self.groups[4020]
+        g.set_plane_status(ready=g.ready, maintenance=g.maintenance, damaged=g.damaged, reserve=g.reserve)
+        self.assertEqual({s.sid: bytes(s.data) for s in self.sf.sections}, before)
 
     def test_repair_all_moves_maintenance_and_damaged_to_ready(self):
         g = self.groups[4020]
-        self.assert_only_offsets((204, 206, 209), lambda g: g.repair_all())
+        old = self.plane_records(self.sf, 4020)
+        g.repair_all()
         self.assertEqual((g.ready, g.maintenance, g.damaged, g.reserve, g.planes), (20, 0, 0, 0, 20))
+        new = self.plane_records(self.sf, 4020)
+        self.assertEqual(len([i for i in old if old[i] != new[i]]), 9)
+        self.assertTrue(all(r[160] == 6 and r[161] == 0 and r[162] == 0 for r in new.values()))
+        self.assertEqual(g._i16(airgroups.REPAIR_OFFSET), 0)
+        self.assertTrue(self.check_group_consistent(self.roundtrip(), g))
+
+    def test_repair_total_follows_the_change_for_an_off_group(self):
+        # 3102's stored total is 0 but its records sum to 2; the stored total moves by the same amount.
+        g = self.groups[3102]
+        self.assertEqual((g._i16(airgroups.REPAIR_OFFSET), g.maintenance), (0, 1))
+        g.repair_all()
+        self.assertEqual(g._i16(airgroups.REPAIR_OFFSET), 0)
+        self.assertEqual(self.status_counts(self.sf, 3102), (13, 0, 0, 0))
+
+    def test_plane_record_count_mismatch_leaves_bytes_unchanged(self):
+        data = self.sf[airgroups.PLANE_SECTION].data
+        pos = min(self.plane_records(self.sf, 4020)) * airgroups.PLANE_RECORD_SIZE
+        data[pos + 10:pos + 12] = (0).to_bytes(2, "little")  # frees one of the group's 20 records
+        sections = (airgroups.GROUP_SECTION, airgroups.PLANE_SECTION)
+        before = [bytes(self.sf[k].data) for k in sections]
+        for call in (lambda g: g.set_plane_status(8, 5, 5, 2), lambda g: g.repair_all()):
+            with self.assertRaisesRegex(ValueError, "19 plane records"):
+                call(self.groups[4020])
+        self.assertEqual(before, [bytes(self.sf[k].data) for k in sections])
 
     def test_repair_all_keeps_reserve(self):
         g = self.groups[4020]
@@ -278,14 +368,15 @@ class AirGroupTests(unittest.TestCase):
         self.assertEqual((g.ready, g.maintenance, g.damaged, g.reserve), (18, 0, 0, 2))
 
     def test_repair_all_without_damage_is_a_no_op(self):
-        before = bytes(self.sf[airgroups.GROUP_SECTION].data)
+        before = {s.sid: bytes(s.data) for s in self.sf.sections}
         g = self.groups[1]
         self.assertEqual((g.maintenance, g.damaged), (0, 0))
         g.repair_all()
-        self.assertEqual(bytes(self.sf[airgroups.GROUP_SECTION].data), before)
+        self.assertEqual({s.sid: bytes(s.data) for s in self.sf.sections}, before)
 
     def test_plane_status_failures_leave_bytes_unchanged(self):
-        before = bytes(self.sf[airgroups.GROUP_SECTION].data)
+        sections = (airgroups.GROUP_SECTION, airgroups.PLANE_SECTION)
+        before = [bytes(self.sf[k].data) for k in sections]
         cases = [(4020, (10, 6, 3, 0)), (4020, (11, 6, 3, 1)), (4020, (-1, 12, 9, 0)), (4020, (21, 0, 0, -1)),
                  (4020, (True, 6, 3, 0)), (4020, ("11", 6, 3, 0)), (4020, (11.0, 6, 3, 0)),
                  (2, (10, 0, 2, 0)), (2, (0, 0, 0, 0))]
@@ -298,7 +389,7 @@ class AirGroupTests(unittest.TestCase):
             self.groups[2].set_plane_status(0, 0, 0, 0)
         with self.assertRaisesRegex(ValueError, "has not arrived"):
             self.groups[2].repair_all()
-        self.assertEqual(bytes(self.sf[airgroups.GROUP_SECTION].data), before)
+        self.assertEqual([bytes(self.sf[k].data) for k in sections], before)
 
     def japanese_group(self):
         return next(g.id for g in self.groups.values() if g.side == "Japanese")

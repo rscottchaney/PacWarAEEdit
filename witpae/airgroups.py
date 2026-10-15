@@ -50,6 +50,22 @@ READY_OFFSET = 204
 MAINTENANCE_OFFSET = 206
 RESERVE_OFFSET = 207
 DAMAGED_OFFSET = 209
+# The game rebuilds the four counts above from the per-plane records and ignores edits to
+# them alone, so the plane records are the source of truth. Unused records have group 0.
+PLANE_SECTION = 0x17
+PLANE_RECORD_SIZE = 304
+PLANE_RECORD_COUNT = 70000
+PLANE_GROUP_OFFSET = 10
+PLANE_STATUS_OFFSET = 160
+PLANE_DAMAGE_OFFSET = 161
+PLANE_REPAIR_OFFSET = 162
+# Plane status codes in the per-plane record.
+PLANE_READY, PLANE_MAINTENANCE, PLANE_DAMAGED, PLANE_RESERVE = 6, 4, 1, 2
+# (damage, repair time) written to a plane whose status changes; the pairs are the
+# most common real values for each status.
+PLANE_NEW_STATE = {PLANE_READY: (0, 0), PLANE_MAINTENANCE: (0, 1), PLANE_DAMAGED: (1, 1), PLANE_RESERVE: (0, 0)}
+# Equals the sum of the repair times of the group's plane records.
+REPAIR_OFFSET = 402
 PILOT_COUNT_OFFSET = 546
 PILOT_GROUP_OFFSET = 32
 PILOT_AGE_OFFSET = 43
@@ -313,7 +329,8 @@ class AirGroup(Record):
     def set_plane_status(self, ready, maintenance, damaged, reserve):
         """Split the group's planes between the four states; the total is unchanged.
 
-        Validates everything before writing. Only the four count fields are written.
+        Validates everything before writing. Writes the four count fields, the group's total
+        repair time (402) and, in the plane section, only the records whose status changes.
         """
         counts = (ready, maintenance, damaged, reserve)
         if any(isinstance(c, bool) or not isinstance(c, int) for c in counts):
@@ -325,10 +342,44 @@ class AirGroup(Record):
         total = self.planes
         if sum(counts) != total:
             raise ValueError(f"Ready, maintenance, damaged and reserve must add up to {total}")
+        records = self._plane_records()
+        if len(records) != total:
+            raise ValueError(f"{self.name} has {len(records)} plane records but {total} planes")
+        planes = self._save[PLANE_SECTION].data
+        room = {PLANE_READY: ready, PLANE_MAINTENANCE: maintenance, PLANE_DAMAGED: damaged, PLANE_RESERVE: reserve}
+        old_repair = sum(planes[pos + PLANE_REPAIR_OFFSET] for pos in records)
+        surplus = []
+        for pos in records:
+            status = planes[pos + PLANE_STATUS_OFFSET]
+            if room.get(status, 0) > 0:
+                room[status] -= 1
+            else:
+                surplus.append(pos)
+        # What is left in room is exactly what the surplus records must become.
+        targets = [status for status, n in room.items() for _ in range(n)]
+        for pos, status in zip(surplus, targets):
+            planes[pos + PLANE_STATUS_OFFSET] = status
+            planes[pos + PLANE_DAMAGE_OFFSET], planes[pos + PLANE_REPAIR_OFFSET] = PLANE_NEW_STATE[status]
+        # Apply the change in the sum rather than the sum itself: a few groups in real saves
+        # (9 in the test save) have a stored total that is off from their records.
+        new_repair = sum(planes[pos + PLANE_REPAIR_OFFSET] for pos in records)
+        repair = max(0, self._i16(REPAIR_OFFSET) + new_repair - old_repair)
+        struct.pack_into("<h", self._data, self._offset + REPAIR_OFFSET, repair)
         struct.pack_into("<h", self._data, self._offset + READY_OFFSET, ready)
         self._data[self._offset + MAINTENANCE_OFFSET] = maintenance
         self._data[self._offset + RESERVE_OFFSET] = reserve
         self._data[self._offset + DAMAGED_OFFSET] = damaged
+
+    def _plane_records(self):
+        """Byte offsets of this group's records in the plane section, in record order."""
+        data = self._save[PLANE_SECTION].data
+        count = min(PLANE_RECORD_COUNT, len(data) // PLANE_RECORD_SIZE)
+        end = count * PLANE_RECORD_SIZE
+        low = data[PLANE_GROUP_OFFSET:end:PLANE_RECORD_SIZE]
+        high = data[PLANE_GROUP_OFFSET + 1:end:PLANE_RECORD_SIZE]
+        want_low, want_high = self.id & 0xFF, (self.id >> 8) & 0xFF
+        return [i * PLANE_RECORD_SIZE for i, (a, b) in enumerate(zip(low, high))
+                if a == want_low and b == want_high]
 
     def repair_all(self):
         """Move maintenance and damaged planes into ready; reserve is unchanged."""
