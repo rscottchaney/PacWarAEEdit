@@ -429,7 +429,8 @@ class EditorApp:
             ttk.Label(right, text=f.label + ("" if f.verified else " (unverified)")).grid(
                 row=row, column=0, sticky="w", pady=2)
             self.group_vars[f.name] = tk.StringVar()
-            ttk.Entry(right, textvariable=self.group_vars[f.name], width=10).grid(
+            ttk.Entry(right, textvariable=self.group_vars[f.name],
+                      width=12 if f.name in airgroups.DATE_FIELDS else 10).grid(
                 row=row, column=1, padx=(8, 0), pady=2)
             row += 1
         ttk.Button(right, text="Apply", command=self.apply_group).grid(row=row, column=0, columnspan=2, pady=6)
@@ -437,12 +438,15 @@ class EditorApp:
         self.group_info = {}
         for name, label in (("aircraft", "Aircraft"), ("upgrade", "Upgrade to"), ("planes", "Aircraft total (read-only)"),
                             ("pilots", "Pilot count byte (read-only, meaning unclear)"), ("leader", "Commander (read-only)"),
-                            ("location", "Location")):
+                            ("formation", "Formation (read-only)"), ("parent", "Parent group (read-only)"),
+                            ("return_as", "Returns as (read-only)"), ("location", "Location")):
             ttk.Label(right, text=label).grid(row=row, column=0, sticky="w", pady=1)
             self.group_info[name] = tk.StringVar()
             ttk.Label(right, textvariable=self.group_info[name]).grid(row=row, column=1, sticky="w", padx=(8, 0))
             row += 1
         self._build_planes(right, row)
+        row += 1
+        self._build_schedule(right, row)
         row += 1
         self.group_move_var, self.group_move_box, self.group_move_button, self.group_move_note = self._build_move_row(
             right, row, self.move_group)
@@ -487,6 +491,21 @@ class EditorApp:
         self.plane_note = tk.StringVar()
         ttk.Label(box, textvariable=self.plane_note, foreground="gray40").grid(
             row=4, column=0, columnspan=4, sticky="w")
+
+    def _build_schedule(self, parent, row):
+        """The group's five scheduled size changes (date, new size); schedule data, so always editable."""
+        box = ttk.LabelFrame(parent, text="Size changes", padding=4)
+        box.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(8, 2))
+        ttk.Label(box, text="Date (e.g. Jul 42)").grid(row=0, column=0, sticky="w")
+        ttk.Label(box, text="New size").grid(row=0, column=1, sticky="w", padx=(8, 0))
+        self.schedule_vars = []
+        for k in range(airgroups.SCHEDULE_COUNT):
+            date_var, size_var = tk.StringVar(), tk.StringVar()
+            ttk.Entry(box, textvariable=date_var, width=12).grid(row=k + 1, column=0, sticky="w", pady=1)
+            ttk.Entry(box, textvariable=size_var, width=6).grid(row=k + 1, column=1, sticky="w", padx=(8, 0), pady=1)
+            self.schedule_vars.append((date_var, size_var))
+        ttk.Button(box, text="Apply size changes", command=self.apply_schedule).grid(
+            row=airgroups.SCHEDULE_COUNT + 1, column=0, columnspan=2, sticky="w", pady=(2, 0))
 
     def _build_pilots(self, parent):
         box = ttk.LabelFrame(parent, text="Pilots", padding=4)
@@ -1212,24 +1231,67 @@ class EditorApp:
                             self.group_move_note)
             self._show_aircraft_choice(None)
             self._show_planes(None)
+            self._show_schedule(None)
             self.show_pilots(None)
             self.show_leader(None)
             return
         self.group_title.set(f"{g.name} (#{g.id})")
         for f in airgroups.GROUP_FIELDS:
-            self.group_vars[f.name].set(str(g.get(f.name)))
+            value = g.get(f.name)
+            self.group_vars[f.name].set(airgroups.format_day_date(value) if f.name in airgroups.DATE_FIELDS
+                                        else str(value))
         leader = airgroups.get_leader(self.save, g.leader_id)
         self.group_info["aircraft"].set(f"{g.aircraft_id} {g.aircraft_name}")
         self.group_info["upgrade"].set(f"{g.upgrade_id} {g.upgrade_name}")
         self.group_info["planes"].set(str(g.planes))
         self.group_info["pilots"].set(str(g.pilot_count))
         self.group_info["leader"].set(f"{g.leader_id} {leader.name}" if leader else str(g.leader_id))
+        self.group_info["formation"].set(g.formation_label)
+        self.group_info["parent"].set(g.related_label(g.parent_id))
+        self.group_info["return_as"].set(g.related_label(g.return_as_id))
         self.group_info["location"].set(f"{g.location_id} {g.location_name}")
         self._show_move(g, self.group_move_var, self.group_move_box, self.group_move_button, self.group_move_note)
         self._show_aircraft_choice(g)
         self._show_planes(g)
+        self._show_schedule(g)
         self.show_pilots(g)
         self.show_leader(leader)
+
+    def _show_schedule(self, g):
+        entries = g.size_schedule() if g is not None else [None] * airgroups.SCHEDULE_COUNT
+        for (date_var, size_var), entry in zip(self.schedule_vars, entries):
+            date_var.set("" if entry is None or entry[0] == 0 else airgroups.format_month_date(entry[0]))
+            size_var.set("" if entry is None or entry[0] == 0 else str(entry[1]))
+
+    def apply_schedule(self):
+        if self.group_current is None:
+            return
+        g = self.groups[self.group_current]
+        entries = []
+        for k, (date_var, size_var) in enumerate(self.schedule_vars, 1):
+            try:
+                date = airgroups.parse_month_date(date_var.get())
+            except ValueError as exc:
+                messagebox.showerror("Invalid value", f"Size change {k}: {exc}")
+                return
+            text = size_var.get().strip()
+            try:
+                size = int(text) if text not in ("", "-") else 0
+            except ValueError:
+                messagebox.showerror("Invalid value", f"Size change {k}: size must be a whole number (got {text!r}).")
+                return
+            entries.append((date, size))
+        before = g.size_schedule()
+        try:
+            g.set_size_schedule(entries)
+        except ValueError as exc:
+            messagebox.showerror("Cannot change size changes", str(exc))
+            return
+        if before != entries:
+            self.groups_edited.add(g.id)
+            self.dirty = True
+        self.refresh_group_list()
+        self.show_group(g)
 
     def _show_planes(self, g):
         counts = {} if g is None else {"ready": g.ready, "maintenance": g.maintenance,
@@ -1343,6 +1405,13 @@ class EditorApp:
         values = {}
         for f in airgroups.GROUP_FIELDS:
             text = self.group_vars[f.name].get().strip()
+            if f.name in airgroups.DATE_FIELDS:
+                try:
+                    values[f.name] = g.validate(f.name, airgroups.parse_day_date(text))
+                except ValueError as exc:
+                    messagebox.showerror("Invalid value", f"{f.label}: {exc}")
+                    return
+                continue
             try:
                 values[f.name] = g.validate(f.name, int(text))
             except ValueError:

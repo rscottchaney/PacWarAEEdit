@@ -7,6 +7,7 @@ pilot skill is written; the byte copy at 78..89 and the byte at 122 are left
 alone because their purpose is unknown.
 """
 
+import calendar
 import struct
 
 from .aircraft import AIRCRAFT_RECORD_SIZE, AIRCRAFT_SECTION, RECORD_COUNT as AIRCRAFT_RECORD_COUNT
@@ -66,6 +67,14 @@ PLANE_READY, PLANE_MAINTENANCE, PLANE_DAMAGED, PLANE_RESERVE = 6, 4, 1, 2
 PLANE_NEW_STATE = {PLANE_READY: (0, 0), PLANE_MAINTENANCE: (0, 1), PLANE_DAMAGED: (1, 1), PLANE_RESERVE: (0, 0)}
 # Equals the sum of the repair times of the group's plane records.
 REPAIR_OFFSET = 402
+FORMATION_OFFSET = 28
+PARENT_OFFSET = 38
+RETURN_AS_OFFSET = 400
+# Size changes: up to five entries, dates (u16 YYMM, 0 = unused) then new sizes (u8).
+SCHEDULE_DATE_OFFSET = 446
+SCHEDULE_SIZE_OFFSET = 456
+SCHEDULE_COUNT = 5
+FORMATIONS = {7: "Squadron", 8: "Flight", 9: "Section"}
 PILOT_COUNT_OFFSET = 546
 PILOT_GROUP_OFFSET = 32
 PILOT_AGE_OFFSET = 43
@@ -92,8 +101,93 @@ GROUP_FIELDS = [
     # Search arc in degrees, clockwise from start to end; stored in tens of degrees.
     Field("arc_start", "Search arc start (deg)", 630, "B", True, True, 0, 350),
     Field("arc_end", "Search arc end (deg)", 631, "B", True, True, 0, 350),
+    # Mapped against game screens; edits not yet tested in-game. Dates are YYMMDD integers here;
+    # the byte at 246 (a near-copy of max_size) is left alone.
+    Field("withdraw", "Withdraw (remove by)", 392, "I", True, True, 0, 991231),
+    Field("return_date", "Return date", 396, "I", True, True, 0, 991231),
+    Field("max_size", "Maximum group size", 245, "B", True, True, 0, 255),
 ]
 ARC_FIELDS = {"arc_start", "arc_end"}
+DATE_FIELDS = {"withdraw", "return_date"}
+
+# 527 groups in the sample save store 9999 as their return date (meaning unknown, possibly "never").
+# It is kept as is, shown as "9999", and accepted as input so that unrelated edits do not fail.
+DATE_SENTINEL = 9999
+
+MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+
+def _parse_month(text):
+    try:
+        return [m.lower() for m in MONTHS].index(text.lower()) + 1
+    except ValueError:
+        raise ValueError(f"unknown month {text!r}; use Jan..Dec") from None
+
+
+def _parse_year(text):
+    """A 2-digit year is taken as is; a 4-digit year must be 1900..1999. Returns yy."""
+    if not text.isdigit() or len(text) not in (2, 4):
+        raise ValueError(f"year must have 2 or 4 digits (got {text!r})")
+    year = int(text)
+    if len(text) == 4 and not 1900 <= year <= 1999:
+        raise ValueError("year must be between 1900 and 1999")
+    return year % 100
+
+
+def valid_yymmdd(value):
+    """True for 0 (no date), the 9999 sentinel or a real calendar date stored as YYMMDD (years 1900-1999)."""
+    if value in (0, DATE_SENTINEL):
+        return True
+    yy, rest = divmod(value, 10000)
+    month, day = divmod(rest, 100)
+    return 0 <= yy <= 99 and 1 <= month <= 12 and 1 <= day <= calendar.monthrange(1900 + yy, month)[1]
+
+
+def parse_day_date(text):
+    """Parse "14 Dec 1943" or "14 Dec 43" into YYMMDD; blank or "-" mean no date (0)."""
+    text = text.strip()
+    if text in ("", "-"):
+        return 0
+    if text == str(DATE_SENTINEL):
+        return DATE_SENTINEL
+    parts = text.split()
+    if len(parts) != 3 or not parts[0].isdigit():
+        raise ValueError(f"date must look like 14 Dec 1943 (got {text!r})")
+    month, yy = _parse_month(parts[1]), _parse_year(parts[2])
+    day = int(parts[0])
+    if not 1 <= day <= calendar.monthrange(1900 + yy, month)[1]:
+        raise ValueError(f"{text!r} is not a real date")
+    return yy * 10000 + month * 100 + day
+
+
+def format_day_date(value):
+    if value == 0:
+        return "-"
+    if value == DATE_SENTINEL or not valid_yymmdd(value):
+        return str(value)
+    yy, rest = divmod(value, 10000)
+    month, day = divmod(rest, 100)
+    return f"{day} {MONTHS[month - 1]} {1900 + yy}"
+
+
+def parse_month_date(text):
+    """Parse "Jul 42" or "Jul 1942" into YYMM; blank or "-" mean unused (0)."""
+    text = text.strip()
+    if text in ("", "-"):
+        return 0
+    parts = text.split()
+    if len(parts) != 2:
+        raise ValueError(f"date must look like Jul 42 (got {text!r})")
+    return _parse_year(parts[1]) * 100 + _parse_month(parts[0])
+
+
+def format_month_date(value):
+    if value == 0:
+        return "-"
+    yy, month = divmod(value, 100)
+    if not 1 <= month <= 12 or yy > 99:
+        return str(value)
+    return f"{MONTHS[month - 1]} {1900 + yy}"
 
 SKILLS = ["Air", "NavB", "NavT", "NavS", "Recn", "ASW", "Tran", "GrdB", "LowN", "LowG", "Staf", "Defn"]
 # Full names for the game's abbreviations, used where there is room for them.
@@ -189,6 +283,8 @@ class AirGroup(Record):
         value = super().validate(name, value)
         if name in ARC_FIELDS and value % 10:
             raise ValueError(f"{self._field(name).label} must be a multiple of 10")
+        if name in DATE_FIELDS and not valid_yymmdd(value):
+            raise ValueError(f"{self._field(name).label} must be a valid YYMMDD date or 0")
         return value
 
     def set(self, name, value):
@@ -262,6 +358,69 @@ class AirGroup(Record):
         if self._i16(BASE_OFFSET) == self.location_id:
             struct.pack_into("<h", self._data, self._offset + BASE_OFFSET, place_id)
         struct.pack_into("<h", self._data, self._offset + LOCATION_OFFSET, place_id)
+
+    @property
+    def formation(self):
+        return self._u8(FORMATION_OFFSET)
+
+    @property
+    def formation_label(self):
+        return FORMATIONS.get(self.formation, str(self.formation))
+
+    @property
+    def parent_id(self):
+        return struct.unpack_from("<H", self._data, self._offset + PARENT_OFFSET)[0]
+
+    @property
+    def return_as_id(self):
+        return struct.unpack_from("<H", self._data, self._offset + RETURN_AS_OFFSET)[0]
+
+    def group_name(self, group_id):
+        """Name of another group by id, or "" when out of range or unnamed."""
+        start = group_id * GROUP_RECORD_SIZE
+        data = self._data
+        if group_id >= GROUP_RECORD_COUNT or start + NAME_SIZE > len(data):
+            return ""
+        return decode_name(data[start:start + NAME_SIZE])
+
+    def related_label(self, group_id):
+        """"n - name" for a related group id, or "-" for 0."""
+        if group_id == 0:
+            return "-"
+        name = self.group_name(group_id)
+        return f"{group_id} - {name}" if name else str(group_id)
+
+    def size_schedule(self):
+        """The five size changes as [(yymm, new size)]; (0, 0) is an unused entry."""
+        return [(struct.unpack_from("<H", self._data, self._offset + SCHEDULE_DATE_OFFSET + 2 * k)[0],
+                 self._u8(SCHEDULE_SIZE_OFFSET + k)) for k in range(SCHEDULE_COUNT)]
+
+    def set_size_schedule(self, entries):
+        """Replace all five size changes. An unused entry is (0, 0).
+
+        Real saves have gaps (an unused entry before a used one) and dated entries with
+        size 0 (VS-2..VS-8 shrink to 0 in Mar 43), so both are allowed. Validates
+        everything before writing; only bytes of changed values are written.
+        """
+        entries = list(entries)
+        if len(entries) != SCHEDULE_COUNT:
+            raise ValueError(f"Size changes need exactly {SCHEDULE_COUNT} entries")
+        for k, entry in enumerate(entries, 1):
+            date, size = entry
+            if any(isinstance(v, bool) or not isinstance(v, int) for v in (date, size)):
+                raise ValueError(f"Size change {k} must be integers")
+            if date == 0:
+                if size != 0:
+                    raise ValueError(f"Size change {k} has a size but no date")
+                continue
+            yy, month = divmod(date, 100)
+            if not (0 <= yy <= 99 and 1 <= month <= 12):
+                raise ValueError(f"Size change {k} date must be a valid YYMM")
+            if not 0 <= size <= 255:
+                raise ValueError(f"Size change {k} size must be between 0 and 255")
+        for k, (date, size) in enumerate(entries):
+            struct.pack_into("<H", self._data, self._offset + SCHEDULE_DATE_OFFSET + 2 * k, date)
+            self._data[self._offset + SCHEDULE_SIZE_OFFSET + k] = size
 
     @property
     def upgrade_id(self):

@@ -395,5 +395,182 @@ class AirGroupTests(unittest.TestCase):
         return next(g.id for g in self.groups.values() if g.side == "Japanese")
 
 
+class DateHelperTests(unittest.TestCase):
+    def test_day_date_round_trip(self):
+        for text, value in (("14 Dec 1943", 431214), ("1 Jan 1941", 410101), ("29 Feb 1944", 440229)):
+            self.assertEqual(airgroups.parse_day_date(text), value)
+            self.assertEqual(airgroups.format_day_date(value), text)
+
+    def test_day_date_input_forms(self):
+        self.assertEqual(airgroups.parse_day_date("14 dec 43"), 431214)
+        self.assertEqual(airgroups.parse_day_date("  14 DEC 1943 "), 431214)
+        for blank in ("", "  ", "-"):
+            self.assertEqual(airgroups.parse_day_date(blank), 0)
+        self.assertEqual(airgroups.format_day_date(0), "-")
+        # The sentinel stored by many groups survives a display/parse round trip.
+        self.assertEqual(airgroups.parse_day_date(airgroups.format_day_date(9999)), 9999)
+
+    def test_day_date_errors(self):
+        for bad in ("31 Feb 1943", "29 Feb 1943", "0 Jan 43", "32 Jan 43", "14 Foo 43", "14 December 43",
+                    "14 Dec 2043", "14 Dec 1843", "14 Dec 143", "14 Dec", "Dec 14 1943", "x"):
+            with self.assertRaises(ValueError, msg=bad):
+                airgroups.parse_day_date(bad)
+
+    def test_month_date(self):
+        for text, value in (("Jul 1942", 4207), ("Jan 1944", 4401)):
+            self.assertEqual(airgroups.parse_month_date(text), value)
+            self.assertEqual(airgroups.format_month_date(value), text)
+        self.assertEqual(airgroups.parse_month_date("jul 42"), 4207)
+        self.assertEqual(airgroups.parse_month_date("-"), 0)
+        self.assertEqual(airgroups.parse_month_date(""), 0)
+        self.assertEqual(airgroups.format_month_date(0), "-")
+        for bad in ("Foo 42", "Jul", "Jul 2042", "Jul 4", "42 Jul", "Jul 42 1"):
+            with self.assertRaises(ValueError, msg=bad):
+                airgroups.parse_month_date(bad)
+
+    def test_valid_yymmdd(self):
+        self.assertTrue(all(airgroups.valid_yymmdd(v) for v in (0, 431214, 440229, 9999)))
+        self.assertFalse(any(airgroups.valid_yymmdd(v) for v in (430231, 431301, 431200, 1000000, 431232, 100)))
+
+
+@unittest.skipUnless(os.path.exists(SAVE_015), "sample save missing")
+class AirGroupScheduleTests(unittest.TestCase):
+    def setUp(self):
+        self.sf = SaveFile.load(SAVE_015)
+        self.groups = {g.id: g for g in airgroups.list_airgroups(self.sf)}
+        self.before = bytes(self.sf[airgroups.GROUP_SECTION].data)
+
+    def diff(self, record_id):
+        after = bytes(self.sf[airgroups.GROUP_SECTION].data)
+        offsets = [i for i in range(len(after)) if after[i] != self.before[i]]
+        self.assertTrue(all(i // airgroups.GROUP_RECORD_SIZE == record_id for i in offsets))
+        return {i % airgroups.GROUP_RECORD_SIZE for i in offsets}
+
+    def reload(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "out.pws")
+            self.sf.save(path)
+            other = SaveFile.load(path)
+        return {g.id: g for g in airgroups.list_airgroups(other)}
+
+    def test_reads(self):
+        g = self.groups[1694]
+        self.assertEqual(g.size_schedule(), [(4207, 36), (4401, 40), (4407, 42), (4501, 36), (0, 0)])
+        self.assertEqual((g.formation, g.formation_label), (7, "Squadron"))
+        self.assertEqual(g.get("max_size"), 27)
+        self.assertEqual(self.groups[2587].size_schedule(), [(4410, 24)] + [(0, 0)] * 4)
+        self.assertEqual(self.groups[4].get("withdraw"), 450701)
+        self.assertEqual(self.groups[9].get("withdraw"), 440710)
+        self.assertEqual(self.groups[9].get("return_date"), 450205)
+        self.assertEqual(self.groups[4].get("return_date"), 9999)
+
+    def test_related_groups(self):
+        g = self.groups[7]
+        self.assertEqual((g.parent_id, g.related_label(g.parent_id)), (6, "6 - Chitose Ku S-1"))
+        g = self.groups[9]
+        self.assertEqual((g.parent_id, g.related_label(0), g.return_as_id), (0, "-", 355))
+        self.assertTrue(g.related_label(355).startswith("355 - K-701 Hikotai"))
+        self.assertEqual(g.related_label(29999), "29999")
+
+    def test_formation_labels(self):
+        by_formation = {}
+        for g in self.groups.values():
+            by_formation.setdefault(g.formation, g.formation_label)
+        self.assertEqual((by_formation[7], by_formation[8], by_formation[9]), ("Squadron", "Flight", "Section"))
+        self.assertEqual(by_formation[3], "3")
+
+    def test_set_fields_round_trip(self):
+        g = self.groups[1694]
+        g.set_many({"withdraw": 431214, "return_date": 440215, "max_size": 30})
+        # Byte 246, the near-copy of max_size, is never written.
+        self.assertTrue(self.diff(1694) <= {245, 392, 393, 394, 395, 396, 397, 398, 399})
+        self.assertIn(245, self.diff(1694))
+        other = self.reload()[1694]
+        self.assertEqual((other.get("withdraw"), other.get("return_date"), other.get("max_size")),
+                         (431214, 440215, 30))
+
+    def test_max_size_writes_only_245(self):
+        self.groups[1694].set("max_size", 40)
+        self.assertEqual(self.diff(1694), {245})
+
+    def test_clear_dates(self):
+        g = self.groups[9]
+        g.set_many({"withdraw": 0, "return_date": 0})
+        self.assertEqual((g.get("withdraw"), g.get("return_date")), (0, 0))
+
+    def test_bad_field_values_change_nothing(self):
+        g = self.groups[1694]
+        for values in ({"withdraw": 430231}, {"return_date": 431301}, {"withdraw": 431214, "return_date": 12},
+                       {"max_size": 256}, {"max_size": -1}, {"max_size": True}, {"withdraw": True},
+                       {"withdraw": 431214, "max_size": 256}, {"withdraw": "431214"}):
+            with self.assertRaises(ValueError, msg=values):
+                g.set_many(values)
+            self.assertEqual(bytes(self.sf[airgroups.GROUP_SECTION].data), self.before, values)
+
+    def test_set_size_schedule(self):
+        g = self.groups[1694]
+        new = [(4208, 30), (4301, 33), (0, 0), (0, 0), (0, 0)]
+        g.set_size_schedule(new)
+        self.assertTrue(self.diff(1694) <= set(range(446, 456)) | set(range(456, 461)))
+        self.assertEqual(g.size_schedule(), new)
+        self.assertEqual(self.reload()[1694].size_schedule(), new)
+
+    def test_set_size_schedule_changes_only_changed_bytes(self):
+        g = self.groups[1694]
+        entries = g.size_schedule()
+        entries[1] = (4401, 41)
+        g.set_size_schedule(entries)
+        self.assertEqual(self.diff(1694), {457})
+
+    def test_schedule_keeps_given_order(self):
+        g = self.groups[2587]
+        entries = [(4501, 20), (4401, 22), (0, 0), (0, 0), (0, 0)]
+        g.set_size_schedule(entries)
+        self.assertEqual(g.size_schedule(), entries)
+
+    def test_bad_schedules_change_nothing(self):
+        g = self.groups[1694]
+        ok = [(4207, 36), (4401, 40), (4407, 42), (4501, 36), (0, 0)]
+        none4 = [(0, 0)] * 4
+        cases = {
+            "size without date": [(4207, 36), (0, 5)] + [(0, 0)] * 3,
+            "size too big": [(4207, 256)] + none4,
+            "bad month": [(4213, 20)] + none4,
+            "month zero": [(4200, 20)] + none4,
+            "year too big": [(10001, 20)] + none4,
+            "bool": [(True, 20)] + none4,
+            "too few": ok[:4],
+            "too many": ok + [(0, 0)],
+            "later bad": ok[:4] + [(4601, 300)],
+        }
+        for label, entries in cases.items():
+            with self.assertRaises(ValueError, msg=label):
+                g.set_size_schedule(entries)
+            self.assertEqual(bytes(self.sf[airgroups.GROUP_SECTION].data), self.before, label)
+
+    def test_every_stored_schedule_is_accepted_unchanged(self):
+        # Includes gaps (58th Sentai 1059) and dated size-0 entries (VS-2 1696).
+        before = bytes(self.sf[airgroups.GROUP_SECTION].data)
+        for g in self.groups.values():
+            g.set_size_schedule(g.size_schedule())
+        self.assertEqual(bytes(self.sf[airgroups.GROUP_SECTION].data), before)
+        self.assertEqual(self.groups[1059].size_schedule()[:2], [(0, 0), (4403, 27)])
+        self.assertEqual(self.groups[1696].size_schedule()[:2], [(4201, 18), (4303, 0)])
+
+    def test_schedule_gap_and_size_zero_are_written(self):
+        g = self.groups[2587]
+        entries = [(0, 0), (4501, 0), (0, 0), (4602, 12), (0, 0)]
+        g.set_size_schedule(entries)
+        self.assertEqual(g.size_schedule(), entries)
+
+    def test_schedule_fully_used_and_empty(self):
+        g = self.groups[1694]
+        full = [(4207 + k, 10 + k) for k in range(5)]
+        g.set_size_schedule(full)
+        self.assertEqual(g.size_schedule(), full)
+        g.set_size_schedule([(0, 0)] * 5)
+        self.assertEqual(g.size_schedule(), [(0, 0)] * 5)
+
+
 if __name__ == "__main__":
     unittest.main()
