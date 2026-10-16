@@ -33,7 +33,10 @@ FIELDS = [
     Field("belt", "Belt armor", 42, "h", True, True, 0, 2000),
     Field("deck", "Deck armor", 44, "h", True, True, 0, 2000),
     Field("tower", "Tower armor", 46, "h", True, True, 0, 2000),
-    Field("capacity", "Capacity", 48, "h", True, True, 0, 32767),
+    Field("capacity", "Aircraft capacity", 48, "h", True, True, 0, 32767),
+    Field("troop_capacity", "Troop capacity", 50, "h", True, True, 0, 32767),
+    Field("bulk_cargo", "Cargo capacity", 52, "h", True, True, 0, 32767),
+    Field("liquid_cargo", "Fuel/oil capacity", 54, "h", True, True, 0, 32767),
 ]
 FIELD_BY_NAME = {f.name: f for f in FIELDS}
 

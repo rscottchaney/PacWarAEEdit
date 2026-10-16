@@ -21,6 +21,7 @@ DEFAULT_DIR = os.path.normpath(os.path.join(HERE, "..", "SAVE"))
 COLUMNS = [
     ("id", "ID", 55, True, lambda b: b.id),
     ("name", "Name", 150, False, lambda b: b.name),
+    ("kind", "Type", 50, False, lambda b: b.kind),
     ("side", "Side", 70, False, lambda b: b.side),
     ("hex", "Hex x,y", 70, True, lambda b: (b.x, b.y)),
     ("supply", "Supply", 80, True, lambda b: b.get("supply")),
@@ -94,6 +95,8 @@ class EditorApp:
         self.field_vars = {}
         self.stockpile_vars = {}
         self.building_vars = {}
+        self.field_entries = {}
+        self.building_checks = {}
         self.current = None
         self.factory_slot = None
         self.aircraft = {}
@@ -196,7 +199,7 @@ class EditorApp:
         self.tree = ttk.Treeview(left, columns=[c[0] for c in COLUMNS], show="headings", selectmode="browse")
         for cid, heading, width, _numeric, _get in COLUMNS:
             self.tree.heading(cid, text=heading, command=lambda c=cid: self.sort_by(c))
-            self.tree.column(cid, width=width, anchor="w" if cid in ("name", "side") else "e")
+            self.tree.column(cid, width=width, anchor="w" if cid in ("name", "kind", "side") else "e")
         self.tree.tag_configure("edited", background="#fff2b3")
         scroll = ttk.Scrollbar(left, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=scroll.set)
@@ -215,6 +218,7 @@ class EditorApp:
             var = tk.StringVar()
             self.field_vars[f.name] = var
             entry = ttk.Entry(right, textvariable=var, width=14, state="normal" if f.editable else "readonly")
+            self.field_entries[f.name] = entry
             entry.grid(row=row, column=1, padx=(8, 0), pady=2)
         stock_row = len(bases.FIELDS) + 1
         ttk.Label(right, text="Stockpile").grid(row=stock_row, column=0, sticky="nw", pady=2)
@@ -231,7 +235,9 @@ class EditorApp:
         for name, label, _live, _copy in bases.BUILD_SWITCHES:
             var = tk.BooleanVar()
             self.building_vars[name] = var
-            ttk.Checkbutton(build_box, text=label, variable=var).pack(anchor="w")
+            check = ttk.Checkbutton(build_box, text=label, variable=var)
+            check.pack(anchor="w")
+            self.building_checks[name] = check
         self.apply_btn = ttk.Button(right, text="Apply", command=self.apply)
         self.apply_btn.grid(row=build_row + 1, column=0, columnspan=2, pady=(10, 0))
 
@@ -704,7 +710,7 @@ class EditorApp:
             return False
         try:
             save = SaveFile.load(path)
-            blist = bases.list_bases(save)
+            blist = bases.list_bases(save, include_towns=True)
             alist = aircraft.list_aircraft(save)
             slist = ships.list_ships(save)
             glist = airgroups.list_airgroups(save)
@@ -765,7 +771,7 @@ class EditorApp:
         self.unit_slot = None
         self.file_label.set(f"File: {os.path.basename(path)}    Key variant: {save.variant}")
         self.title_var.set(save.description)
-        self.status.set(f"{path} - {len(blist)} bases, {len(alist)} aircraft, {len(slist)} ship classes, {len(glist)} air groups, {len(ulist)} land units"
+        self.status.set(f"{path} - {len(blist)} bases and towns, {len(alist)} aircraft, {len(slist)} ship classes, {len(glist)} air groups, {len(ulist)} land units"
                         + (" - PBEM game: saving is disabled" if self.pbem else ""))
         self.refresh_list()
         self.show_detail(None)
@@ -836,8 +842,10 @@ class EditorApp:
                 var.set("")
             for var in list(self.stockpile_vars.values()) + list(self.building_vars.values()):
                 var.set(False)
+            self._set_port_editable(True)
             self.show_factories(None)
             return
+        self._set_port_editable(base.kind != "Town")
         self.detail_title.set(f"{base.name} (#{base.id}, {base.side}, hex {base.x},{base.y})")
         for f in bases.FIELDS:
             self.field_vars[f.name].set(str(base.get(f.name)))
@@ -848,6 +856,13 @@ class EditorApp:
         if base.id != previous:
             self.factory_slot = None
         self.show_factories(base)
+
+    def _set_port_editable(self, editable):
+        """Towns have no port, so lock the port entries and build switch for them."""
+        state = ["!disabled"] if editable else ["disabled"]
+        for name in bases.TOWN_READONLY_FIELDS:
+            self.field_entries[name].state(state)
+        self.building_checks["port"].state(state)
 
     def show_factories(self, base):
         self.factory_tree.delete(*self.factory_tree.get_children())
@@ -922,8 +937,9 @@ class EditorApp:
             return
         base = self.bases[self.current]
         values = {}
+        is_town = base.kind == "Town"
         for f in bases.FIELDS:
-            if not f.editable:
+            if not f.editable or (is_town and f.name in bases.TOWN_READONLY_FIELDS):
                 continue
             text = self.field_vars[f.name].get().strip()
             try:
@@ -936,8 +952,8 @@ class EditorApp:
         before = {n: base.get(n) for n in values}
         flags = {n: bool(v.get()) for n, v in self.stockpile_vars.items()}
         flags_before = base.get_stockpile()
-        building = {n: bool(v.get()) for n, v in self.building_vars.items()}
-        building_before = base.get_building()
+        building = {n: bool(v.get()) for n, v in self.building_vars.items() if not (is_town and n == "port")}
+        building_before = {n: v for n, v in base.get_building().items() if n in building}
         base.set_many(values)
         base.set_stockpile(flags)
         base.set_building(building)

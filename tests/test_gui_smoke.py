@@ -25,7 +25,7 @@ class GuiSmokeTests(unittest.TestCase):
         app = witpae_editor.EditorApp(self.root)
         self.assertTrue(app.load(SAVE_015))
         self.root.update()
-        self.assertEqual(len(app.tree.get_children()), 781)
+        self.assertEqual(len(app.tree.get_children()), 781 + 271)
         app.search_var.set("pearl")
         app.side_var.set("Allied")
         app.refresh_list()
@@ -33,6 +33,8 @@ class GuiSmokeTests(unittest.TestCase):
         app.tree.selection_set("584")
         self.root.update()
         self.assertEqual(app.field_vars["supply"].get(), "982531")
+        for name in ("supply_cap", "garrison_allied", "garrison_japanese"):
+            self.assertIn(name, app.field_vars)
         app.field_vars["supply"].set("5")
         app.apply()
         self.assertEqual(app.bases[584].get("supply"), 5)
@@ -65,6 +67,29 @@ class GuiSmokeTests(unittest.TestCase):
             self.assertFalse(os.path.exists(out))
             self.assertTrue(app.load(SAVE_015))
             self.assertFalse(app.pbem)
+    def test_town_row_and_port_lock(self):
+        from unittest import mock
+        import witpae_editor
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        app.tree.selection_set("696")
+        self.root.update()
+        self.assertEqual(app.tree.set("696", "kind"), "Town")
+        for name in ("port", "port_max", "port_damage"):
+            self.assertTrue(app.field_entries[name].instate(["disabled"]), name)
+        self.assertTrue(app.building_checks["port"].instate(["disabled"]))
+        self.assertFalse(app.field_entries["supply"].instate(["disabled"]))
+        app.field_vars["supply"].set("77")
+        with mock.patch("tkinter.messagebox.showerror") as err:
+            app.apply()
+        err.assert_not_called()
+        self.assertEqual(app.bases[696].get("supply"), 77)
+        self.assertIn(696, app.edited)
+        app.tree.selection_set("584")
+        self.root.update()
+        for name in ("port", "port_max", "port_damage"):
+            self.assertFalse(app.field_entries[name].instate(["disabled"]), name)
+        self.assertFalse(app.building_checks["port"].instate(["disabled"]))
 
     def test_stockpile_checkbox_applies(self):
         import witpae_editor
@@ -162,6 +187,15 @@ class GuiSmokeTests(unittest.TestCase):
         app.ship_tree.selection_set("674")
         self.root.update()
         self.assertEqual(app.ship_vars["speed"].get(), "33")
+        for name in ("capacity", "troop_capacity", "bulk_cargo", "liquid_cargo"):
+            self.assertIn(name, app.ship_vars)
+        app.ship_search_var.set("Harris")
+        app.ship_tree.selection_set("2443")  # Troop Capacity 1700
+        self.root.update()
+        self.assertEqual(app.ship_vars["troop_capacity"].get(), "1700")
+        app.ship_search_var.set("Lexington")
+        app.ship_tree.selection_set("674")
+        self.root.update()
         self.assertEqual(len(app.ship_weapon_tree.get_children()), 13)
         app.ship_vars["speed"].set("35")
         app.apply_ship()

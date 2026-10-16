@@ -28,7 +28,13 @@ Tests: `python -m unittest discover -s tests -v`
 | Stockpile Yes/No switches (Supply, Fuel, Resources, Oil; one bitfield byte, other bits preserved) | verified in-game, editable |
 | Factories (per base, 20 slots: size, damage, production Yes/No, repair Yes/No; production cannot be switched off for Oil, Resources, Manpower, Repair Shipyard, Light Industry) | verified, editable |
 | Factory Keep/Upgd switch (aircraft and engine factories) and aircraft availability date | verified in-game; switch editable, date display only |
+| Supply cap (the "max" on the base screen), Garrison required (Allied) | values verified against game screens, editable (edit not yet tested in-game) |
+| Garrison required (Japanese) | unverified (not yet checked on a Japanese-held base), editable |
 | Supply required, Aviation support, Ships in port, Aircraft at base | verified, display only (recalculated by the game) |
+
+Towns are listed in the Bases tab too (Type column) and edited the same way, except
+that towns have no port, so Port size, Port max, Port damage and the Port build
+switch are read-only for them.
 
 Name, side and hex coordinates are read-only. The field table is in
 `witpae/bases.py`; adding a field is one line.
@@ -65,7 +71,8 @@ so check the ID and date.
 
 | Field | Status |
 |---|---|
-| Fuel, Endurance, Speed, Cruise speed, Maneuver, Durability, Belt/Deck/Tower armor, Capacity | verified in-game, editable |
+| Fuel, Endurance, Speed, Cruise speed, Maneuver, Durability, Belt/Deck/Tower armor | verified in-game, editable |
+| Aircraft capacity (was "Capacity"), Troop capacity, Cargo capacity, Fuel/oil capacity | values verified against game screens, editable (edit not yet tested in-game) |
 | Weapon and electronics slots: Num, Face (F, C, R, RS, LS, A; other codes are kept as numbers), Mount, Armor, Ammo | verified in-game, editable per slot (Apply weapon); the device itself is read-only |
 | Type (abbreviations from the game executable; DE, TB, PG, LB are guesses ending in `?`) | read-only |
 | Nation (shared with aircraft) | read-only |
