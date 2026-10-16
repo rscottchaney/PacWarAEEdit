@@ -50,6 +50,35 @@ class ShipTests(unittest.TestCase):
         self.assertEqual(weapons[10]["name"], "CXAM SS Radar")
         self.assertEqual(sorted(weapons)[:11], list(range(11)))
 
+    def test_capacities(self):
+        # Harris (AP) shows Troop Capacity 1700; Kanawha class (Brazos) Fuel and Oil Capacity 7850.
+        harris = self.by_id[2443]
+        self.assertEqual((harris.name, harris.type), ("Harris", "AP"))
+        self.assertEqual((harris.get("capacity"), harris.get("troop_capacity"), harris.get("bulk_cargo"),
+                          harris.get("liquid_cargo")), (0, 1700, 2200, 0))
+        kanawha = self.by_id[2388]
+        self.assertEqual(kanawha.name, "Kanawha")
+        self.assertEqual(kanawha.get("liquid_cargo"), 7850)
+        self.assertEqual(ships.FIELD_BY_NAME["capacity"].label, "Aircraft capacity")
+
+    def test_capacity_edit_roundtrip_and_validation(self):
+        before = bytes(self.sf[SECTION].data)
+        x = self.by_id[2443]
+        for values in ({"troop_capacity": 32768}, {"bulk_cargo": -1}, {"liquid_cargo": True},
+                       {"troop_capacity": 5, "liquid_cargo": "7"}):
+            with self.assertRaises(ValueError, msg=str(values)):
+                x.set_many(values)
+        self.assertEqual(bytes(self.sf[SECTION].data), before)
+        x.set_many({"troop_capacity": 1800, "bulk_cargo": 2201, "liquid_cargo": 300})
+        other = self.roundtrip()
+        after = bytes(other[SECTION].data)
+        changed = {i - 2443 * RECORD for i in range(len(before)) if before[i] != after[i]}
+        # 2200 -> 2201 changes one byte; 1700 -> 1800 and 0 -> 300 both.
+        self.assertEqual(changed, {50, 51, 52, 54, 55})
+        y = {s.id: s for s in ships.list_ships(other)}[2443]
+        self.assertEqual((y.get("troop_capacity"), y.get("bulk_cargo"), y.get("liquid_cargo")),
+                         (1800, 2201, 300))
+
     def test_labels(self):
         self.assertEqual(ships.type_label(12), "DD")
         self.assertEqual(ships.type_label(13), "DE?")

@@ -59,6 +59,32 @@ class BaseTests(unittest.TestCase):
             b = by_name[name]
             self.assertEqual((b.get("port_max"), b.get("airfield_max")), maxes, name)
 
+    def test_supply_cap_and_garrison(self):
+        by_name = {b.name: b for b in self.by_id.values()}
+        # Bassein (supply cap 500 on the game screen) is a town record here, not a base.
+        self.assertEqual(by_name["Akyab"].get("supply_cap"), 100)
+        self.assertEqual(by_name["Bangkok"].get("supply_cap"), 1000)
+        colombo = by_name["Colombo"]
+        self.assertEqual(colombo.get("garrison_allied"), 40)
+        self.assertEqual(colombo.get("garrison_japanese"), 80)
+        self.assertFalse(bases.FIELD_BY_NAME["garrison_japanese"].verified)
+
+    def test_supply_cap_and_garrison_edit(self):
+        section = self.sf[bases.LOCATION_SECTION]
+        before = bytes(section.data)
+        b = self.by_id[688]
+        b.set_many({"supply_cap": 700, "garrison_allied": 41, "garrison_japanese": 300})
+        after = bytes(self.roundtrip()[bases.LOCATION_SECTION].data)
+        changed = {i - 688 * bases.RECORD_SIZE for i in range(len(before)) if before[i] != after[i]}
+        # 0 -> 700 and 80 -> 300 touch both bytes; 40 -> 41 only the low one.
+        self.assertEqual(changed, {1116, 1117, 978, 902, 903})
+        for bad in ({"supply_cap": 65536}, {"garrison_allied": -1}, {"garrison_japanese": 70000},
+                    {"garrison_allied": 5, "supply_cap": "9"}):
+            with self.assertRaises(ValueError, msg=str(bad)):
+                b.set_many(bad)
+        self.assertEqual(bytes(section.data), bytes(self.sf[bases.LOCATION_SECTION].data))
+        self.assertEqual(b.get("garrison_allied"), 41)
+
     def test_los_angeles_matches_screenshot(self):
         b = self.by_id[506]
         self.assertEqual(b.name, "Los Angeles")
@@ -200,6 +226,48 @@ class BaseTests(unittest.TestCase):
         self.assertTrue(bases.is_place(self.sf, 1091))
         self.assertFalse(bases.is_place(self.sf, 5560))
         self.assertFalse(bases.is_place(self.sf, bases.RECORD_COUNT))
+
+    def test_include_towns(self):
+        self.assertEqual(len(bases.list_bases(self.sf)), 781)
+        everything = bases.list_bases(self.sf, include_towns=True)
+        self.assertEqual(len(everything), 781 + 271)
+        ids = [b.id for b in everything]
+        self.assertEqual(ids, sorted(ids))
+        towns = [b for b in everything if b.id not in self.by_id]
+        self.assertEqual(len(towns), 271)
+        self.assertTrue(all(b.kind == "Town" for b in towns))
+        self.assertTrue(all(b.kind == "Base" for b in self.by_id.values()))
+
+    def town(self, sf=None):
+        sf = sf or self.sf
+        return {b.id: b for b in bases.list_bases(sf, include_towns=True)}[696]
+
+    def test_town_edit_roundtrip(self):
+        t = self.town()
+        self.assertEqual((t.name, t.kind, t.get("supply_cap")), ("Bassein", "Town", 500))
+        t.set_many({"supply_cap": 700, "supply": 1234, "airfield": 3})
+        again = self.town(self.roundtrip())
+        self.assertEqual((again.get("supply_cap"), again.get("supply"), again.get("airfield")), (700, 1234, 3))
+
+    def test_town_port_is_read_only(self):
+        t = self.town()
+        before = bytes(self.sf[bases.LOCATION_SECTION].data)
+        for name in bases.TOWN_READONLY_FIELDS:
+            with self.assertRaises(ValueError):
+                t.set(name, 1)
+            with self.assertRaises(ValueError):
+                t.set_many({"supply": 5, name: 1})
+        for flags in ({"port": True}, {"port": False}, {"airfield": False, "port": True}):
+            with self.assertRaises(ValueError):
+                t.set_building(flags)
+        self.assertEqual(bytes(self.sf[bases.LOCATION_SECTION].data), before)
+
+    def test_base_still_accepts_port_edits(self):
+        b = self.by_id[584]
+        b.set_many({"port": 3, "port_max": 4, "port_damage": 5})
+        b.set_building({"port": False})
+        self.assertEqual((b.get("port"), b.get("port_max"), b.get("port_damage")), (3, 4, 5))
+        self.assertFalse(b.get_building()["port"])
 
 
 if __name__ == "__main__":

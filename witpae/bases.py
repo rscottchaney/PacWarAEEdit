@@ -64,6 +64,11 @@ FIELDS = [
     Field("aviation_support", "Aviation support", 560, "i", False, True, None, None),
     Field("ships_in_port", "Ships in port", 656, "h", False, True, None, None),
     Field("aircraft", "Aircraft at base", 584, "h", False, True, None, None),
+    # u16. The base screen shows the cap as "Supply (max 500)".
+    Field("supply_cap", "Supply cap", 1116, "H", True, True, 0, 65535),
+    Field("garrison_allied", "Garrison required (Allied)", 978, "H", True, True, 0, 65535),
+    # Not checked against a Japanese-held base yet.
+    Field("garrison_japanese", "Garrison required (Japanese)", 902, "H", True, False, 0, 65535),
 ]
 FIELD_BY_NAME = {f.name: f for f in FIELDS}
 
@@ -88,6 +93,9 @@ BUILD_SWITCHES = [
     ("forts", "Forts", 432, 868),
 ]
 BUILD_BY_NAME = {name: (live, copy) for name, _label, live, copy in BUILD_SWITCHES}
+
+# Towns have no port (every port field is 0 on them), so these stay read-only there.
+TOWN_READONLY_FIELDS = ("port", "port_max", "port_damage")
 
 _cipher = None
 
@@ -126,6 +134,11 @@ class Base:
         return self.id * RECORD_SIZE
 
     @property
+    def kind(self):
+        t = struct.unpack_from("<h", self._save[LOCATION_SECTION].data, self._offset + TYPE_OFFSET)[0]
+        return "Town" if t == TYPE_TOWN else "Base"
+
+    @property
     def side_id(self):
         pos = self.id * INDEX_RECORD_SIZE + SIDE_OFFSET
         return struct.unpack_from("<i", self._save[INDEX_SECTION].data, pos)[0]
@@ -153,6 +166,8 @@ class Base:
             raise ValueError(f"unknown field {name!r}")
         if not f.editable:
             raise ValueError(f"{f.label} is read-only")
+        if name in TOWN_READONLY_FIELDS and self.kind == "Town":
+            raise ValueError(f"{f.label} is read-only for towns")
         if isinstance(value, bool) or not isinstance(value, int):
             raise ValueError(f"{f.label} must be an integer")
         if not f.min <= value <= f.max:
@@ -201,6 +216,8 @@ class Base:
                 raise ValueError(f"unknown build switch {name!r}")
             if not isinstance(value, bool):
                 raise ValueError(f"build switch {name!r} must be True or False")
+            if name == "port" and self.kind == "Town":
+                raise ValueError("Port build switch is read-only for towns")
         data = self._save[LOCATION_SECTION].data
         for name, value in flags.items():
             live, copy = (self._offset + off for off in BUILD_BY_NAME[name])
@@ -212,12 +229,13 @@ class Base:
                 struct.pack_into("<h", data, live, max(struct.unpack_from("<h", data, copy)[0], 1))
 
 
-def list_bases(save):
+def list_bases(save, include_towns=False):
+    types = (TYPE_BASE, TYPE_TOWN) if include_towns else (TYPE_BASE,)
     data = save[LOCATION_SECTION].data
     bases = []
     for loc_id in range(min(RECORD_COUNT, len(data) // RECORD_SIZE)):
         start = loc_id * RECORD_SIZE
-        if struct.unpack_from("<h", data, start + TYPE_OFFSET)[0] != TYPE_BASE:
+        if struct.unpack_from("<h", data, start + TYPE_OFFSET)[0] not in types:
             continue
         bases.append(Base(save, loc_id, decode_name(data[start:start + NAME_SIZE])))
     return bases
