@@ -57,9 +57,9 @@ the ID. Edits use the same Apply button, row highlight and Save As as bases.
 
 The field table is in `witpae/aircraft.py`.
 
-## Ships
+## Ship Classes
 
-The Ships tab lists the ship class table (section 0x1B). Several records share
+The Ship Classes tab lists the ship class table (section 0x1B). Several records share
 a name because they are refit stages of one class (Lexington is #674 to #679),
 so check the ID and date.
 
@@ -73,6 +73,29 @@ so check the ID and date.
 
 The field table is in `witpae/ships.py`. Nation labels in `witpae/nations.py`
 are verified except China and India, which end in `?`.
+
+## Ships
+
+The Ships tab lists the ships in play (section 0x08, one record per ship, indexed
+by ship id; records with an empty name are unused). Search by name and filter by
+side; the side comes from the ship's nation (IJA and IJN are Japanese, all
+others Allied). The Location column shows the current base, `TF n` for a ship at
+sea in a task force, or `at sea`. Offsets were mapped against game screens;
+edits have not been tested in-game yet, so try them on a copy.
+
+| Field | Status |
+|---|---|
+| Experience (day, night), 0..99 | values verified against game screens, edit not yet verified in-game |
+| Fuel, 0..32767 | values verified against game screens, edit not yet verified in-game |
+| Fires, system damage, flotation damage, major flotation damage, engine damage, major engine damage (0..99) | values verified against game screens, edit not yet verified in-game |
+| Major flotation damage cannot exceed flotation damage, nor major engine damage engine damage; checked on the final values of an Apply and only when the apply changes that pair (existing ships may already break it, for example sinking ships) | rule enforced by the editor |
+| Repair all (sets fires and all six damage values to 0; writes nothing when there is no damage) | edit not yet verified in-game |
+| Weapon and electronics slots: Num and Ammo (0..999), only slots that hold a device | values verified against game screens, edit not yet verified in-game |
+| Weapon device, Face, Mount, Armor | read-only |
+| Nation, class (name and type from the ship class table), current base, task force, days to arrival | read-only |
+| Task force moves ("Move to" on the ship form): TF to another TF, TF to a port, port to a TF. Rules: the TF and the destination must be in the same hex and on the ship's side; a TF moves only to a TF that has ships; a TF ship goes to a port only at a base or town of its side in the TF's hex (no dropping ships at sea); a docked ship joins only a TF in its port's hex. Refused: the last ship of a TF, ships that have not arrived, ships in no TF or port, moving to where the ship already is, port to port, and any save whose ship chains are inconsistent (nothing is written). A TF takes the ship in ascending ship-id order and a port at the end; if the moved ship was the flagship of its old TF, the TF's new last ship becomes flagship. | layout mapped from in-game saves; editor moves verified in-game (TF to TF, TF to port with the flagship, port to TF; post-turn not yet checked) |
+
+The field table is in `witpae/shiprecords.py`; the chain logic for moves is in `witpae/taskforces.py`.
 
 ## Air Groups
 
