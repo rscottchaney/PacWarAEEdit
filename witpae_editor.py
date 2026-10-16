@@ -10,7 +10,7 @@ import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from witpae import aircraft, airgroups, bases, factories, landunits, ships
+from witpae import aircraft, airgroups, bases, factories, landunits, shiprecords, ships, taskforces
 from witpae.container import SaveFile, SaveFormatError
 from witpae.fileio import is_pbem, save_with_backup
 
@@ -51,6 +51,17 @@ SHIP_COLUMNS = [
     ("durability", "Durability", 70, True, lambda s: s.get("durability")),
 ]
 SHIP_COLUMN_BY_ID = {c[0]: c for c in SHIP_COLUMNS}
+
+SHIPREC_COLUMNS = [
+    ("id", "ID", 55, True, lambda s: s.id),
+    ("name", "Name", 150, False, lambda s: s.name),
+    ("type", "Type", 60, False, lambda s: s.type),
+    ("class", "Class", 130, False, lambda s: s.class_name),
+    ("nation", "Nation", 60, False, lambda s: s.nation),
+    ("side", "Side", 65, False, lambda s: s.side),
+    ("location", "Location", 120, False, lambda s: s.location),
+]
+SHIPREC_COLUMN_BY_ID = {c[0]: c for c in SHIPREC_COLUMNS}
 
 GROUP_COLUMNS = [
     ("id", "ID", 55, True, lambda g: g.id),
@@ -109,6 +120,13 @@ class EditorApp:
         self.ship_vars = {}
         self.ship_current = None
         self.ship_slot = None
+        self.shiprecs = {}
+        self.shiprecs_edited = set()
+        self.shiprec_sort_col = "id"
+        self.shiprec_sort_reverse = False
+        self.shiprec_vars = {}
+        self.shiprec_current = None
+        self.shiprec_slot = None
         self.groups = {}
         self.pilot_index = {}
         self.groups_edited = set()
@@ -173,6 +191,7 @@ class EditorApp:
         self.notebook.add(body, text="Bases")
         self._build_aircraft_tab()
         self._build_ships_tab()
+        self._build_shiprecs_tab()
         self._build_groups_tab()
         self._build_units_tab()
 
@@ -313,7 +332,7 @@ class EditorApp:
 
     def _build_ships_tab(self):
         tab = ttk.Frame(self.notebook, padding=4)
-        self.notebook.add(tab, text="Ships")
+        self.notebook.add(tab, text="Ship Classes")
         left = ttk.Frame(tab)
         left.pack(side="left", fill="both", expand=True)
         bar = ttk.Frame(left)
@@ -381,6 +400,91 @@ class EditorApp:
             else:
                 ttk.Entry(edit, textvariable=var, width=width).pack(side="left", padx=(2, 6))
         ttk.Button(edit, text="Apply weapon", command=self.apply_ship_weapon).pack(side="left", padx=4)
+
+    def _build_shiprecs_tab(self):
+        tab = ttk.Frame(self.notebook, padding=4)
+        self.notebook.add(tab, text="Ships")
+        left = ttk.Frame(tab)
+        left.pack(side="left", fill="both", expand=True)
+        bar = ttk.Frame(left)
+        bar.pack(side="top", fill="x")
+        ttk.Label(bar, text="Search:").pack(side="left")
+        self.shiprec_search_var = tk.StringVar()
+        self.shiprec_search_var.trace_add("write", lambda *a: self.refresh_shiprec_list())
+        ttk.Entry(bar, textvariable=self.shiprec_search_var, width=20).pack(side="left", padx=4)
+        ttk.Label(bar, text="Side:").pack(side="left")
+        self.shiprec_side_var = tk.StringVar(value="All")
+        side_box = ttk.Combobox(bar, textvariable=self.shiprec_side_var, values=["All", "Allied", "Japanese"],
+                                state="readonly", width=9)
+        side_box.pack(side="left", padx=4)
+        side_box.bind("<<ComboboxSelected>>", lambda e: self.refresh_shiprec_list())
+        self.shiprec_tree = ttk.Treeview(left, columns=[c[0] for c in SHIPREC_COLUMNS], show="headings",
+                                         selectmode="browse")
+        for cid, heading, width, _numeric, _get in SHIPREC_COLUMNS:
+            self.shiprec_tree.heading(cid, text=heading, command=lambda c=cid: self.sort_shiprecs_by(c))
+            self.shiprec_tree.column(cid, width=width, anchor="e" if cid == "id" else "w")
+        self.shiprec_tree.tag_configure("edited", background="#fff2b3")
+        scroll = ttk.Scrollbar(left, orient="vertical", command=self.shiprec_tree.yview)
+        self.shiprec_tree.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+        self.shiprec_tree.pack(side="left", fill="both", expand=True)
+        self.shiprec_tree.bind("<<TreeviewSelect>>", lambda e: self.on_shiprec_select())
+
+        right = ttk.LabelFrame(tab, text="Ship", padding=8)
+        right.pack(side="right", fill="y", padx=(8, 0))
+        self.shiprec_title = tk.StringVar(value="(select a ship)")
+        ttk.Label(right, textvariable=self.shiprec_title, font=("TkDefaultFont", 11, "bold")).grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
+        row = 1
+        for f in shiprecords.FIELDS:
+            ttk.Label(right, text=f.label).grid(row=row, column=0, sticky="w", pady=2)
+            self.shiprec_vars[f.name] = tk.StringVar()
+            ttk.Entry(right, textvariable=self.shiprec_vars[f.name], width=10).grid(
+                row=row, column=1, padx=(8, 0), pady=2)
+            row += 1
+        buttons = ttk.Frame(right)
+        buttons.grid(row=row, column=0, columnspan=2, pady=6)
+        ttk.Button(buttons, text="Apply", command=self.apply_shiprec).pack(side="left", padx=4)
+        ttk.Button(buttons, text="Repair all", command=self.repair_shiprec).pack(side="left", padx=4)
+        row += 1
+        self.shiprec_info = {}
+        for name, label in (("class", "Class (read-only)"), ("nation", "Nation (read-only)"),
+                            ("base", "Current base (read-only)"), ("tf", "Task force (read-only)"),
+                            ("arrival", "Days to arrival (read-only)")):
+            ttk.Label(right, text=label).grid(row=row, column=0, sticky="w", pady=1)
+            self.shiprec_info[name] = tk.StringVar()
+            ttk.Label(right, textvariable=self.shiprec_info[name]).grid(row=row, column=1, sticky="w", padx=(8, 0))
+            row += 1
+        move = ttk.LabelFrame(right, text="Move between task forces and ports", padding=4)
+        move.grid(row=row, column=0, columnspan=2, sticky="we", pady=(4, 0))
+        self.shiprec_move_var = tk.StringVar()
+        self.shiprec_move_box = ttk.Combobox(move, textvariable=self.shiprec_move_var, state="readonly", width=34)
+        self.shiprec_move_box.pack(side="left")
+        self.shiprec_move_button = ttk.Button(move, text="Move", command=self.move_shiprec)
+        self.shiprec_move_button.pack(side="left", padx=4)
+        self.shiprec_move_note = tk.StringVar()
+        ttk.Label(move, textvariable=self.shiprec_move_note).pack(side="left")
+        self.shiprec_destinations = []
+        row += 1
+        box = ttk.LabelFrame(right, text="Weapons and electronics", padding=2)
+        box.grid(row=row, column=0, columnspan=2, sticky="we", pady=(4, 0))
+        cols = [("name", "Name", 150), ("num", "Num", 40), ("face", "Face", 40), ("mount", "Mount", 50),
+                ("armor", "Armor", 50), ("ammo", "Ammo", 50)]
+        self.shiprec_weapon_tree = ttk.Treeview(box, columns=[c[0] for c in cols], show="headings",
+                                                selectmode="browse", height=8)
+        for cid, heading, width in cols:
+            self.shiprec_weapon_tree.heading(cid, text=heading)
+            self.shiprec_weapon_tree.column(cid, width=width, anchor="w" if cid == "name" else "e")
+        self.shiprec_weapon_tree.pack(side="top", fill="x")
+        self.shiprec_weapon_tree.bind("<<TreeviewSelect>>", lambda e: self.on_shiprec_weapon_select())
+        edit = ttk.Frame(box)
+        edit.pack(side="top", fill="x", pady=(4, 0))
+        self.shiprec_weapon_vars = {}
+        for name, label in (("num", "Num"), ("ammo", "Ammo")):
+            ttk.Label(edit, text=label + ":").pack(side="left")
+            self.shiprec_weapon_vars[name] = tk.StringVar()
+            ttk.Entry(edit, textvariable=self.shiprec_weapon_vars[name], width=6).pack(side="left", padx=(2, 6))
+        ttk.Button(edit, text="Apply weapon", command=self.apply_shiprec_weapon).pack(side="left", padx=4)
 
     def _build_groups_tab(self):
         tab = ttk.Frame(self.notebook, padding=4)
@@ -707,6 +811,7 @@ class EditorApp:
             blist = bases.list_bases(save)
             alist = aircraft.list_aircraft(save)
             slist = ships.list_ships(save)
+            srlist = shiprecords.list_ship_records(save)
             glist = airgroups.list_airgroups(save)
             ulist = landunits.list_land_units(save)
             pindex = airgroups.pilots_by_group(save)
@@ -730,6 +835,10 @@ class EditorApp:
         self.ships_edited.clear()
         self.ship_current = None
         self.ship_slot = None
+        self.shiprecs = {x.id: x for x in srlist}
+        self.shiprecs_edited.clear()
+        self.shiprec_current = None
+        self.shiprec_slot = None
         self.groups = {g.id: g for g in glist}
         self.pilot_index = pindex
         for g in glist:
@@ -765,7 +874,7 @@ class EditorApp:
         self.unit_slot = None
         self.file_label.set(f"File: {os.path.basename(path)}    Key variant: {save.variant}")
         self.title_var.set(save.description)
-        self.status.set(f"{path} - {len(blist)} bases, {len(alist)} aircraft, {len(slist)} ship classes, {len(glist)} air groups, {len(ulist)} land units"
+        self.status.set(f"{path} - {len(blist)} bases, {len(alist)} aircraft, {len(slist)} ship classes, {len(srlist)} ships, {len(glist)} air groups, {len(ulist)} land units"
                         + (" - PBEM game: saving is disabled" if self.pbem else ""))
         self.refresh_list()
         self.show_detail(None)
@@ -773,6 +882,8 @@ class EditorApp:
         self.show_aircraft(None)
         self.refresh_ship_list()
         self.show_ship(None)
+        self.refresh_shiprec_list()
+        self.show_shiprec(None)
         self.refresh_group_list()
         self.show_group(None)
         self.refresh_unit_list()
@@ -1167,6 +1278,182 @@ class EditorApp:
             self.dirty = True
         self.refresh_ship_list()
         self.show_ship_weapons(x)
+
+    # ---- ships in play -------------------------------------------------
+
+    def _shiprec_sort_key(self, x):
+        _cid, _h, _w, numeric, get = SHIPREC_COLUMN_BY_ID[self.shiprec_sort_col]
+        v = get(x)
+        return (v if numeric else str(v).lower(), x.id)
+
+    def refresh_shiprec_list(self):
+        selected = self.shiprec_current
+        self.shiprec_tree.delete(*self.shiprec_tree.get_children())
+        needle = self.shiprec_search_var.get().strip().lower()
+        side = self.shiprec_side_var.get()
+        rows = [x for x in self.shiprecs.values()
+                if needle in x.name.lower() and (side == "All" or x.side == side)]
+        rows.sort(key=self._shiprec_sort_key, reverse=self.shiprec_sort_reverse)
+        for x in rows:
+            tags = ("edited",) if x.id in self.shiprecs_edited else ()
+            self.shiprec_tree.insert("", "end", iid=str(x.id), values=[get(x) for *_, get in SHIPREC_COLUMNS],
+                                     tags=tags)
+        if selected is not None and self.shiprec_tree.exists(str(selected)):
+            self.shiprec_tree.selection_set(str(selected))
+
+    def sort_shiprecs_by(self, col):
+        self.shiprec_sort_reverse = (not self.shiprec_sort_reverse) if col == self.shiprec_sort_col else False
+        self.shiprec_sort_col = col
+        self.refresh_shiprec_list()
+
+    def on_shiprec_select(self):
+        sel = self.shiprec_tree.selection()
+        self.show_shiprec(self.shiprecs[int(sel[0])] if sel else None)
+
+    def show_shiprec(self, x):
+        previous = self.shiprec_current
+        self.shiprec_current = x.id if x else None
+        if x is None or x.id != previous:
+            self.shiprec_slot = None
+        if x is None:
+            self.shiprec_title.set("(select a ship)")
+            for var in list(self.shiprec_vars.values()) + list(self.shiprec_info.values()):
+                var.set("")
+            self.show_shiprec_move(None)
+            self.show_shiprec_weapons(None)
+            return
+        self.shiprec_title.set(f"{x.name} (#{x.id})")
+        for f in shiprecords.FIELDS:
+            self.shiprec_vars[f.name].set(str(x.get(f.name)))
+        self.shiprec_info["class"].set(f"{x.class_name} ({x.type}, #{x.class_id})")
+        self.shiprec_info["nation"].set(f"{x.nation} ({x.side})")
+        self.shiprec_info["base"].set(x.base_name or "at sea")
+        self.shiprec_info["tf"].set(self._shiprec_tf_text(x))
+        self.shiprec_info["arrival"].set(str(x.days_to_arrival) if x.days_to_arrival else "arrived")
+        self.show_shiprec_move(x)
+        self.show_shiprec_weapons(x)
+
+    def _shiprec_tf_text(self, x):
+        if not x.task_force:
+            return "none"
+        try:
+            tf = taskforces.TaskForce(self.save, x.task_force)
+        except ValueError:
+            return str(x.task_force)
+        flag = self.shiprecs.get(tf.flagship)
+        text = " ".join(p for p in (str(tf.id), tf.name) if p)
+        return f"{text} (flagship {flag.name})" if flag else text
+
+    def show_shiprec_move(self, x):
+        self.shiprec_destinations = taskforces.destinations(self.save, x.id) if x else []
+        box = self.shiprec_move_box
+        box.configure(values=[d.label for d in self.shiprec_destinations])
+        self.shiprec_move_var.set("")
+        if self.shiprec_destinations:
+            box.configure(state="readonly")
+            box.current(0)
+            self.shiprec_move_button.state(["!disabled"])
+            self.shiprec_move_note.set("")
+        else:
+            box.configure(state="disabled")
+            self.shiprec_move_button.state(["disabled"])
+            self.shiprec_move_note.set("no valid destination" if x else "")
+
+    def move_shiprec(self):
+        if self.shiprec_current is None or not self.shiprec_destinations:
+            return
+        index = self.shiprec_move_box.current()
+        if index < 0:
+            return
+        x = self.shiprecs[self.shiprec_current]
+        try:
+            taskforces.move_ship(self.save, x.id, self.shiprec_destinations[index].id)
+        except ValueError as exc:
+            messagebox.showerror("Cannot move ship", str(exc))
+            return
+        self.shiprecs_edited.add(x.id)
+        self.dirty = True
+        self.refresh_shiprec_list()
+        self.show_shiprec(x)
+
+    def show_shiprec_weapons(self, x):
+        tree = self.shiprec_weapon_tree
+        tree.delete(*tree.get_children())
+        if x is not None:
+            for slot, w in x.list_weapons():
+                tree.insert("", "end", iid=str(slot), values=(
+                    w["name"], w["num"], ships.face_label(w["face"]), w["mount"], w["armor"], w["ammo"]))
+        if x is not None and self.shiprec_slot is not None and tree.exists(str(self.shiprec_slot)):
+            tree.selection_set(str(self.shiprec_slot))
+        else:
+            self.shiprec_slot = None
+            self._fill_shiprec_weapon_edit(None)
+
+    def _fill_shiprec_weapon_edit(self, w):
+        for name, var in self.shiprec_weapon_vars.items():
+            var.set("" if w is None else str(w[name]))
+
+    def on_shiprec_weapon_select(self):
+        sel = self.shiprec_weapon_tree.selection()
+        if not sel or self.shiprec_current is None:
+            return
+        self.shiprec_slot = int(sel[0])
+        self._fill_shiprec_weapon_edit(self.shiprecs[self.shiprec_current].get_weapon(self.shiprec_slot))
+
+    def apply_shiprec(self):
+        if self.shiprec_current is None:
+            return
+        x = self.shiprecs[self.shiprec_current]
+        values = self._read_entries(x, shiprecords.FIELDS, self.shiprec_vars)
+        if values is None:
+            return
+        before = {n: x.get(n) for n in values}
+        try:
+            x.set_many(values)
+        except ValueError as exc:
+            messagebox.showerror("Invalid value", str(exc))
+            return
+        if before != values:
+            self.shiprecs_edited.add(x.id)
+            self.dirty = True
+        self.refresh_shiprec_list()
+        self.show_shiprec(x)
+
+    def repair_shiprec(self):
+        if self.shiprec_current is None:
+            return
+        x = self.shiprecs[self.shiprec_current]
+        if any(x.get(n) for n in shiprecords.DAMAGE_FIELDS):
+            x.repair_all()
+            self.shiprecs_edited.add(x.id)
+            self.dirty = True
+        self.refresh_shiprec_list()
+        self.show_shiprec(x)
+
+    def apply_shiprec_weapon(self):
+        if self.shiprec_current is None or self.shiprec_slot is None:
+            return
+        x = self.shiprecs[self.shiprec_current]
+        values = {}
+        try:
+            for name, var in self.shiprec_weapon_vars.items():
+                text = var.get().strip()
+                try:
+                    values[name] = int(text)
+                except ValueError:
+                    raise ValueError(f"{shiprecords.WEAPON_FIELDS[name][0]} must be a whole number "
+                                     f"(got {text!r}).") from None
+            x.check_weapon(self.shiprec_slot, **values)
+        except ValueError as exc:
+            messagebox.showerror("Invalid value", str(exc))
+            return
+        before = x.get_weapon(self.shiprec_slot)
+        x.set_weapon(self.shiprec_slot, **values)
+        if any(before[n] != v for n, v in values.items()):
+            self.shiprecs_edited.add(x.id)
+            self.dirty = True
+        self.refresh_shiprec_list()
+        self.show_shiprec_weapons(x)
 
     # ---- air groups ----------------------------------------------------
 
