@@ -6,7 +6,7 @@ Each chain is a doubly linked list through the ship records (next at 64,
 previous at 66, 0 ends it). The location record of the TF or port holds the
 ship count (656) and the last ship of the chain (818). The TF table (0x46)
 holds each TF's flagship at 44. The layout was mapped by diffing in-game
-saves; moves made here are not yet verified in-game.
+saves; moves made here were verified in-game (slot 27).
 """
 
 import struct
@@ -164,6 +164,46 @@ class TaskForce:
         return ship_side(self._save, ships[0]) if ships else ""
 
 
+def set_flagship(save, tf_id, ship_id):
+    """Make ship_id (a member of the TF) its flagship. ValueError, nothing written, on refusal."""
+    ships = chain(save, tf_id) if is_task_force(save, tf_id) else None
+    if ships is None:
+        raise ValueError(f"{tf_id!r} is not a task force")
+    if isinstance(ship_id, bool) or not isinstance(ship_id, int) or ship_id not in ships:
+        raise ValueError(f"{ship_id!r} is not a ship of TF {tf_id}")
+    if _flagship(save, tf_id) != ship_id:
+        _put_flagship(save, tf_id, ship_id)
+
+
+def _members(save, tf_id):
+    if not is_task_force(save, tf_id):
+        raise ValueError(f"{tf_id!r} is not a task force")
+    data = save[SHIP_SECTION].data
+    return [shiprecords.ShipRecord(save, s, _plain_name(data, s * SHIP_RECORD_SIZE)) for s in chain(save, tf_id)]
+
+
+def repair_task_force(save, tf_id):
+    """Clear fires and damage on every ship of the TF; returns the ids of ships that changed."""
+    changed = []
+    for rec in _members(save, tf_id):
+        if any(rec.get(n) for n in shiprecords.DAMAGE_FIELDS):
+            rec.repair_all()
+            changed.append(rec.id)
+    return changed
+
+
+def refuel_task_force(save, tf_id):
+    """Fill every ship of the TF to its class fuel (never lowering it); returns the ids that changed."""
+    members = _members(save, tf_id)
+    changed = []
+    for rec in members:
+        top = rec.max_fuel
+        if top is not None and rec.get("fuel") < top:
+            rec.set("fuel", top)
+            changed.append(rec.id)
+    return changed
+
+
 def list_task_forces(save):
     """Every TF with at least one ship, in id order."""
     return [TaskForce(save, i) for i in range(TF_BASE_ID, RECORD_COUNT)
@@ -241,6 +281,15 @@ def move_ship(save, ship_id, destination):
     _write_chain(save, destination, new_dest)
     _put_ship(save, ship_id, shiprecords.TASK_FORCE_OFFSET, destination if dest_is_tf else 0)
     _put_ship(save, ship_id, shiprecords.BASE_OFFSET, 0 if dest_is_tf else destination)
+
+
+def can_move(save, ship_id, destination):
+    """True when move_ship would accept this move."""
+    try:
+        _plan(save, ship_id, destination)
+    except ValueError:
+        return False
+    return True
 
 
 def destinations(save, ship_id):

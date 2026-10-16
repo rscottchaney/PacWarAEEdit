@@ -16,6 +16,9 @@ MINESWEEPERS, PATROL, YMS = 14409, 14416, 14417
 SOUTHARD, DORSEY, LONG, ELLIOT, ZANE = 4315, 4324, 4326, 4342, 4319
 LONE_SHIP = 3684  # only ship of Pearl Harbor Patrol
 FAR_TF = 14001  # not at Pearl Harbor
+DESTROYERS = 14402  # Alden, Edsall (damaged), John D. Edwards, Whipple; all at 345 of 385 fuel
+DESTROYER_SHIPS = [3664, 3668, 3669, 3680]
+EDSALL = 3668
 MS_FLAG = (TFS, (MINESWEEPERS - 14000) * TF_SIZE + FLAG)
 
 
@@ -284,6 +287,96 @@ class TaskForceTests(unittest.TestCase):
         self.assert_refused(ELLIOT, PEARL, "not recorded")
         poke(data, LONG * SHIP_SIZE + TASK_FORCE, MINESWEEPERS)
         taskforces.move_ship(self.sf, ELLIOT, PEARL)  # every repair restored a valid save
+
+    # ---- flagship ------------------------------------------------------
+
+    def test_set_flagship(self):
+        self.assertEqual(self.g(MS_FLAG), ELLIOT)
+        before = snapshot(self.sf)
+        taskforces.set_flagship(self.sf, MINESWEEPERS, LONG)
+        self.assertEqual(taskforces.TaskForce(self.sf, MINESWEEPERS).flagship, LONG)
+        self.assertEqual(changes(self.sf, before), {MS_FLAG})
+        for section in (SHIPS, LOCS, TFS):
+            old, new = before[section], bytes(self.sf[section].data)
+            diff = [i for i in range(len(old)) if old[i] != new[i]]
+            if section == TFS:
+                self.assertEqual(diff, [MS_FLAG[1]])  # low byte of 4342 -> 4326 only
+            else:
+                self.assertEqual(diff, [])
+        self.assert_consistent(self.sf)
+        other = self.roundtrip()
+        self.assertEqual(taskforces.TaskForce(other, MINESWEEPERS).flagship, LONG)
+        # Setting the current flagship again writes nothing.
+        again = snapshot(self.sf)
+        taskforces.set_flagship(self.sf, MINESWEEPERS, LONG)
+        self.assertEqual(snapshot(self.sf), again)
+
+    def test_set_flagship_refused(self):
+        before = snapshot(self.sf)
+        cases = [(MINESWEEPERS, ZANE), (MINESWEEPERS, 0), (MINESWEEPERS, 19999), (MINESWEEPERS, True),
+                 (MINESWEEPERS, "4326"), (PEARL, LONG), (13999, LONG), (True, LONG), ("14409", LONG)]
+        for tf_id, ship_id in cases:
+            with self.assertRaises(ValueError, msg=(tf_id, ship_id)):
+                taskforces.set_flagship(self.sf, tf_id, ship_id)
+        self.assertEqual(snapshot(self.sf), before)
+        # A TF whose chain is inconsistent is refused too.
+        struct.pack_into("<H", self.sf[SHIPS].data, DORSEY * SHIP_SIZE + NEXT, 0)
+        before = snapshot(self.sf)
+        with self.assertRaisesRegex(ValueError, "broken"):
+            taskforces.set_flagship(self.sf, MINESWEEPERS, LONG)
+        self.assertEqual(snapshot(self.sf), before)
+
+    # ---- repair / refuel -----------------------------------------------
+
+    def ship_values(self, ids):
+        return {i: {n: shiprecords.ShipRecord(self.sf, i, "x").get(n) for n in ("fuel", *shiprecords.DAMAGE_FIELDS)}
+                for i in ids}
+
+    def test_repair_task_force(self):
+        # Edsall is the only damaged ship of the destroyer TF (system 1, engine 1).
+        self.assertEqual(taskforces.TaskForce(self.sf, DESTROYERS).ships, DESTROYER_SHIPS)
+        self.assertEqual(self.ship_values([EDSALL])[EDSALL]["sys_dmg"], 1)
+        before = snapshot(self.sf)
+        self.assertEqual(taskforces.repair_task_force(self.sf, DESTROYERS), [EDSALL])
+        self.assertEqual(changes(self.sf, before), {ship_at(EDSALL, 332), ship_at(EDSALL, 334)})  # sys and eng u8s
+        self.assertEqual(sum(self.ship_values([EDSALL])[EDSALL][n] for n in shiprecords.DAMAGE_FIELDS), 0)
+        again = snapshot(self.sf)
+        self.assertEqual(taskforces.repair_task_force(self.sf, DESTROYERS), [])
+        self.assertEqual(snapshot(self.sf), again)
+        # The minesweepers have one damaged ship (Dorsey) and nothing else changes.
+        before = snapshot(self.sf)
+        self.assertEqual(taskforces.repair_task_force(self.sf, MINESWEEPERS), [DORSEY])
+        self.assertEqual({o for s, o in changes(self.sf, before)}, {DORSEY * SHIP_SIZE + 332})
+        self.assert_consistent(self.sf)
+
+    def test_refuel_task_force(self):
+        for s in DESTROYER_SHIPS:
+            self.assertEqual(self.ship_values([s])[s]["fuel"], 345)
+            self.assertEqual(shiprecords.ShipRecord(self.sf, s, "x").max_fuel, 385)
+        # One ship above its class fuel is never lowered.
+        shiprecords.ShipRecord(self.sf, DESTROYER_SHIPS[0], "x").set("fuel", 400)
+        before = snapshot(self.sf)
+        self.assertEqual(taskforces.refuel_task_force(self.sf, DESTROYERS), DESTROYER_SHIPS[1:])
+        self.assertEqual([self.ship_values([s])[s]["fuel"] for s in DESTROYER_SHIPS], [400, 385, 385, 385])
+        self.assertEqual(changes(self.sf, before), {ship_at(s, 56) for s in DESTROYER_SHIPS[1:]})  # fuel u16
+        again = snapshot(self.sf)
+        self.assertEqual(taskforces.refuel_task_force(self.sf, DESTROYERS), [])
+        self.assertEqual(snapshot(self.sf), again)
+        # Ships already full are untouched.
+        self.assertEqual(taskforces.refuel_task_force(self.sf, MINESWEEPERS), [])
+        self.assertEqual(snapshot(self.sf), again)
+
+    def test_quick_edits_refused_for_bad_tf(self):
+        before = snapshot(self.sf)
+        for fn in (taskforces.repair_task_force, taskforces.refuel_task_force):
+            for bad in (PEARL, 13999, True, "14402"):
+                with self.assertRaises(ValueError):
+                    fn(self.sf, bad)
+            struct.pack_into("<H", self.sf[LOCS].data, DESTROYERS * LOC_SIZE + COUNT, 9)
+            with self.assertRaisesRegex(ValueError, "count"):
+                fn(self.sf, DESTROYERS)
+            struct.pack_into("<H", self.sf[LOCS].data, DESTROYERS * LOC_SIZE + COUNT, 4)
+        self.assertEqual(snapshot(self.sf), before)
 
 
 if __name__ == "__main__":
