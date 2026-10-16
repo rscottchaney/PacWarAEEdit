@@ -70,6 +70,8 @@ TF_COLUMNS = [
     ("name", "Name", 170, False, lambda r: r["name"]),
     ("side", "Side", 65, False, lambda r: r["side"]),
     ("location", "Location", 140, False, lambda r: r["location"]),
+    ("mission", "Mission", 120, False, lambda r: r["mission"]),
+    ("destination", "Destination", 120, False, lambda r: r["destination"]),
     ("ships", "Ships", 45, True, lambda r: r["ships"]),
     ("flagship", "Flagship", 130, False, lambda r: r["flagship"]),
 ]
@@ -156,6 +158,11 @@ class EditorApp:
         self.tf_add_ships = []
         self.tf_flag_ships = []
         self.places_by_hex = {}
+        self.places_by_id = {}
+        self.tf_port_items = []
+        self.tf_dest_items = []
+        self.tf_home_shown = []
+        self.tf_dest_shown = []
         self.groups = {}
         self.pilot_index = {}
         self.groups_edited = set()
@@ -559,6 +566,30 @@ class EditorApp:
             self.tf_info[name] = tk.StringVar()
             ttk.Label(right, textvariable=self.tf_info[name]).grid(row=row, column=1, sticky="w", padx=(8, 0))
             row += 1
+        orders = ttk.LabelFrame(right, text="Orders", padding=4)
+        orders.grid(row=row, column=0, columnspan=2, sticky="we", pady=(4, 0))
+        self.tf_mission_var = tk.StringVar()
+        self.tf_home_var = tk.StringVar()
+        self.tf_dest_var = tk.StringVar()
+        self.tf_dest_filter_var = tk.StringVar()
+        self.tf_dest_filter_var.trace_add("write", lambda *a: self.show_tf_destinations())
+        self.tf_mission_box = ttk.Combobox(orders, textvariable=self.tf_mission_var, state="readonly", width=30,
+                                           values=[f"{code:02d} - {label}" for code, label in taskforces.MISSIONS.items()])
+        self.tf_home_box = ttk.Combobox(orders, textvariable=self.tf_home_var, state="readonly", width=30)
+        self.tf_dest_box = ttk.Combobox(orders, textvariable=self.tf_dest_var, state="readonly", width=30)
+        for name, label, widget, command, r in (
+                ("mission", "Mission", self.tf_mission_box, self.set_tf_mission, 0),
+                ("home_port", "Home port", self.tf_home_box, self.set_tf_home_port, 2),
+                ("destination", "Destination", self.tf_dest_box, self.set_tf_destination, 5)):
+            ttk.Label(orders, text=label + ":").grid(row=r, column=0, sticky="w")
+            widget.grid(row=r, column=1, sticky="w", padx=2)
+            ttk.Button(orders, text="Set", command=command).grid(row=r, column=2, padx=2)
+            self.tf_info[name] = tk.StringVar()
+            ttk.Label(orders, text="now:").grid(row=r + 1, column=0, sticky="e")
+            ttk.Label(orders, textvariable=self.tf_info[name]).grid(row=r + 1, column=1, sticky="w", padx=2)
+        ttk.Label(orders, text="Dest. filter:").grid(row=4, column=0, sticky="w")
+        ttk.Entry(orders, textvariable=self.tf_dest_filter_var, width=20).grid(row=4, column=1, sticky="w", padx=2)
+        row += 1
         box = ttk.LabelFrame(right, text="Ships (chain order)", padding=2)
         box.grid(row=row, column=0, columnspan=2, sticky="we", pady=(4, 0))
         self.tf_ship_tree = ttk.Treeview(box, columns=[c[0] for c in TF_SHIP_COLUMNS], show="headings",
@@ -977,6 +1008,10 @@ class EditorApp:
         self.places_by_hex = {}
         for p in places:
             self.places_by_hex.setdefault((p.x, p.y), []).append(p)
+        self.places_by_id = {p.id: p for p in places}
+        # Built once per load: list_places is slow, and the orders boxes filter these lists.
+        self.tf_port_items = [(p, f"{p.name} ({p.id})") for p in places if taskforces.port_size(save, p.id) > 0]
+        self.tf_dest_items = [(p, f"{p.name} ({p.id}, {bases.SIDES.get(p.side_id, '?')})") for p in places]
         self.taskforces = {t.id: t for t in tflist}
         self.tfs_edited.clear()
         self.tf_current = None
@@ -1640,9 +1675,14 @@ class EditorApp:
             return f"{places[0].name} (in port)"
         return "at sea {},{}".format(*tf.hex)
 
+    def _place_name(self, place_id):
+        place = self.places_by_id.get(place_id)
+        return place.name if place else ("-" if not place_id else str(place_id))
+
     def _tf_row(self, tf):
         flag = self.shiprecs.get(tf.flagship)
         return {"id": tf.id, "name": tf.name, "side": tf.side, "location": self._tf_location(tf),
+                "mission": tf.mission_label, "destination": self._place_name(tf.destination),
                 "ships": tf.ship_count, "flagship": flag.name if flag else ""}
 
     def _tf_sort_key(self, row):
@@ -1696,6 +1736,7 @@ class EditorApp:
                 var.set("")
             self.show_tf_move(None)
             self.show_tf_add(None)
+            self.show_tf_orders(None)
             return
         self.tf_title.set(f"{tf.name} (TF {tf.id})")
         self.tf_info["hex"].set("{},{}".format(*tf.hex))
@@ -1720,6 +1761,39 @@ class EditorApp:
             self.tf_flag_box.current(ship_ids.index(flagship))
         self.show_tf_move(self.tf_ship_current)
         self.show_tf_add(tf)
+        self.show_tf_orders(tf)
+
+    def show_tf_orders(self, tf):
+        """Fill the Orders box: current values and the home port list for the TF's side."""
+        self.tf_home_shown = []
+        if tf is None:
+            for name in ("mission", "home_port", "destination"):
+                self.tf_info[name].set("")
+            self.tf_mission_var.set("")
+            self.tf_home_box.configure(values=[])
+            self.tf_home_var.set("")
+        else:
+            self.tf_info["mission"].set(f"{tf.mission:02d} - {tf.mission_label}")
+            home = tf.home_port
+            self.tf_info["home_port"].set(f"{self._place_name(home)} ({home})" if home else "-")
+            dest = tf.destination
+            self.tf_info["destination"].set(f"{self._place_name(dest)} ({dest})" if dest else "-")
+            self.tf_mission_var.set(f"{tf.mission:02d} - {taskforces.MISSIONS[tf.mission]}"
+                                    if tf.mission in taskforces.MISSIONS else "")
+            side = tf.side
+            self.tf_home_shown = [p for p, _label in self.tf_port_items if bases.SIDES.get(p.side_id) == side]
+            labels = {p.id: label for p, label in self.tf_port_items}
+            self.tf_home_box.configure(values=[labels[p.id] for p in self.tf_home_shown])
+            self.tf_home_var.set("")
+        self.show_tf_destinations()
+
+    def show_tf_destinations(self):
+        """Destination choices: every base and town whose label contains the filter text."""
+        needle = self.tf_dest_filter_var.get().strip().lower()
+        items = [(p, label) for p, label in self.tf_dest_items if needle in label.lower()]
+        self.tf_dest_shown = [p for p, _label in items]
+        self.tf_dest_box.configure(values=[label for _p, label in items])
+        self.tf_dest_var.set("")
 
     def on_tf_ship_select(self):
         sel = self.tf_ship_tree.selection()
@@ -1791,6 +1865,34 @@ class EditorApp:
             return
         if tf.flagship != before:
             self._tf_edited([tf.id], [])
+
+    def _apply_tf_order(self, action, value, title):
+        if self.tf_current is None or value is None:
+            return
+        tf = self.taskforces[self.tf_current]
+        before = (tf.mission, tf.home_port, tf.destination)
+        try:
+            action(self.save, tf.id, value)
+        except ValueError as exc:
+            messagebox.showerror(title, str(exc))
+            return
+        if (tf.mission, tf.home_port, tf.destination) != before:
+            self._tf_edited([tf.id], [])
+
+    def set_tf_mission(self):
+        text = self.tf_mission_var.get()
+        code = int(text.split(" - ", 1)[0]) if " - " in text else None
+        self._apply_tf_order(taskforces.set_mission, code, "Cannot set mission")
+
+    def set_tf_home_port(self):
+        index = self.tf_home_box.current()
+        place = self.tf_home_shown[index] if index >= 0 else None
+        self._apply_tf_order(taskforces.set_home_port, place.id if place else None, "Cannot set home port")
+
+    def set_tf_destination(self):
+        index = self.tf_dest_box.current()
+        place = self.tf_dest_shown[index] if index >= 0 else None
+        self._apply_tf_order(taskforces.set_destination, place.id if place else None, "Cannot set destination")
 
     def _move_ship_to(self, ship_id, dest_id):
         tf_ids = [i for i in (self.shiprecs[ship_id].task_force, dest_id) if i >= taskforces.TF_BASE_ID]

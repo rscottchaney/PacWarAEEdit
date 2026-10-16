@@ -379,5 +379,104 @@ class TaskForceTests(unittest.TestCase):
         self.assertEqual(snapshot(self.sf), before)
 
 
+    # ---- orders ------------------------------------------------------------
+
+    LAHAINA, BOISE, AKITA = 577, 501, 222  # Allied port, Allied town/base without a port, Japanese port
+
+    def tf_at(self, off):
+        return (TFS, (MINESWEEPERS - 14000) * TF_SIZE + off)
+
+    def test_orders_read_view(self):
+        tf = taskforces.TaskForce(self.sf, MINESWEEPERS)
+        self.assertEqual((tf.mission, tf.mission_label, tf.home_port, tf.destination), (2, "Surface Combat", PEARL, 0))
+        self.assertEqual(u16(self.sf, LOCS, MINESWEEPERS * LOC_SIZE + 660), PEARL)
+        self.sf[TFS].data[self.tf_at(349)[1]] = 99
+        self.assertEqual(tf.mission_label, "Unknown (99)")
+
+    def test_set_mission_writes_only_the_mission_byte(self):
+        before = snapshot(self.sf)
+        taskforces.set_mission(self.sf, MINESWEEPERS, 23)
+        self.assertEqual(changes(self.sf, before), {self.tf_at(348)})
+        self.assertEqual(self.sf[TFS].data[self.tf_at(349)[1]], 23)
+        old = bytes(before[TFS])
+        new = bytes(self.sf[TFS].data)
+        self.assertEqual([i for i in range(len(old)) if old[i] != new[i]], [self.tf_at(349)[1]])
+        again = snapshot(self.sf)
+        taskforces.set_mission(self.sf, MINESWEEPERS, 23)
+        self.assertEqual(snapshot(self.sf), again)
+        back = self.roundtrip()
+        self.assertEqual(taskforces.TaskForce(back, MINESWEEPERS).mission_label, "Local Minesweeper")
+        self.assert_consistent(back)
+
+    def test_set_mission_refusals(self):
+        before = snapshot(self.sf)
+        for tf_id, code in ((MINESWEEPERS, 0), (MINESWEEPERS, 26), (MINESWEEPERS, -1), (MINESWEEPERS, True),
+                            (MINESWEEPERS, "5"), (MINESWEEPERS, 5.0), (PEARL, 5), (13999, 5), (True, 5)):
+            with self.assertRaises(ValueError, msg=(tf_id, code)):
+                taskforces.set_mission(self.sf, tf_id, code)
+        self.assertEqual(snapshot(self.sf), before)
+
+    def test_set_home_port(self):
+        before = snapshot(self.sf)
+        taskforces.set_home_port(self.sf, MINESWEEPERS, self.LAHAINA)
+        expected = {self.tf_at(o) for o in (54, 8, 322, 490)}
+        self.assertEqual(changes(self.sf, before), expected)
+        self.assertEqual(self.g(self.tf_at(54)), self.LAHAINA)
+        self.assertEqual(self.sf[TFS].data[self.tf_at(8)[1]] & 0x50, 0x50)
+        self.assertEqual(self.g(self.tf_at(322)) & 2, 2)
+        self.assertEqual(self.g(self.tf_at(490)), 2)
+        again = snapshot(self.sf)
+        taskforces.set_home_port(self.sf, MINESWEEPERS, self.LAHAINA)
+        self.assertEqual(snapshot(self.sf), again)
+        back = self.roundtrip()
+        self.assertEqual(taskforces.TaskForce(back, MINESWEEPERS).home_port, self.LAHAINA)
+
+    def test_set_home_port_refusals(self):
+        before = snapshot(self.sf)
+        self.assertEqual(bases.place_side_id(self.sf, self.AKITA), 0)
+        self.assertEqual(taskforces.port_size(self.sf, self.BOISE), 0)
+        self.assertEqual(bases.place_side_id(self.sf, self.BOISE), 1)
+        for tf_id, place in ((MINESWEEPERS, self.AKITA), (MINESWEEPERS, self.BOISE), (MINESWEEPERS, 14400),
+                             (MINESWEEPERS, 0), (MINESWEEPERS, True), (MINESWEEPERS, "577"), (PEARL, self.LAHAINA)):
+            with self.assertRaises(ValueError, msg=(tf_id, place)):
+                taskforces.set_home_port(self.sf, tf_id, place)
+        self.assertEqual(snapshot(self.sf), before)
+
+    def test_set_destination(self):
+        before = snapshot(self.sf)
+        taskforces.set_destination(self.sf, MINESWEEPERS, self.LAHAINA)
+        expected = {self.tf_at(o) for o in (56, 58, 118, 122, 124, 318, 320, 8, 322, 490)}  # 120 (y 107) is unchanged here
+        expected |= {loc_at(MINESWEEPERS, o) for o in (660, 662, 664, 760, 762)}
+        self.assertEqual(changes(self.sf, before), expected)
+        tf = taskforces.TaskForce(self.sf, MINESWEEPERS)
+        self.assertEqual(tf.destination, self.LAHAINA)
+        self.assertEqual(self.g(self.tf_at(58)), self.LAHAINA)
+        self.assertEqual([self.g(self.tf_at(118 + 2 * k)) for k in range(4)], [180, 107, 182, 108])
+        self.assertEqual((self.g(self.tf_at(320)), self.g(self.tf_at(318))), (2, 0))
+        self.assertEqual(self.sf[TFS].data[self.tf_at(8)[1]] & 0xA0, 0xA0)
+        self.assertEqual(self.g(self.tf_at(322)) & 4, 4)
+        self.assertEqual(self.g(self.tf_at(490)), 2)
+        loc = [self.g(loc_at(MINESWEEPERS, o)) for o in (660, 662, 664, 760, 762)]
+        self.assertEqual(loc, [self.LAHAINA, 182, 108, 182, 108])
+        again = snapshot(self.sf)
+        taskforces.set_destination(self.sf, MINESWEEPERS, self.LAHAINA)
+        self.assertEqual(snapshot(self.sf), again)
+        back = self.roundtrip()
+        self.assertEqual(taskforces.TaskForce(back, MINESWEEPERS).destination, self.LAHAINA)
+        self.assert_consistent(back)
+
+    def test_set_destination_enemy_base_allowed(self):
+        taskforces.set_destination(self.sf, MINESWEEPERS, self.AKITA)
+        self.assertEqual(taskforces.TaskForce(self.sf, MINESWEEPERS).destination, self.AKITA)
+
+    def test_set_destination_refusals(self):
+        before = snapshot(self.sf)
+        for tf_id, place in ((MINESWEEPERS, PEARL), (MINESWEEPERS, 14400), (MINESWEEPERS, 0),
+                             (MINESWEEPERS, True), (MINESWEEPERS, "577"), (PEARL, self.LAHAINA)):
+            with self.assertRaises(ValueError, msg=(tf_id, place)):
+                taskforces.set_destination(self.sf, tf_id, place)
+        self.assertEqual(snapshot(self.sf), before)
+
+
 if __name__ == "__main__":
     unittest.main()
