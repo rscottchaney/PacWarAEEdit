@@ -93,16 +93,37 @@ edits have not been tested in-game yet, so try them on a copy.
 | Field | Status |
 |---|---|
 | Experience (day, night), 0..99 | values verified against game screens, edit not yet verified in-game |
-| Fuel, 0..32767 | values verified against game screens, edit not yet verified in-game |
-| Fires, system damage, flotation damage, major flotation damage, engine damage, major engine damage (0..99) | values verified against game screens, edit not yet verified in-game |
+| Fuel, 0..32767 | verified in-game (edit) |
+| Fires, system damage, flotation damage, major flotation damage, engine damage, major engine damage (0..99) | values verified against game screens; clearing system and engine damage verified in-game, other edits not yet |
 | Major flotation damage cannot exceed flotation damage, nor major engine damage engine damage; checked on the final values of an Apply and only when the apply changes that pair (existing ships may already break it, for example sinking ships) | rule enforced by the editor |
-| Repair all (sets fires and all six damage values to 0; writes nothing when there is no damage) | edit not yet verified in-game |
+| Repair all (sets fires and all six damage values to 0; writes nothing when there is no damage) | verified in-game (through the Task Forces tab's Repair all) |
 | Weapon and electronics slots: Num and Ammo (0..999), only slots that hold a device | values verified against game screens, edit not yet verified in-game |
 | Weapon device, Face, Mount, Armor | read-only |
 | Nation, class (name and type from the ship class table), current base, task force, days to arrival | read-only |
 | Task force moves ("Move to" on the ship form): TF to another TF, TF to a port, port to a TF. Rules: the TF and the destination must be in the same hex and on the ship's side; a TF moves only to a TF that has ships; a TF ship goes to a port only at a base or town of its side in the TF's hex (no dropping ships at sea); a docked ship joins only a TF in its port's hex. Refused: the last ship of a TF, ships that have not arrived, ships in no TF or port, moving to where the ship already is, port to port, and any save whose ship chains are inconsistent (nothing is written). A TF takes the ship in ascending ship-id order and a port at the end; if the moved ship was the flagship of its old TF, the TF's new last ship becomes flagship. | layout mapped from in-game saves; editor moves verified in-game (TF to TF, TF to port with the flagship, port to TF; post-turn not yet checked) |
 
 The field table is in `witpae/shiprecords.py`; the chain logic for moves is in `witpae/taskforces.py`.
+
+## Task Forces
+
+The Task Forces tab lists every task force that has ships (location records of
+type 12 from section 0x13, with a row in the TF table, section 0x46). Search by
+name and filter by side (taken from the TF's ships). The Location column shows
+the name of the base or town in the TF's hex as `<name> (in port)`, else
+`at sea x,y`. Select a TF to see its ships in chain order with their fuel
+(current/class maximum), system, flotation and engine damage and fires; the
+flagship is marked. Any edit highlights the TF row and the affected ships in the
+Ships tab.
+
+| Feature | Status |
+|---|---|
+| TF list and ship grid | read-only data |
+| Flagship (combobox and Set flagship; u16 at offset 44 of the TF table row) | verified in-game |
+| Move the selected ship ("Move to" and Add ship from port) | verified in-game, same rules as the Ships tab moves; Add ship from port offers ships docked at the base in the TF's hex that may join |
+| Repair all ships (clears fires and damage of every ship; ships without damage are untouched) | verified in-game |
+| Refuel all ships (sets each ship's fuel to its class's fuel; never lowers fuel, ships already full are untouched) | verified in-game |
+
+The model functions are in `witpae/taskforces.py` (`set_flagship`, `repair_task_force`, `refuel_task_force`, `move_ship`).
 
 ## Air Groups
 

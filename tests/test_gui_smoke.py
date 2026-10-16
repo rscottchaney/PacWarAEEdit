@@ -276,6 +276,10 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertIn(4342, app.shiprecs_edited)
         self.assertEqual(app.shiprec_tree.item("4342", "tags"), ("edited",))
         self.assertTrue(app.dirty)
+        # The Task Forces tab follows a move made here: count, new flagship, edited mark.
+        self.assertEqual(app.tf_tree.set("14409", "ships"), "3")
+        self.assertEqual(app.tf_tree.set("14409", "flagship"), "Long")
+        self.assertIn(14409, app.tfs_edited)
         # Now docked: the TFs at Pearl are offered, not another port.
         labels = list(app.shiprec_move_box.cget("values"))
         self.assertIn("TF 14409 USN minesweepers (3 ships)", labels)
@@ -288,6 +292,81 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertIn("disabled", app.shiprec_move_button.state())
         self.assertTrue(app.load(SAVE_015))
         self.assertEqual(app.shiprecs_edited, set())
+
+    def test_task_forces_tab(self):
+        from unittest import mock
+        import witpae_editor
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        self.root.update()
+        tabs = [app.notebook.tab(t, "text") for t in app.notebook.tabs()]
+        self.assertEqual(tabs[tabs.index("Ships") + 1], "Task Forces")
+        self.assertEqual(len(app.tf_tree.get_children()), 236)
+        app.tf_side_var.set("Japanese")
+        app.refresh_tf_list()
+        self.assertNotIn("14409", app.tf_tree.get_children())
+        app.tf_side_var.set("Allied")
+        app.tf_search_var.set("minesweepers")
+        self.assertEqual(app.tf_tree.get_children(), ("14409",))
+        self.assertEqual(app.tf_tree.item("14409", "values"),
+                         ("14409", "USN minesweepers", "Allied", "Pearl Harbor (in port)", "4", "Elliot"))
+        app.sort_tfs_by("ships")
+        app.sort_tfs_by("location")
+        app.tf_tree.selection_set("14409")
+        self.root.update()
+        self.assertEqual(app.tf_title.get(), "USN minesweepers (TF 14409)")
+        self.assertEqual(app.tf_info["location"].get(), "Pearl Harbor (in port)")
+        grid = app.tf_ship_tree
+        self.assertEqual(grid.get_children(), ("4315", "4324", "4326", "4342"))
+        self.assertEqual(grid.set("4342", "flag"), "*")
+        self.assertEqual(grid.set("4326", "flag"), "")
+        self.assertEqual(grid.set("4315", "fuel"), "435/435")
+        with mock.patch.object(witpae_editor.messagebox, "showerror") as err:
+            app.tf_flag_var.set("Long (4326)")
+            app.set_tf_flagship()
+            self.assertEqual(app.taskforces[14409].flagship, 4326)
+            self.assertEqual(grid.set("4326", "flag"), "*")
+            self.assertIn(14409, app.tfs_edited)
+            self.assertEqual(app.tf_tree.item("14409", "tags"), ("edited",))
+            self.assertEqual(app.tf_tree.set("14409", "flagship"), "Long")
+            self.assertTrue(app.dirty)
+            # Move Elliot to the port.
+            self.root.update()  # let the list's re-selection event settle
+            grid.selection_set("4342")
+            self.root.update()
+            self.assertEqual(app.tf_ship_current, 4342)
+            self.assertIn("Pearl Harbor (port)", app.tf_move_box.cget("values"))
+            app.tf_move_var.set("Pearl Harbor (port)")
+            app.move_tf_ship()
+            self.assertEqual(grid.get_children(), ("4315", "4324", "4326"))
+            self.assertEqual(app.tf_tree.set("14409", "ships"), "3")
+            self.assertEqual(app.shiprec_tree.set("4342", "location"), "Pearl Harbor")
+            self.assertEqual(app.shiprec_tree.item("4342", "tags"), ("edited",))
+            self.assertEqual(app.tf_move_note.get(), "select a ship")
+            self.root.update()
+            # Add Zane from port.
+            zane = "%s (4319)" % app.shiprecs[4319].name
+            self.assertIn(zane, app.tf_add_box.cget("values"))
+            app.tf_add_var.set(zane)
+            app.add_tf_ship()
+            self.assertEqual(grid.get_children(), ("4315", "4319", "4324", "4326"))
+            self.assertEqual(app.tf_tree.set("14409", "ships"), "4")
+            self.assertEqual(app.shiprec_tree.set("4319", "location"), "TF 14409")
+            self.assertIn(4319, app.shiprecs_edited)
+            # Quick edits: Dorsey is damaged; nothing is short of fuel until we lower one.
+            self.assertEqual(grid.set("4324", "sys"), "1")
+            app.repair_tf()
+            self.assertEqual(grid.set("4324", "sys"), "0")
+            app.shiprecs[4315].set("fuel", 10)
+            app.show_tf(app.taskforces[14409])
+            self.assertEqual(grid.set("4315", "fuel"), "10/435")
+            app.refuel_tf()
+            self.assertEqual(grid.set("4315", "fuel"), "435/435")
+            self.assertEqual(app.shiprecs[4315].get("fuel"), 435)
+            app.repair_tf()  # nothing left to do
+            app.refuel_tf()
+            err.assert_not_called()
+        self.assertIn(4324, app.shiprecs_edited)
 
     def test_air_groups_tab_edit_applies(self):
         from witpae import airgroups

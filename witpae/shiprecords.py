@@ -108,6 +108,14 @@ class ShipRecord(Record):
         return ships.type_label(self._save[ships.SHIP_SECTION].data[start + ships.TYPE_OFFSET])
 
     @property
+    def max_fuel(self):
+        """Fuel capacity of the ship's class, None when the class record is out of range."""
+        start = self._class_start()
+        if start is None:
+            return None
+        return struct.unpack_from("<h", self._save[ships.SHIP_SECTION].data, start + ships.FIELD_BY_NAME["fuel"].offset)[0]
+
+    @property
     def base_id(self):
         return self._u16(BASE_OFFSET)
 

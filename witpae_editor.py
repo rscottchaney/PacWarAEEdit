@@ -64,6 +64,21 @@ SHIPREC_COLUMNS = [
 ]
 SHIPREC_COLUMN_BY_ID = {c[0]: c for c in SHIPREC_COLUMNS}
 
+# Rows are dicts built by EditorApp._tf_row.
+TF_COLUMNS = [
+    ("id", "ID", 55, True, lambda r: r["id"]),
+    ("name", "Name", 170, False, lambda r: r["name"]),
+    ("side", "Side", 65, False, lambda r: r["side"]),
+    ("location", "Location", 140, False, lambda r: r["location"]),
+    ("ships", "Ships", 45, True, lambda r: r["ships"]),
+    ("flagship", "Flagship", 130, False, lambda r: r["flagship"]),
+]
+TF_COLUMN_BY_ID = {c[0]: c for c in TF_COLUMNS}
+TF_SHIP_COLUMNS = [
+    ("flag", "Flag", 35), ("name", "Name", 130), ("type", "Type", 50), ("class", "Class", 110),
+    ("fuel", "Fuel", 90), ("sys", "Sys", 35), ("float", "Float", 40), ("eng", "Eng", 35), ("fires", "Fires", 40),
+]
+
 GROUP_COLUMNS = [
     ("id", "ID", 55, True, lambda g: g.id),
     ("name", "Name", 170, False, lambda g: g.name),
@@ -130,6 +145,17 @@ class EditorApp:
         self.shiprec_vars = {}
         self.shiprec_current = None
         self.shiprec_slot = None
+        self.taskforces = {}
+        self.tfs_edited = set()
+        self.tf_sort_col = "id"
+        self.tf_sort_reverse = False
+        self.tf_current = None
+        self.tf_info = {}
+        self.tf_ship_current = None
+        self.tf_destinations = []
+        self.tf_add_ships = []
+        self.tf_flag_ships = []
+        self.places_by_hex = {}
         self.groups = {}
         self.pilot_index = {}
         self.groups_edited = set()
@@ -195,6 +221,7 @@ class EditorApp:
         self._build_aircraft_tab()
         self._build_ships_tab()
         self._build_shiprecs_tab()
+        self._build_taskforces_tab()
         self._build_groups_tab()
         self._build_units_tab()
 
@@ -491,6 +518,88 @@ class EditorApp:
             self.shiprec_weapon_vars[name] = tk.StringVar()
             ttk.Entry(edit, textvariable=self.shiprec_weapon_vars[name], width=6).pack(side="left", padx=(2, 6))
         ttk.Button(edit, text="Apply weapon", command=self.apply_shiprec_weapon).pack(side="left", padx=4)
+
+    def _build_taskforces_tab(self):
+        tab = ttk.Frame(self.notebook, padding=4)
+        self.notebook.add(tab, text="Task Forces")
+        left = ttk.Frame(tab)
+        left.pack(side="left", fill="both", expand=True)
+        bar = ttk.Frame(left)
+        bar.pack(side="top", fill="x")
+        ttk.Label(bar, text="Search:").pack(side="left")
+        self.tf_search_var = tk.StringVar()
+        self.tf_search_var.trace_add("write", lambda *a: self.refresh_tf_list())
+        ttk.Entry(bar, textvariable=self.tf_search_var, width=20).pack(side="left", padx=4)
+        ttk.Label(bar, text="Side:").pack(side="left")
+        self.tf_side_var = tk.StringVar(value="All")
+        side_box = ttk.Combobox(bar, textvariable=self.tf_side_var, values=["All", "Allied", "Japanese"],
+                                state="readonly", width=9)
+        side_box.pack(side="left", padx=4)
+        side_box.bind("<<ComboboxSelected>>", lambda e: self.refresh_tf_list())
+        self.tf_tree = ttk.Treeview(left, columns=[c[0] for c in TF_COLUMNS], show="headings", selectmode="browse")
+        for cid, heading, width, numeric, _get in TF_COLUMNS:
+            self.tf_tree.heading(cid, text=heading, command=lambda c=cid: self.sort_tfs_by(c))
+            self.tf_tree.column(cid, width=width, anchor="e" if numeric else "w")
+        self.tf_tree.tag_configure("edited", background="#fff2b3")
+        scroll = ttk.Scrollbar(left, orient="vertical", command=self.tf_tree.yview)
+        self.tf_tree.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+        self.tf_tree.pack(side="left", fill="both", expand=True)
+        self.tf_tree.bind("<<TreeviewSelect>>", lambda e: self.on_tf_select())
+
+        right = ttk.LabelFrame(tab, text="Task force", padding=8)
+        right.pack(side="right", fill="y", padx=(8, 0))
+        self.tf_title = tk.StringVar(value="(select a task force)")
+        ttk.Label(right, textvariable=self.tf_title, font=("TkDefaultFont", 11, "bold")).grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
+        row = 1
+        for name, label in (("hex", "Hex x,y (read-only)"), ("location", "Location (read-only)"),
+                            ("side", "Side (read-only)")):
+            ttk.Label(right, text=label).grid(row=row, column=0, sticky="w", pady=1)
+            self.tf_info[name] = tk.StringVar()
+            ttk.Label(right, textvariable=self.tf_info[name]).grid(row=row, column=1, sticky="w", padx=(8, 0))
+            row += 1
+        box = ttk.LabelFrame(right, text="Ships (chain order)", padding=2)
+        box.grid(row=row, column=0, columnspan=2, sticky="we", pady=(4, 0))
+        self.tf_ship_tree = ttk.Treeview(box, columns=[c[0] for c in TF_SHIP_COLUMNS], show="headings",
+                                         selectmode="browse", height=10)
+        for cid, heading, width in TF_SHIP_COLUMNS:
+            self.tf_ship_tree.heading(cid, text=heading)
+            self.tf_ship_tree.column(cid, width=width, anchor="w" if cid in ("name", "type", "class") else "e")
+        self.tf_ship_tree.pack(side="top", fill="x")
+        self.tf_ship_tree.bind("<<TreeviewSelect>>", lambda e: self.on_tf_ship_select())
+        row += 1
+        flag = ttk.LabelFrame(right, text="Flagship", padding=4)
+        flag.grid(row=row, column=0, columnspan=2, sticky="we", pady=(4, 0))
+        self.tf_flag_var = tk.StringVar()
+        self.tf_flag_box = ttk.Combobox(flag, textvariable=self.tf_flag_var, state="readonly", width=30)
+        self.tf_flag_box.pack(side="left")
+        ttk.Button(flag, text="Set flagship", command=self.set_tf_flagship).pack(side="left", padx=4)
+        row += 1
+        move = ttk.LabelFrame(right, text="Move the selected ship", padding=4)
+        move.grid(row=row, column=0, columnspan=2, sticky="we", pady=(4, 0))
+        self.tf_move_var = tk.StringVar()
+        self.tf_move_box = ttk.Combobox(move, textvariable=self.tf_move_var, state="readonly", width=34)
+        self.tf_move_box.pack(side="left")
+        self.tf_move_button = ttk.Button(move, text="Move", command=self.move_tf_ship)
+        self.tf_move_button.pack(side="left", padx=4)
+        self.tf_move_note = tk.StringVar()
+        ttk.Label(move, textvariable=self.tf_move_note).pack(side="left")
+        row += 1
+        add = ttk.LabelFrame(right, text="Add ship from port", padding=4)
+        add.grid(row=row, column=0, columnspan=2, sticky="we", pady=(4, 0))
+        self.tf_add_var = tk.StringVar()
+        self.tf_add_box = ttk.Combobox(add, textvariable=self.tf_add_var, state="readonly", width=34)
+        self.tf_add_box.pack(side="left")
+        self.tf_add_button = ttk.Button(add, text="Add", command=self.add_tf_ship)
+        self.tf_add_button.pack(side="left", padx=4)
+        self.tf_add_note = tk.StringVar()
+        ttk.Label(add, textvariable=self.tf_add_note).pack(side="left")
+        row += 1
+        quick = ttk.Frame(right)
+        quick.grid(row=row, column=0, columnspan=2, pady=(8, 0))
+        ttk.Button(quick, text="Repair all ships", command=self.repair_tf).pack(side="left", padx=4)
+        ttk.Button(quick, text="Refuel all ships", command=self.refuel_tf).pack(side="left", padx=4)
 
     def _build_groups_tab(self):
         tab = ttk.Frame(self.notebook, padding=4)
@@ -837,6 +946,7 @@ class EditorApp:
             alist = aircraft.list_aircraft(save)
             slist = ships.list_ships(save)
             srlist = shiprecords.list_ship_records(save)
+            tflist = self._load_task_forces(save)
             glist = airgroups.list_airgroups(save)
             ulist = landunits.list_land_units(save)
             pindex = airgroups.pilots_by_group(save)
@@ -864,6 +974,13 @@ class EditorApp:
         self.shiprecs_edited.clear()
         self.shiprec_current = None
         self.shiprec_slot = None
+        self.places_by_hex = {}
+        for p in places:
+            self.places_by_hex.setdefault((p.x, p.y), []).append(p)
+        self.taskforces = {t.id: t for t in tflist}
+        self.tfs_edited.clear()
+        self.tf_current = None
+        self.tf_ship_current = None
         self.groups = {g.id: g for g in glist}
         self.pilot_index = pindex
         for g in glist:
@@ -909,6 +1026,8 @@ class EditorApp:
         self.show_ship(None)
         self.refresh_shiprec_list()
         self.show_shiprec(None)
+        self.refresh_tf_list()
+        self.show_tf(None)
         self.refresh_group_list()
         self.show_group(None)
         self.refresh_unit_list()
@@ -1401,14 +1520,14 @@ class EditorApp:
         if index < 0:
             return
         x = self.shiprecs[self.shiprec_current]
+        old_tf, dest = x.task_force, self.shiprec_destinations[index].id
         try:
-            taskforces.move_ship(self.save, x.id, self.shiprec_destinations[index].id)
+            taskforces.move_ship(self.save, x.id, dest)
         except ValueError as exc:
             messagebox.showerror("Cannot move ship", str(exc))
             return
-        self.shiprecs_edited.add(x.id)
-        self.dirty = True
-        self.refresh_shiprec_list()
+        # Redraws both tabs: the move changes ship counts (and maybe the flagship) of both TFs.
+        self._tf_edited([old_tf, dest], [x.id])
         self.show_shiprec(x)
 
     def show_shiprec_weapons(self, x):
@@ -1453,6 +1572,7 @@ class EditorApp:
             self.dirty = True
         self.refresh_shiprec_list()
         self.show_shiprec(x)
+        self._refresh_tf_of(x)
 
     def repair_shiprec(self):
         if self.shiprec_current is None:
@@ -1464,6 +1584,12 @@ class EditorApp:
             self.dirty = True
         self.refresh_shiprec_list()
         self.show_shiprec(x)
+        self._refresh_tf_of(x)
+
+    def _refresh_tf_of(self, x):
+        """Redraw the Task Forces detail when it shows the ship's TF (its fuel/damage grid)."""
+        if self.tf_current is not None and x.task_force == self.tf_current:
+            self.show_tf(self.taskforces[self.tf_current])
 
     def apply_shiprec_weapon(self):
         if self.shiprec_current is None or self.shiprec_slot is None:
@@ -1489,6 +1615,222 @@ class EditorApp:
             self.dirty = True
         self.refresh_shiprec_list()
         self.show_shiprec_weapons(x)
+
+    # ---- task forces ---------------------------------------------------
+
+    @staticmethod
+    def _load_task_forces(save):
+        """Task forces with ships and a readable chain; a damaged chain only hides its own TF."""
+        out = []
+        for i in range(taskforces.TF_BASE_ID, bases.RECORD_COUNT):
+            if not taskforces.is_task_force(save, i):
+                continue
+            tf = taskforces.TaskForce(save, i)
+            if tf.ship_count:
+                try:
+                    tf.ships
+                except ValueError:
+                    continue
+                out.append(tf)
+        return out
+
+    def _tf_location(self, tf):
+        places = self.places_by_hex.get(tf.hex)
+        if places:
+            return f"{places[0].name} (in port)"
+        return "at sea {},{}".format(*tf.hex)
+
+    def _tf_row(self, tf):
+        flag = self.shiprecs.get(tf.flagship)
+        return {"id": tf.id, "name": tf.name, "side": tf.side, "location": self._tf_location(tf),
+                "ships": tf.ship_count, "flagship": flag.name if flag else ""}
+
+    def _tf_sort_key(self, row):
+        _cid, _h, _w, numeric, get = TF_COLUMN_BY_ID[self.tf_sort_col]
+        v = get(row)
+        return (v if numeric else str(v).lower(), row["id"])
+
+    def refresh_tf_list(self):
+        selected = self.tf_current
+        self.tf_tree.delete(*self.tf_tree.get_children())
+        needle = self.tf_search_var.get().strip().lower()
+        side = self.tf_side_var.get()
+        rows = []
+        for tf in self.taskforces.values():
+            try:
+                row = self._tf_row(tf)
+            except ValueError:
+                continue
+            if needle in row["name"].lower() and (side == "All" or row["side"] == side):
+                rows.append(row)
+        rows.sort(key=self._tf_sort_key, reverse=self.tf_sort_reverse)
+        for row in rows:
+            tags = ("edited",) if row["id"] in self.tfs_edited else ()
+            self.tf_tree.insert("", "end", iid=str(row["id"]), values=[get(row) for *_, get in TF_COLUMNS],
+                                tags=tags)
+        if selected is not None and self.tf_tree.exists(str(selected)):
+            self.tf_tree.selection_set(str(selected))
+
+    def sort_tfs_by(self, col):
+        self.tf_sort_reverse = (not self.tf_sort_reverse) if col == self.tf_sort_col else False
+        self.tf_sort_col = col
+        self.refresh_tf_list()
+
+    def on_tf_select(self):
+        sel = self.tf_tree.selection()
+        self.show_tf(self.taskforces[int(sel[0])] if sel else None)
+
+    def show_tf(self, tf):
+        previous = self.tf_current
+        self.tf_current = tf.id if tf else None
+        if tf is None or tf.id != previous:
+            self.tf_ship_current = None
+        tree = self.tf_ship_tree
+        tree.delete(*tree.get_children())
+        self.tf_flag_ships = []
+        self.tf_flag_box.configure(values=[])
+        self.tf_flag_var.set("")
+        if tf is None:
+            self.tf_title.set("(select a task force)")
+            for var in self.tf_info.values():
+                var.set("")
+            self.show_tf_move(None)
+            self.show_tf_add(None)
+            return
+        self.tf_title.set(f"{tf.name} (TF {tf.id})")
+        self.tf_info["hex"].set("{},{}".format(*tf.hex))
+        self.tf_info["location"].set(self._tf_location(tf))
+        self.tf_info["side"].set(tf.side)
+        flagship = tf.flagship
+        ship_ids = tf.ships
+        for sid in ship_ids:
+            x = self.shiprecs[sid]
+            top = x.max_fuel
+            tree.insert("", "end", iid=str(sid), values=(
+                "*" if sid == flagship else "", x.name, x.type, x.class_name,
+                f"{x.get('fuel')}/{top if top is not None else '?'}", x.get("sys_dmg"), x.get("float_dmg"),
+                x.get("eng_dmg"), x.get("fires")))
+        if self.tf_ship_current in ship_ids:
+            tree.selection_set(str(self.tf_ship_current))
+        else:
+            self.tf_ship_current = None
+        self.tf_flag_ships = ship_ids
+        self.tf_flag_box.configure(values=[f"{self.shiprecs[s].name} ({s})" for s in ship_ids])
+        if flagship in ship_ids:
+            self.tf_flag_box.current(ship_ids.index(flagship))
+        self.show_tf_move(self.tf_ship_current)
+        self.show_tf_add(tf)
+
+    def on_tf_ship_select(self):
+        sel = self.tf_ship_tree.selection()
+        self.tf_ship_current = int(sel[0]) if sel else None
+        self.show_tf_move(self.tf_ship_current)
+
+    def show_tf_move(self, ship_id):
+        self.tf_destinations = taskforces.destinations(self.save, ship_id) if ship_id is not None else []
+        box = self.tf_move_box
+        box.configure(values=[d.label for d in self.tf_destinations])
+        self.tf_move_var.set("")
+        if self.tf_destinations:
+            box.configure(state="readonly")
+            box.current(0)
+            self.tf_move_button.state(["!disabled"])
+            self.tf_move_note.set("")
+        else:
+            box.configure(state="disabled")
+            self.tf_move_button.state(["disabled"])
+            self.tf_move_note.set("no valid destination" if ship_id is not None else "select a ship")
+
+    def show_tf_add(self, tf):
+        """Ships docked in the TF's port hex that may join it."""
+        self.tf_add_ships = []
+        if tf is not None:
+            for place in self.places_by_hex.get(tf.hex, []):
+                try:
+                    docked = taskforces.chain(self.save, place.id)
+                except ValueError:
+                    continue
+                self.tf_add_ships += [s for s in docked if taskforces.can_move(self.save, s, tf.id)]
+        box = self.tf_add_box
+        box.configure(values=[f"{self.shiprecs[s].name} ({s})" for s in self.tf_add_ships])
+        self.tf_add_var.set("")
+        if self.tf_add_ships:
+            box.configure(state="readonly")
+            box.current(0)
+            self.tf_add_button.state(["!disabled"])
+            self.tf_add_note.set("")
+        else:
+            box.configure(state="disabled")
+            self.tf_add_button.state(["disabled"])
+            self.tf_add_note.set("" if tf is None else
+                                 "no ship in port can join" if self.places_by_hex.get(tf.hex) else "not in a port")
+
+    def _tf_edited(self, tf_ids, ship_ids):
+        """Mark rows edited, then redraw this tab and the Ships tab."""
+        self.tfs_edited.update(i for i in tf_ids if i in self.taskforces)
+        self.shiprecs_edited.update(ship_ids)
+        self.dirty = True
+        self.refresh_tf_list()
+        self.refresh_shiprec_list()
+        if self.shiprec_current in ship_ids:
+            self.show_shiprec(self.shiprecs[self.shiprec_current])
+        self.show_tf(self.taskforces[self.tf_current] if self.tf_current is not None else None)
+
+    def set_tf_flagship(self):
+        if self.tf_current is None:
+            return
+        index = self.tf_flag_box.current()
+        if index < 0:
+            return
+        tf = self.taskforces[self.tf_current]
+        before = tf.flagship
+        try:
+            taskforces.set_flagship(self.save, tf.id, self.tf_flag_ships[index])
+        except ValueError as exc:
+            messagebox.showerror("Cannot set flagship", str(exc))
+            return
+        if tf.flagship != before:
+            self._tf_edited([tf.id], [])
+
+    def _move_ship_to(self, ship_id, dest_id):
+        tf_ids = [i for i in (self.shiprecs[ship_id].task_force, dest_id) if i >= taskforces.TF_BASE_ID]
+        try:
+            taskforces.move_ship(self.save, ship_id, dest_id)
+        except ValueError as exc:
+            messagebox.showerror("Cannot move ship", str(exc))
+            return
+        self._tf_edited(tf_ids, [ship_id])
+
+    def move_tf_ship(self):
+        if self.tf_ship_current is None or not self.tf_destinations:
+            return
+        index = self.tf_move_box.current()
+        if index >= 0:
+            self._move_ship_to(self.tf_ship_current, self.tf_destinations[index].id)
+
+    def add_tf_ship(self):
+        if self.tf_current is None or not self.tf_add_ships:
+            return
+        index = self.tf_add_box.current()
+        if index >= 0:
+            self._move_ship_to(self.tf_add_ships[index], self.tf_current)
+
+    def _tf_quick(self, action, title):
+        if self.tf_current is None:
+            return
+        try:
+            changed = action(self.save, self.tf_current)
+        except ValueError as exc:
+            messagebox.showerror(title, str(exc))
+            return
+        if changed:
+            self._tf_edited([self.tf_current], changed)
+
+    def repair_tf(self):
+        self._tf_quick(taskforces.repair_task_force, "Cannot repair ships")
+
+    def refuel_tf(self):
+        self._tf_quick(taskforces.refuel_task_force, "Cannot refuel ships")
 
     # ---- air groups ----------------------------------------------------
 
