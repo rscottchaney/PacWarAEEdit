@@ -337,6 +337,49 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertTrue(app.load(SAVE_015))
         self.assertEqual(app.groups_edited, set())
 
+    def test_air_group_schedule_and_dates(self):
+        from unittest import mock
+        from witpae import airgroups
+        import witpae_editor
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        app.group_tree.selection_set("1694")
+        self.root.update()
+        self.assertEqual(app.group_info["formation"].get(), "Squadron")
+        self.assertEqual([(d.get(), s.get()) for d, s in app.schedule_vars],
+                         [("Jul 1942", "36"), ("Jan 1944", "40"), ("Jul 1944", "42"), ("Jan 1945", "36"), ("", "")])
+        app.group_vars["withdraw"].set("14 Dec 43")
+        app.group_vars["return_date"].set("15 Feb 1944")
+        app.group_vars["max_size"].set("30")
+        app.apply_group()
+        g = app.groups[1694]
+        self.assertEqual((g.get("withdraw"), g.get("return_date"), g.get("max_size")), (431214, 440215, 30))
+        self.assertEqual(app.group_vars["withdraw"].get(), "14 Dec 1943")
+        self.assertIn(1694, app.groups_edited)
+        app.schedule_vars[4][0].set("Jul 46")
+        app.schedule_vars[4][1].set("20")
+        app.apply_schedule()
+        self.assertEqual(g.size_schedule()[4], (4607, 20))
+        self.assertEqual(app.schedule_vars[4][0].get(), "Jul 1946")
+        # Bad input is refused and changes nothing.
+        before = bytes(app.save[airgroups.GROUP_SECTION].data)
+        app.schedule_vars[0][0].set("-")
+        with mock.patch.object(witpae_editor.messagebox, "showerror") as err:
+            app.apply_schedule()
+        self.assertTrue(err.called)
+        app.group_vars["withdraw"].set("31 Feb 1943")
+        with mock.patch.object(witpae_editor.messagebox, "showerror") as err:
+            app.apply_group()
+        self.assertTrue(err.called)
+        self.assertEqual(bytes(app.save[airgroups.GROUP_SECTION].data), before)
+        # Groups that have not arrived are still editable for schedule data.
+        app.group_tree.selection_set("2")
+        self.root.update()
+        app.schedule_vars[0][0].set("Mar 42")
+        app.schedule_vars[0][1].set("12")
+        app.apply_schedule()
+        self.assertEqual(app.groups[2].size_schedule()[0], (4203, 12))
+
     def test_land_units_tab_edit_applies(self):
         from unittest import mock
         import witpae_editor
