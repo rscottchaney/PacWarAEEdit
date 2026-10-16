@@ -1,0 +1,269 @@
+"""Task force and port ship chains (sections 0x08, 0x13 and 0x46).
+
+Every ship sits in exactly one chain: the chain of its task force (ship u16 at
+62) or, when docked outside a task force, the chain of its port (u16 at 60).
+Each chain is a doubly linked list through the ship records (next at 64,
+previous at 66, 0 ends it). The location record of the TF or port holds the
+ship count (656) and the last ship of the chain (818). The TF table (0x46)
+holds each TF's flagship at 44. The layout was mapped by diffing in-game
+saves; moves made here are not yet verified in-game.
+"""
+
+import struct
+from collections import namedtuple
+
+from . import shiprecords
+from .airgroups import SHIP_RECORD_COUNT, SHIP_RECORD_SIZE, SHIP_SECTION
+from .bases import (LOCATION_SECTION, NAME_SIZE, RECORD_COUNT, RECORD_SIZE as LOCATION_RECORD_SIZE, SIDES,
+                    TYPE_OFFSET, decode_name, is_place, list_places, place_hex, place_side_id)
+from .factories import _plain_name
+
+TF_SECTION = 0x46
+TF_RECORD_SIZE = 556
+TF_BASE_ID = 14000
+TF_TYPE = 12
+FLAGSHIP_OFFSET = 44
+NEXT_OFFSET = 64
+PREV_OFFSET = 66
+COUNT_OFFSET = 656
+LAST_OFFSET = 818
+
+Destination = namedtuple("Destination", "id label kind")  # kind: "tf" or "port"
+
+
+def _u16(data, pos):
+    return struct.unpack_from("<H", data, pos)[0]
+
+
+def _ship(save, ship_id, offset):
+    return _u16(save[SHIP_SECTION].data, ship_id * SHIP_RECORD_SIZE + offset)
+
+
+def _put_ship(save, ship_id, offset, value):
+    struct.pack_into("<H", save[SHIP_SECTION].data, ship_id * SHIP_RECORD_SIZE + offset, value)
+
+
+def _loc(save, loc_id, offset):
+    return _u16(save[LOCATION_SECTION].data, loc_id * LOCATION_RECORD_SIZE + offset)
+
+
+def _put_loc(save, loc_id, offset, value):
+    struct.pack_into("<H", save[LOCATION_SECTION].data, loc_id * LOCATION_RECORD_SIZE + offset, value)
+
+
+def _ship_exists(save, ship_id):
+    return (isinstance(ship_id, int) and not isinstance(ship_id, bool) and 0 <= ship_id < SHIP_RECORD_COUNT
+            and (ship_id + 1) * SHIP_RECORD_SIZE <= len(save[SHIP_SECTION].data)
+            and bool(_plain_name(save[SHIP_SECTION].data, ship_id * SHIP_RECORD_SIZE)))
+
+
+def is_task_force(save, tf_id):
+    """True when tf_id is a TF location record (type 12) with a row in the TF table."""
+    if isinstance(tf_id, bool) or not isinstance(tf_id, int):
+        return False
+    data = save[LOCATION_SECTION].data
+    if not TF_BASE_ID <= tf_id < RECORD_COUNT or (tf_id + 1) * LOCATION_RECORD_SIZE > len(data):
+        return False
+    if (tf_id - TF_BASE_ID + 1) * TF_RECORD_SIZE > len(save[TF_SECTION].data):
+        return False
+    return struct.unpack_from("<h", data, tf_id * LOCATION_RECORD_SIZE + TYPE_OFFSET)[0] == TF_TYPE
+
+
+def ship_side(save, ship_id):
+    nation = save[SHIP_SECTION].data[ship_id * SHIP_RECORD_SIZE + shiprecords.NATION_OFFSET]
+    return "Japanese" if nation in shiprecords.JAPANESE_NATIONS else "Allied"
+
+
+def _name(save, loc_id):
+    start = loc_id * LOCATION_RECORD_SIZE
+    return decode_name(save[LOCATION_SECTION].data[start:start + NAME_SIZE]).strip()
+
+
+def _arrived(save, ship_id):
+    pos = ship_id * SHIP_RECORD_SIZE + shiprecords.ARRIVAL_OFFSET
+    return struct.unpack_from("<I", save[SHIP_SECTION].data, pos)[0] == 0
+
+
+def chain(save, loc_id):
+    """Ship ids of the chain of a TF or port, first to last.
+
+    Raises ValueError on any inconsistency: a broken link, a ship that does not
+    belong to the chain, a count that disagrees with the walk, a last ship
+    that is not the end of the chain.
+    """
+    is_tf = isinstance(loc_id, int) and loc_id >= TF_BASE_ID
+    if not (is_task_force(save, loc_id) if is_tf else is_place(save, loc_id)):
+        raise ValueError(f"location {loc_id!r} is not a task force, base or town")
+    what = f"TF {loc_id}" if is_tf else f"port {loc_id}"
+    count, last = _loc(save, loc_id, COUNT_OFFSET), _loc(save, loc_id, LAST_OFFSET)
+    if count == 0:
+        if last:
+            raise ValueError(f"{what} has no ships but a last ship {last}")
+        return []
+    out = []
+    cur, nxt = last, 0
+    while cur:
+        if len(out) >= count:
+            raise ValueError(f"{what} chain is longer than its ship count {count}")
+        if not _ship_exists(save, cur):
+            raise ValueError(f"{what} chain has an invalid ship {cur}")
+        if _ship(save, cur, NEXT_OFFSET) != nxt:
+            raise ValueError(f"{what} chain is broken at ship {cur}")
+        owner_tf = _ship(save, cur, shiprecords.TASK_FORCE_OFFSET)
+        owner_base = _ship(save, cur, shiprecords.BASE_OFFSET)
+        if (owner_tf != loc_id) if is_tf else (owner_tf != 0 or owner_base != loc_id):
+            raise ValueError(f"ship {cur} is in the {what} chain but is not recorded there")
+        out.append(cur)
+        cur, nxt = _ship(save, cur, PREV_OFFSET), cur
+    if len(out) != count:
+        raise ValueError(f"{what} chain has {len(out)} ships but its count is {count}")
+    out.reverse()
+    return out
+
+
+def _flagship(save, tf_id):
+    return _u16(save[TF_SECTION].data, (tf_id - TF_BASE_ID) * TF_RECORD_SIZE + FLAGSHIP_OFFSET)
+
+
+def _put_flagship(save, tf_id, ship_id):
+    struct.pack_into("<H", save[TF_SECTION].data, (tf_id - TF_BASE_ID) * TF_RECORD_SIZE + FLAGSHIP_OFFSET, ship_id)
+
+
+class TaskForce:
+    """Read view of a TF: id, name, hex, flagship and ships in chain order."""
+
+    def __init__(self, save, tf_id):
+        if not is_task_force(save, tf_id):
+            raise ValueError(f"{tf_id!r} is not a task force")
+        self._save = save
+        self.id = tf_id
+
+    @property
+    def name(self):
+        return _name(self._save, self.id)
+
+    @property
+    def hex(self):
+        return place_hex(self._save, self.id)
+
+    @property
+    def flagship(self):
+        return _flagship(self._save, self.id)
+
+    @property
+    def ships(self):
+        return chain(self._save, self.id)
+
+    @property
+    def ship_count(self):
+        return _loc(self._save, self.id, COUNT_OFFSET)
+
+    @property
+    def side(self):
+        ships = self.ships
+        return ship_side(self._save, ships[0]) if ships else ""
+
+
+def list_task_forces(save):
+    """Every TF with at least one ship, in id order."""
+    return [TaskForce(save, i) for i in range(TF_BASE_ID, RECORD_COUNT)
+            if is_task_force(save, i) and _loc(save, i, COUNT_OFFSET)]
+
+
+def _plan(save, ship_id, dest_id):
+    """Validate a move and return what is needed to write it, or raise ValueError."""
+    if not _ship_exists(save, ship_id):
+        raise ValueError(f"{ship_id!r} is not a ship")
+    if isinstance(dest_id, bool) or not isinstance(dest_id, int):
+        raise ValueError(f"{dest_id!r} is not a destination")
+    if not _arrived(save, ship_id):
+        raise ValueError("ship has not arrived yet")
+    side = ship_side(save, ship_id)
+    src_tf = _ship(save, ship_id, shiprecords.TASK_FORCE_OFFSET)
+    src = src_tf or _ship(save, ship_id, shiprecords.BASE_OFFSET)
+    if not src:
+        raise ValueError("ship is at sea alone and is in no task force or port")
+    dest_is_tf = dest_id >= TF_BASE_ID
+    if not (is_task_force(save, dest_id) if dest_is_tf else is_place(save, dest_id)):
+        raise ValueError(f"{dest_id} is not a task force, base or town")
+    if dest_id == src:
+        raise ValueError("ship is already there")
+    if not src_tf and not dest_is_tf:
+        raise ValueError("a ship cannot move from one port to another")
+    src_ships = chain(save, src)
+    if ship_id not in src_ships:
+        raise ValueError(f"ship {ship_id} is not in its own chain")
+    dest_ships = chain(save, dest_id)
+    if src_tf:
+        if len(src_ships) < 2:
+            raise ValueError("cannot move the last ship out of a task force")
+        if _flagship(save, src) not in src_ships:
+            raise ValueError(f"flagship of TF {src} is not one of its ships")
+    if place_hex(save, src) != place_hex(save, dest_id):
+        raise ValueError("destination is not in the same hex")
+    if dest_is_tf:
+        if not dest_ships:
+            raise ValueError(f"TF {dest_id} has no ships")
+        if _flagship(save, dest_id) not in dest_ships:
+            raise ValueError(f"flagship of TF {dest_id} is not one of its ships")
+        if any(ship_side(save, s) != side for s in dest_ships):
+            raise ValueError("task force belongs to the other side")
+    elif SIDES.get(place_side_id(save, dest_id)) != side:
+        raise ValueError("port belongs to the other side")
+    return src, src_tf, src_ships, dest_is_tf, dest_ships
+
+
+def _write_chain(save, loc_id, ships):
+    """Rewrite links, count and last ship of a chain from its ordered ship list."""
+    for k, s in enumerate(ships):
+        _put_ship(save, s, PREV_OFFSET, ships[k - 1] if k else 0)
+        _put_ship(save, s, NEXT_OFFSET, ships[k + 1] if k + 1 < len(ships) else 0)
+    _put_loc(save, loc_id, COUNT_OFFSET, len(ships))
+    _put_loc(save, loc_id, LAST_OFFSET, ships[-1] if ships else 0)
+
+
+def move_ship(save, ship_id, destination):
+    """Move a ship to another TF (id 14000+) or to a port (location id), as the game does.
+
+    Everything is validated before anything is written; ValueError on refusal.
+    """
+    src, src_tf, src_ships, dest_is_tf, dest_ships = _plan(save, ship_id, destination)
+    new_src = [s for s in src_ships if s != ship_id]
+    # A port appends at the end; a TF inserts before the first larger id (ascending order;
+    # a few saved TFs are not sorted, so this is not a plain sort).
+    at = len(dest_ships)
+    if dest_is_tf:
+        at = next((k for k, s in enumerate(dest_ships) if s > ship_id), at)
+    new_dest = dest_ships[:at] + [ship_id] + dest_ships[at:]
+    if src_tf and _flagship(save, src) == ship_id:
+        _put_flagship(save, src, new_src[-1])
+    _write_chain(save, src, new_src)
+    _write_chain(save, destination, new_dest)
+    _put_ship(save, ship_id, shiprecords.TASK_FORCE_OFFSET, destination if dest_is_tf else 0)
+    _put_ship(save, ship_id, shiprecords.BASE_OFFSET, 0 if dest_is_tf else destination)
+
+
+def destinations(save, ship_id):
+    """Valid destinations for a ship as Destination tuples (TFs first, then ports); [] if none."""
+    if not _ship_exists(save, ship_id):
+        return []
+    src = _ship(save, ship_id, shiprecords.TASK_FORCE_OFFSET) or _ship(save, ship_id, shiprecords.BASE_OFFSET)
+    if not src or not (is_task_force(save, src) if src >= TF_BASE_ID else is_place(save, src)):
+        return []
+    here = place_hex(save, src)
+    # Only candidates in the ship's hex are worth the full validation in _plan.
+    candidates = [t.id for t in list_task_forces(save)] + [p.id for p in list_places(save)]
+    out = []
+    for dest in candidates:
+        if place_hex(save, dest) != here:
+            continue
+        try:
+            _plan(save, ship_id, dest)
+        except ValueError:
+            continue
+        if dest >= TF_BASE_ID:
+            label = " ".join(p for p in (f"TF {dest}", _name(save, dest)) if p)
+            out.append(Destination(dest, f"{label} ({_loc(save, dest, COUNT_OFFSET)} ships)", "tf"))
+        else:
+            out.append(Destination(dest, f"{_name(save, dest)} (port)", "port"))
+    return out
