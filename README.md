@@ -110,7 +110,7 @@ The Task Forces tab lists every task force that has ships (location records of
 type 12 from section 0x13, with a row in the TF table, section 0x46). Search by
 name and filter by side (taken from the TF's ships). The Location column shows
 the name of the base or town in the TF's hex as `<name> (in port)`, else
-`at sea x,y`. Select a TF to see its ships in chain order with their fuel
+`at sea x,y`; the Mission and Destination columns show its orders. Select a TF to see its ships in chain order with their fuel
 (current/class maximum), system, flotation and engine damage and fires; the
 flagship is marked. Any edit highlights the TF row and the affected ships in the
 Ships tab.
@@ -122,8 +122,11 @@ Ships tab.
 | Move the selected ship ("Move to" and Add ship from port) | verified in-game, same rules as the Ships tab moves; Add ship from port offers ships docked at the base in the TF's hex that may join |
 | Repair all ships (clears fires and damage of every ship; ships without damage are untouched) | verified in-game |
 | Refuel all ships (sets each ship's fuel to its class's fuel; never lowers fuel, ships already full are untouched) | verified in-game |
+| Mission (combobox `NN - label` and Set; u8 at offset 349 of the TF table row, only that byte changes). Codes: 1 Air Combat, 2 Surface Combat, 3 Bombardment?, 4 Fast Transport?, 5 Transport, 6 Replenishment, 7 Mine Laying?, 8 Sub Patrol, 9 Sub Minelaying?, 10 Sub Transport?, 11 Cargo, 12 Barge, 13 Air Transport, 14 CV Escort?, 15 Amphibious, 16 ASW Combat, 17 PT Boat, 18 Tanker, 19 Mine Sweeping?, 20 Landing Craft?, 21 Midget Submarine, 22 Support, 23 Local Minesweeper, 24 Midget Sub Carrier, 25 Follow?. A "?" marks a code whose label was not seen in a game save. A stored code outside 1..25 is shown as its number and kept | verified in-game |
+| Home port (combobox of the bases and towns of the TF's side that have a port, and Set; u16 at 54, plus the flag bits the game sets with it at 8, 322 and 490) | verified in-game |
+| Destination (a text filter, a combobox of every base and town of either side, and Set; refused for the place in the TF's own hex). The editor writes a two-hex route (the TF's hex, then the destination's) and the game plans the real path itself | verified in-game, with a docked TF and a TF at sea |
 
-The model functions are in `witpae/taskforces.py` (`set_flagship`, `repair_task_force`, `refuel_task_force`, `move_ship`).
+The model functions are in `witpae/taskforces.py` (`set_flagship`, `set_mission`, `set_home_port`, `set_destination`, `repair_task_force`, `refuel_task_force`, `move_ship`).
 
 ## Air Groups
 

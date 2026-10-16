@@ -309,7 +309,7 @@ class GuiSmokeTests(unittest.TestCase):
         app.tf_search_var.set("minesweepers")
         self.assertEqual(app.tf_tree.get_children(), ("14409",))
         self.assertEqual(app.tf_tree.item("14409", "values"),
-                         ("14409", "USN minesweepers", "Allied", "Pearl Harbor (in port)", "4", "Elliot"))
+                         ("14409", "USN minesweepers", "Allied", "Pearl Harbor (in port)", "Surface Combat", "-", "4", "Elliot"))
         app.sort_tfs_by("ships")
         app.sort_tfs_by("location")
         app.tf_tree.selection_set("14409")
@@ -367,6 +367,51 @@ class GuiSmokeTests(unittest.TestCase):
             app.refuel_tf()
             err.assert_not_called()
         self.assertIn(4324, app.shiprecs_edited)
+
+    def test_task_force_orders(self):
+        from unittest import mock
+        import witpae_editor
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        self.root.update()
+        app.tf_tree.selection_set("14409")
+        self.root.update()
+        self.assertEqual(app.tf_info["mission"].get(), "02 - Surface Combat")
+        self.assertEqual(app.tf_info["home_port"].get(), "Pearl Harbor (584)")
+        self.assertEqual(app.tf_info["destination"].get(), "-")
+        with mock.patch.object(witpae_editor.messagebox, "showerror") as err:
+            app.tf_mission_var.set("23 - Local Minesweeper")
+            app.set_tf_mission()
+            self.assertEqual(app.tf_tree.set("14409", "mission"), "Local Minesweeper")
+            self.assertEqual(app.tf_info["mission"].get(), "23 - Local Minesweeper")
+            self.assertIn(14409, app.tfs_edited)
+            self.assertTrue(app.dirty)
+            home = app.tf_home_box.cget("values")
+            self.assertIn("Lahaina (577)", home)
+            self.assertNotIn("Akita (222)", home)  # the other side's port
+            self.assertNotIn("Boise (501)", home)  # no port
+            app.tf_home_var.set("Lahaina (577)")
+            app.set_tf_home_port()
+            self.assertEqual(app.taskforces[14409].home_port, 577)
+            self.assertEqual(app.tf_info["home_port"].get(), "Lahaina (577)")
+            total = len(app.tf_dest_box.cget("values"))
+            self.assertEqual(total, 1052)
+            app.tf_dest_filter_var.set("LAHAI")
+            self.assertEqual(app.tf_dest_box.cget("values"), ("Lahaina (577, Allied)",))
+            app.tf_dest_var.set("Lahaina (577, Allied)")
+            app.set_tf_destination()
+            self.assertEqual(app.taskforces[14409].destination, 577)
+            self.assertEqual(app.tf_tree.set("14409", "destination"), "Lahaina")
+            self.assertEqual(app.tf_info["destination"].get(), "Lahaina (577)")
+            app.tf_dest_filter_var.set("")
+            self.assertEqual(len(app.tf_dest_box.cget("values")), total)
+            err.assert_not_called()
+            # A refusal shows an error and writes nothing.
+            app.tf_dest_filter_var.set("pearl")
+            app.tf_dest_var.set("Pearl Harbor (584, Allied)")
+            app.set_tf_destination()
+            err.assert_called_once()
+            self.assertEqual(app.taskforces[14409].destination, 577)
 
     def test_air_groups_tab_edit_applies(self):
         from witpae import airgroups

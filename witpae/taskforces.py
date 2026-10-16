@@ -23,10 +23,38 @@ TF_RECORD_SIZE = 556
 TF_BASE_ID = 14000
 TF_TYPE = 12
 FLAGSHIP_OFFSET = 44
+PORT_OFFSET = 422  # port size in the location record, as in bases.FIELDS
 NEXT_OFFSET = 64
 PREV_OFFSET = 66
 COUNT_OFFSET = 656
 LAST_OFFSET = 818
+
+# Orders, in the TF table row (0x46). Codes marked "?" were not seen in a game save.
+MISSION_OFFSET = 349
+HOME_PORT_OFFSET = 54
+DEST_OFFSET = 56
+DEST_COPY_OFFSET = 58
+ROUTE_OFFSET = 118
+ROUTE_FLAGS_OFFSET = 318
+ROUTE_LENGTH_OFFSET = 320
+ORDER_FLAGS_OFFSET = 322
+ORDER_MARK_OFFSET = 490
+ORDER_BYTE_OFFSET = 8
+HOME_PORT_BYTE_BITS = 0x50
+DEST_BYTE_BITS = 0xA0
+HOME_PORT_FLAGS = 2
+DEST_FLAGS = 4
+# Location record (0x13) of the TF: destination id, destination hex, and the hex again.
+LOC_DEST_OFFSET = 660
+LOC_DEST_HEX_OFFSET = 662
+LOC_DEST_HEX_COPY_OFFSET = 760
+MISSIONS = {
+    1: "Air Combat", 2: "Surface Combat", 3: "Bombardment?", 4: "Fast Transport?", 5: "Transport",
+    6: "Replenishment", 7: "Mine Laying?", 8: "Sub Patrol", 9: "Sub Minelaying?", 10: "Sub Transport?",
+    11: "Cargo", 12: "Barge", 13: "Air Transport", 14: "CV Escort?", 15: "Amphibious", 16: "ASW Combat",
+    17: "PT Boat", 18: "Tanker", 19: "Mine Sweeping?", 20: "Landing Craft?", 21: "Midget Submarine",
+    22: "Support", 23: "Local Minesweeper", 24: "Midget Sub Carrier", 25: "Follow?",
+}
 
 Destination = namedtuple("Destination", "id label kind")  # kind: "tf" or "port"
 
@@ -129,8 +157,16 @@ def _put_flagship(save, tf_id, ship_id):
     struct.pack_into("<H", save[TF_SECTION].data, (tf_id - TF_BASE_ID) * TF_RECORD_SIZE + FLAGSHIP_OFFSET, ship_id)
 
 
+def _tf_u16(save, tf_id, offset):
+    return _u16(save[TF_SECTION].data, (tf_id - TF_BASE_ID) * TF_RECORD_SIZE + offset)
+
+
+def _put_tf_u16(save, tf_id, offset, value):
+    struct.pack_into("<H", save[TF_SECTION].data, (tf_id - TF_BASE_ID) * TF_RECORD_SIZE + offset, value)
+
+
 class TaskForce:
-    """Read view of a TF: id, name, hex, flagship and ships in chain order."""
+    """Read view of a TF: id, name, hex, flagship, orders and ships in chain order."""
 
     def __init__(self, save, tf_id):
         if not is_task_force(save, tf_id):
@@ -163,6 +199,23 @@ class TaskForce:
         ships = self.ships
         return ship_side(self._save, ships[0]) if ships else ""
 
+    @property
+    def mission(self):
+        return self._save[TF_SECTION].data[(self.id - TF_BASE_ID) * TF_RECORD_SIZE + MISSION_OFFSET]
+
+    @property
+    def mission_label(self):
+        return MISSIONS.get(self.mission, f"Unknown ({self.mission})")
+
+    @property
+    def home_port(self):
+        return _tf_u16(self._save, self.id, HOME_PORT_OFFSET)
+
+    @property
+    def destination(self):
+        """Destination id from the TF table; 0 means no destination."""
+        return _tf_u16(self._save, self.id, DEST_OFFSET)
+
 
 def set_flagship(save, tf_id, ship_id):
     """Make ship_id (a member of the TF) its flagship. ValueError, nothing written, on refusal."""
@@ -173,6 +226,90 @@ def set_flagship(save, tf_id, ship_id):
         raise ValueError(f"{ship_id!r} is not a ship of TF {tf_id}")
     if _flagship(save, tf_id) != ship_id:
         _put_flagship(save, tf_id, ship_id)
+
+
+def _checked_tf(save, tf_id):
+    """Validate a TF and its chain; returns the ships."""
+    if not is_task_force(save, tf_id):
+        raise ValueError(f"{tf_id!r} is not a task force")
+    return chain(save, tf_id)
+
+
+def _int(value, what):
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{value!r} is not a valid {what}")
+    return value
+
+
+def port_size(save, place_id):
+    """Port size of a base (0 for towns and bases without a port)."""
+    return struct.unpack_from("<h", save[LOCATION_SECTION].data, place_id * LOCATION_RECORD_SIZE + PORT_OFFSET)[0]
+
+
+def set_mission(save, tf_id, code):
+    """Set the TF's mission code (1..25). Writes only the mission byte; ValueError on refusal."""
+    _checked_tf(save, tf_id)
+    code = _int(code, "mission code")
+    if not 1 <= code <= max(MISSIONS):
+        raise ValueError(f"mission code must be between 1 and {max(MISSIONS)}")
+    pos = (tf_id - TF_BASE_ID) * TF_RECORD_SIZE + MISSION_OFFSET
+    save[TF_SECTION].data[pos] = code
+
+
+def _or_byte(save, tf_id, bits):
+    save[TF_SECTION].data[(tf_id - TF_BASE_ID) * TF_RECORD_SIZE + ORDER_BYTE_OFFSET] |= bits
+
+
+def _or_flags(save, tf_id, bits):
+    pos = ORDER_FLAGS_OFFSET
+    _put_tf_u16(save, tf_id, pos, _tf_u16(save, tf_id, pos) | bits)
+
+
+def set_home_port(save, tf_id, place_id):
+    """Set the TF's home port: a base or town of its side that has a port. ValueError on refusal."""
+    _checked_tf(save, tf_id)
+    place_id = _int(place_id, "home port")
+    if not is_place(save, place_id):
+        raise ValueError(f"{place_id} is not a base or town")
+    if SIDES.get(place_side_id(save, place_id)) != TaskForce(save, tf_id).side:
+        raise ValueError("home port belongs to the other side")
+    if port_size(save, place_id) <= 0:
+        raise ValueError(f"{_name(save, place_id)} has no port")
+    if _tf_u16(save, tf_id, HOME_PORT_OFFSET) == place_id:
+        return
+    _put_tf_u16(save, tf_id, HOME_PORT_OFFSET, place_id)
+    _or_byte(save, tf_id, HOME_PORT_BYTE_BITS)
+    _or_flags(save, tf_id, HOME_PORT_FLAGS)
+    _put_tf_u16(save, tf_id, ORDER_MARK_OFFSET, 2)
+
+
+def set_destination(save, tf_id, place_id):
+    """Order the TF to a base or town of either side, as the game does. ValueError on refusal.
+
+    The route is just the TF's hex and the destination hex; the game plans the real path.
+    """
+    _checked_tf(save, tf_id)
+    place_id = _int(place_id, "destination")
+    if not is_place(save, place_id):
+        raise ValueError(f"{place_id} is not a base or town")
+    here, there = place_hex(save, tf_id), place_hex(save, place_id)
+    if here == there:
+        raise ValueError("task force is already in the destination's hex")
+    if _tf_u16(save, tf_id, DEST_OFFSET) == place_id:
+        return
+    _put_tf_u16(save, tf_id, DEST_OFFSET, place_id)
+    _put_tf_u16(save, tf_id, DEST_COPY_OFFSET, place_id)
+    for k, v in enumerate(here + there):
+        _put_tf_u16(save, tf_id, ROUTE_OFFSET + 2 * k, v & 0xFFFF)
+    _put_tf_u16(save, tf_id, ROUTE_LENGTH_OFFSET, 2)
+    _put_tf_u16(save, tf_id, ROUTE_FLAGS_OFFSET, 0)
+    _or_byte(save, tf_id, DEST_BYTE_BITS)
+    _or_flags(save, tf_id, DEST_FLAGS)
+    _put_tf_u16(save, tf_id, ORDER_MARK_OFFSET, 2)
+    _put_loc(save, tf_id, LOC_DEST_OFFSET, place_id)
+    for off in (LOC_DEST_HEX_OFFSET, LOC_DEST_HEX_COPY_OFFSET):
+        _put_loc(save, tf_id, off, there[0] & 0xFFFF)
+        _put_loc(save, tf_id, off + 2, there[1] & 0xFFFF)
 
 
 def _members(save, tf_id):
