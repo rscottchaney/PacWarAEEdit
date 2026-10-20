@@ -761,19 +761,41 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertEqual(app.industry_tree.set("Heavy Industry", "input"), "145,480 resources, 14,548 fuel")
         self.assertEqual(app.industry_tree.set("Aircraft", "input"), "-")
         self.assertEqual(app.balance_tree.set("supply", "produced"), "40,049")
-        self.assertEqual(app.balance_tree.set("manpower", "stored"), "?")
-        self.assertEqual(app.balance_tree.set("oil", "net"), "-15,320")
+        self.assertEqual(app.balance_tree.set("manpower", "stored"), "17,555")
+        self.assertEqual(app.balance_tree.set("hi", "stored"), "37,846")
+        self.assertEqual(app.balance_tree.set("supply", "allotted"), "98,992")
+        self.assertEqual(app.balance_tree.set("supply", "net"), "+139,041")
+        self.assertEqual(app.balance_tree.set("oil", "net"), "-15,270")
         self.assertEqual(app.balance_tree.set("oil", "days"), "10")
         self.assertEqual(app.balance_tree.set("fuel", "days"), "-")
         app.industry_region_var.set("Continental US")
         app.refresh_industry_report()
         self.assertNotEqual(app.industry_tree.set("Resources", "count"), "252")
+        self.assertEqual(app.balance_tree.set("manpower", "stored"), "17,555")  # side-wide pool
+        self.assertEqual(app.balance_tree.set("manpower", "days"), "-")
+        app.industry_side_var.set("Japanese")
+        app.industry_region_var.set("All regions")
+        app.refresh_industry_report()
+        self.assertEqual(app.balance_tree.set("armament", "stored"), "18,387")
+        self.assertEqual(app.balance_tree.set("supply", "allotted"), "0")
+        app.industry_side_var.set("Allied")
+        app.industry_region_var.set("Continental US")
+        app.refresh_industry_report()
         app.industry_side_var.set("Japanese")
         app.industry_region_var.set("All regions")
         app.refresh_industry_report()
         self.assertIn("Oil", app.industry_tree.get_children())
         self.assertNotEqual(app.industry_tree.set("Oil", "size"), "6,133")
         app.industry_side_var.set("Allied")
+        app.refresh_industry_report()
+
+        # Unreadable pools (section missing) must not stop the report; pool rows show "?".
+        from witpae import industry as industry_module
+        saved = app.save._by_id.pop(industry_module.POOL_SECTION)
+        app.refresh_industry_report()
+        self.assertEqual(app.balance_tree.set("manpower", "stored"), "?")
+        self.assertEqual(app.balance_tree.set("supply", "produced"), "40,049")
+        app.save._by_id[industry_module.POOL_SECTION] = saved
         app.refresh_industry_report()
 
         # Factories
@@ -807,6 +829,8 @@ class GuiSmokeTests(unittest.TestCase):
         rows = len(app.raw_tree.get_children())
         self.assertIn("926", app.raw_tree.get_children())  # Corunna Downs, a minor place
         self.assertEqual(app.raw_tree.set("926", "kind"), "Minor")
+        self.assertEqual(app.raw_tree.set("615", "allotment"), "40,000 fuel, 65,000 supply")  # Eastern USA
+        self.assertEqual(app.raw_tree.set("926", "allotment"), "-")
         shortest = [app.raw_tree.set(i, "shortest") for i in app.raw_tree.get_children()]
         self.assertTrue(shortest[0].endswith(("day", "days")) and shortest[0] != "-")
         self.assertEqual(shortest[-1], "-")

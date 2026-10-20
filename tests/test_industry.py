@@ -2,7 +2,7 @@ import os
 import unittest
 
 from witpae import bases, factories, industry, regions
-from witpae.container import SaveFile
+from witpae.container import SaveFile, SaveFormatError
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 SAVE_015 = os.path.join(DATA_DIR, "going2_411210.pws")
@@ -83,7 +83,9 @@ class IndustryReportTests(unittest.TestCase):
     def test_allied_balance(self):
         _types, balance = industry.summarize(self.allied)
         rows = by_material(balance)
-        self.assertEqual([r.label for r in balance], ["Oil", "Resources", "Fuel", "Supply", "Manpower", "HI points"])
+        self.assertEqual([r.label for r in balance],
+                         ["Oil", "Resources", "Fuel", "Supply", "Manpower", "HI points", "Armament points",
+                          "Vehicle points", "Naval points", "Merchant points"])
         self.assertEqual((rows["resources"].produced, rows["resources"].used), (519380, 413020))
         self.assertEqual(rows["resources"].used, 7274 * 20 + 17836 * 15)
         self.assertEqual((rows["oil"].produced, rows["oil"].used), (61330, 76650))
@@ -93,12 +95,65 @@ class IndustryReportTests(unittest.TestCase):
         self.assertEqual(rows["manpower"].produced, 1174 * 5)
         self.assertEqual(rows["hi"].produced, 7274 * 2)
         # Oil runs down, so days left is stored / -net; the others do not.
-        self.assertEqual(rows["oil"].net, -15320)
-        self.assertAlmostEqual(rows["oil"].days, rows["oil"].stored / 15320)
+        self.assertEqual((rows["oil"].allotted, rows["oil"].net), (50, -15270))
+        self.assertAlmostEqual(rows["oil"].days, rows["oil"].stored / 15270)
+        self.assertEqual((rows["supply"].allotted, rows["supply"].used, rows["supply"].net), (98992, 0, 139041))
+        self.assertEqual((rows["fuel"].allotted, rows["fuel"].net), (69350, 123787))
         self.assertEqual(rows["oil"].stored, sum(p.base.get("oil") for p in self.allied))
         self.assertIsNone(rows["resources"].days)
-        self.assertIsNone(rows["manpower"].stored)
+        self.assertIsNone(rows["manpower"].stored)  # no pools given
         self.assertIsNone(rows["hi"].stored)
+
+    def test_pool_rows(self):
+        pools = industry.side_pools(self.save)[1]
+        _types, balance = industry.summarize(self.allied, pools)
+        rows = by_material(balance)
+        self.assertEqual({k: rows[k].stored for k in industry.POOLS},
+                         {"manpower": 17555, "hi": 37846, "naval": 0, "merchant": 0, "armament": 0, "vehicle": 0})
+        self.assertEqual((rows["hi"].produced, rows["hi"].used, rows["hi"].net), (14548, 0, 14548))
+        self.assertIsNone(rows["hi"].days)
+        # A pool that is used faster than it is made has days left, unless a region is selected.
+        sf = SaveFile.load(SAVE_015)
+        places = industry.filter_places(industry.list_industry_places(sf), "Allied")
+        us = industry.filter_places(places, region_id=17)
+        rows = by_material(industry.summarize(us, {"hi": 100, "manpower": 5}, regional=True)[1])
+        self.assertEqual(rows["hi"].stored, 100)
+        self.assertTrue(all(rows[k].days is None for k in industry.POOLS))
+        # Without a region filter the same pool does get days left once its net is negative.
+        rows = by_material(industry.summarize(us, {"hi": 100})[1])
+        self.assertEqual(rows["hi"].days is None, rows["hi"].net >= 0)
+
+    def test_side_pools(self):
+        pools = industry.side_pools(self.save)
+        self.assertEqual(pools[1], {"manpower": 17555, "hi": 37846, "naval": 0, "merchant": 0, "armament": 0,
+                                    "vehicle": 0})
+        self.assertEqual(pools[0], {"manpower": 27426, "hi": 58193, "naval": 1, "merchant": 1113,
+                                    "armament": 18387, "vehicle": 20})
+
+    def test_side_pools_bad_section(self):
+        sf = SaveFile.load(SAVE_015)
+        sf[industry.POOL_SECTION].data = sf[industry.POOL_SECTION].data[:8000]
+        with self.assertRaises(SaveFormatError):
+            industry.side_pools(sf)
+        del sf._by_id[industry.POOL_SECTION]
+        with self.assertRaises(SaveFormatError):
+            industry.side_pools(sf)
+
+    def test_allotments(self):
+        given = {p.id: industry.allotment(p) for p in self.places if industry.allotment(p)}
+        self.assertEqual(len(given), 40)
+        self.assertEqual({p.id for p in self.places if industry.allotment(p)} - {p.id for p in self.allied}, set())
+        for key, total in (("supply", 98992), ("fuel", 69350), ("oil", 50)):
+            self.assertEqual(sum(a.get(key, 0) for a in given.values()), total, key)
+        self.assertEqual(industry.allotment(next(p for p in self.places if p.id == 615)),
+                         {"supply": 65000, "fuel": 40000})
+        self.assertEqual(industry.allotment(next(p for p in self.places if p.id == 819)),
+                         {"supply": 9000, "fuel": 1000})
+        self.assertEqual(industry.allotment(next(p for p in self.places if p.id == 614)),
+                         {"supply": 5000, "fuel": 8000})
+        top = sorted(given, key=lambda i: -given[i].get("supply", 0))[:3]
+        self.assertEqual(top, [615, 819, 614])
+        self.assertEqual([p for p in industry.filter_places(self.places, "Japanese") if industry.allotment(p)], [])
 
     def test_production_off_contributes_no_flows(self):
         sf = SaveFile.load(SAVE_015)
@@ -134,6 +189,15 @@ class IndustryReportTests(unittest.TestCase):
         rows = industry.raw_rows(self.allied)
         by_id = {r.place.id: r for r in rows}
         self.assertIn(926, by_id)
+        us = by_id[615]  # Eastern USA
+        self.assertEqual(us.allotment, {"supply": 65000, "fuel": 40000})
+        flows = [industry.factory_flow(f) for f in factories.list_factories(us.place.base)]
+        self.assertEqual(us.net["supply"], 65000 + sum(fl.makes.get("supply", 0) - fl.uses.get("supply", 0)
+                                                       for fl in flows))
+        # A place with an allotment but no producing factory is still listed by default.
+        sourced = [r for r in rows if r.allotment and not any(
+            f.size > 0 and industry.factory_flow(f).makes for f in factories.list_factories(r.place.base))]
+        self.assertTrue(sourced)
         self.assertGreater(len(industry.raw_rows(self.allied, only_industry=False)), len(rows))
         for r in rows:
             if r.shortest:
