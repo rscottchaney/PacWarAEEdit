@@ -202,14 +202,17 @@ BALANCE_COLUMNS = [
     ("label", "Material", 130, False, lambda r: r.label),
     ("stored", "Stored", 100, True, lambda r: r.stored),
     ("produced", "Produced/day", 100, True, lambda r: r.produced),
+    ("allotted", "Allotted/day", 100, True, lambda r: r.allotted),
     ("used", "Used/day", 100, True, lambda r: r.used),
     ("net", "Net/day", 100, True, lambda r: r.net),
     ("days", "Days left", 80, True, lambda r: r.days),
 ]
-BALANCE_TEXT = {"stored": lambda v: "?" if v is None else _num(v), "produced": _num, "used": _num, "net": _rate,
+BALANCE_TEXT = {"stored": lambda v: "?" if v is None else _num(v), "produced": _num, "allotted": _num, "used": _num,
+                "net": _rate,
                 "days": _days_text}
-INDUSTRY_NOTE = ("Factory flows only (game manual 13.2). Not included: supply used by units, fuel used by ships, "
-                 "daily supply/fuel allotments, and the side-wide HI and manpower pools.")
+INDUSTRY_NOTE = ("Factory flows (game manual 13.2) plus the places' daily supply, fuel and oil allotments. Not "
+                 "included: supply used by units, fuel used by ships. Manpower and the point rows are side-wide pools, "
+                 "so they show no days left when a region is selected.")
 
 FACTORY_COLUMNS = [
     ("id", "Place ID", 60, True, lambda r: r.place.id),
@@ -235,6 +238,7 @@ RAW_COLUMNS = [
     ("kind", "Kind", 50, False, lambda r: r.place.kind),
     ("side", "Side", 70, False, lambda r: r.place.base.side),
     ("region", "Region", 110, False, lambda r: r.place.region),
+    ("allotment", "Allotment/day", 170, False, lambda r: industry.flow_text(r.allotment)),
     ("oil", "Oil", 80, True, lambda r: r.stored["oil"]),
     ("oil_day", "Oil/day", 70, True, lambda r: r.net["oil"]),
     ("resources", "Resources", 80, True, lambda r: r.stored["resources"]),
@@ -249,8 +253,8 @@ RAW_COLUMNS = [
 RAW_COLUMN_BY_ID = {c[0]: c for c in RAW_COLUMNS}
 RAW_TEXT = {"oil": _num, "resources": _num, "fuel": _num, "supply": _num, "oil_day": _rate,
             "resources_day": _rate, "fuel_day": _rate, "supply_day": _rate, "shortest": _shortest_text}
-RAW_NOTE = ("Per place, from that place's own factories. The game moves oil, resources and fuel overland between "
-            "connected places, so a local shortfall does not always stop a factory.")
+RAW_NOTE = ("Per place, from that place's own factories and daily allotment. The game moves oil, resources and "
+            "fuel overland between connected places, so a local shortfall does not always stop a factory.")
 
 REGION_ALL = "All regions"
 
@@ -546,11 +550,11 @@ class EditorApp:
         top.pack(side="top", fill="both", expand=True, pady=(4, 0))
         self.industry_tree = self._report_tree(top, INDUSTRY_COLUMNS, lambda c: None, ("group", "output", "input"),
                                                lambda: None)
-        ttk.Label(ind, text="Daily balance (factories only)").pack(side="top", anchor="w", pady=(6, 0))
+        ttk.Label(ind, text="Daily balance (factories and allotments)").pack(side="top", anchor="w", pady=(6, 0))
         low = ttk.Frame(ind)
         low.pack(side="top", fill="x")
         self.balance_tree = self._report_tree(low, BALANCE_COLUMNS, lambda c: None, ("label",), lambda: None)
-        self.balance_tree.configure(height=6)
+        self.balance_tree.configure(height=10)
 
         fac = ttk.Frame(self.reports_notebook, padding=4)
         self.reports_notebook.add(fac, text="Factories")
@@ -2817,8 +2821,14 @@ class EditorApp:
                                       self.region_ids[region_var.get()])
 
     def refresh_industry_report(self):
-        type_rows, balance = industry.summarize(self._industry_places_for(self.industry_side_var,
-                                                                          self.industry_region_var))
+        side_id = {name: sid for sid, name in bases.SIDES.items()}[self.industry_side_var.get()]
+        try:
+            pools = industry.side_pools(self.save)[side_id]
+        except SaveFormatError:
+            pools = None
+        type_rows, balance = industry.summarize(
+            self._industry_places_for(self.industry_side_var, self.industry_region_var), pools,
+            self.region_ids[self.industry_region_var.get()] is not None)
         for tree, columns, texts, rows, key in (
                 (self.industry_tree, INDUSTRY_COLUMNS, INDUSTRY_TEXT, type_rows, lambda r: r.group),
                 (self.balance_tree, BALANCE_COLUMNS, BALANCE_TEXT, balance, lambda r: r.material)):

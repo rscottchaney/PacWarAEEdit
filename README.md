@@ -207,9 +207,9 @@ below. They are computed from the factory slots of every named location of type
 
 | Report | What it shows |
 |---|---|
-| Industry | Side (Allied or Japanese; sums across sides are meaningless) and Region filters. One row per factory type present: factories (slots), size, damaged, size with production off, size with repair off, daily output and daily input. Below it a "Daily balance (factories only)" table for Oil, Resources, Fuel, Supply, Manpower and HI points: stored (the places' own stocks; `?` for manpower and HI, whose side-wide pools are not mapped), produced/day, used/day, net/day and days left (stored / -net when net is negative) |
+| Industry | Side (Allied or Japanese; sums across sides are meaningless) and Region filters. One row per factory type present: factories (slots), size, damaged, size with production off, size with repair off, daily output and daily input. Below it a "Daily balance" table for Oil, Resources, Fuel, Supply, Manpower, HI, Armament, Vehicle, Naval and Merchant points: stored (the places' own stocks for the first four, the side's production pool for the rest; `?` if the pools cannot be read), produced/day (factories), allotted/day, used/day, net/day (produced + allotted - used) and days left (stored / -net when net is negative; `-` for the pool rows when a region is selected, since a pool is side-wide) |
 | Factories | One row per factory slot: place, kind, side, region, slot, factory, size, damage, production and repair switches, daily output and input. Side, Region and Factory type filters and "Only damaged or switched off" (damage, production off or repair off). Double-click jumps to the place in the Bases tab |
-| Raw materials | One row per place: oil, resources, fuel and supply stored, their net daily rate from that place's own factories, and "Shortest", the material that runs out first at that rate (for example `Resources: 3 days`, `-` when nothing runs down). Default sort is shortest first; "Only places with industry" (default on) keeps places with at least one producing factory. Double-click jumps to the place in the Bases tab |
+| Raw materials | One row per place: oil, resources, fuel and supply stored, their net daily rate from that place's own factories, and "Shortest", the material that runs out first at that rate (for example `Resources: 3 days`, `-` when nothing runs down). Default sort is shortest first; the Allotment/day column and the /day columns include the place's daily allotment; "Only places with industry" (default on) keeps places with at least one producing factory or a daily allotment. Double-click jumps to the place in the Bases tab |
 
 Production rules (game manual 13.2), per factory size point per day, only for
 factories with production switched on (production off uses and makes nothing).
@@ -231,13 +231,24 @@ subtracted.
 | Repair Shipyard (524) | - | - |
 | Aircraft (2000+) and engine (below 500) factories | HI, unknown (shown as `-`) | size / 30 aircraft or engines |
 
-Not included: supply used by units, fuel used by ships, daily supply and fuel
-allotments, and the side-wide HI and manpower pools. There is no "not building"
-estimate. For the Allied side of the sample save the totals match WitPTracker's
-factory counts and sizes (Resources 252 factories / size 25969, Manpower 181 /
-1174, Light Industry 138 / 17836); WitPTracker also adds daily allotments that are
-not stored in the fields known here, so its oil, fuel and supply production are
-higher.
+Side-wide production pools (section 0x01): an i32 little-endian at byte
+`8184 + 8 * device + 4 * side`, side 0 = Japan, 1 = Allies. Devices: 520 manpower,
+521 HI points, 522 naval shipyard points, 523 merchant shipyard points, 525 armament
+points, 526 vehicle points. A missing or short section is a format error and the
+pool rows then show `?`.
+
+Daily allotments: in each location record (section 0x13), u16 at offset 824 = daily
+supply, 826 = daily fuel, 828 = daily oil (830 is always 0 in the sample and is not
+used). They are fixed amounts the game adds to the place every day.
+
+Both were located by reading WitPTracker's compiled classes and checked against its
+screens for both sides of the sample save (for example Allied supply production
+139,041 and oil difference -15,270 per day, which the Allied balance reproduces).
+
+Not included: supply used by units and fuel used by ships. There is no "not
+building" estimate. For the Allied side of the sample save the totals match
+WitPTracker's factory counts and sizes (Resources 252 factories / size 25969,
+Manpower 181 / 1174, Light Industry 138 / 17836).
 
 Minor places: besides bases (type 1) and towns (type 5), the game has named
 locations of type 0 that hold factories and stocks (for example Kofu, Corunna
