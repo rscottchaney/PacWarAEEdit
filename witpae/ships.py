@@ -21,6 +21,8 @@ NATION_OFFSET = 26
 DISPLACEMENT_OFFSET = 28
 MONTH_OFFSET = 258
 YEAR_OFFSET = 259
+UPGRADE_OFFSET = 256  # u16 class id of the next refit stage
+YARD_OFFSET = 260  # i16
 
 # fmt is a struct code: h = i16, B = u8.
 FIELDS = [
@@ -171,6 +173,20 @@ class Ship:
     def date(self):
         """(month, year) of the refit stage; unverified."""
         return self._u8(MONTH_OFFSET), self._u8(YEAR_OFFSET)
+
+    @property
+    def upgrade_id(self):
+        """Class id of the next refit stage, None when 0 or the class itself.
+
+        The target may still be an unused record; callers check that against the class list.
+        """
+        target = struct.unpack_from("<H", self._data, self._offset + UPGRADE_OFFSET)[0]
+        return None if target in (0, self.id) else target
+
+    @property
+    def yard_size(self):
+        """Shipyard size field of the record; unverified."""
+        return self._i16(YARD_OFFSET)
 
     # ---- weapons --------------------------------------------------------
 

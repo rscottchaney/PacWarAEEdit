@@ -183,6 +183,77 @@ game-style HQ names.
 
 Load cost and AV are computed by the game.
 
+## Reports
+
+The Reports tab holds five read-only reports; nothing in them edits the save. It
+shows the game date (section 0x01: day at 42, month at 44, two-digit year at 46,
+all i16) and refreshes whenever the tab is shown, so edits made in the Bases tab
+are reflected. Double-click a row to jump to that base (Bases tab) or ship (Ships
+tab); the target tab's search and side filter are cleared if they hide the row.
+
+| Report | What it shows | Status |
+|---|---|---|
+| Spoilage | Bases and towns whose supply or fuel exceeds the spoilage limit, largest total excess first (columns can be re-sorted; Side filter; Region column). With s = port size + airfield size, the limit is supply 5000 + 3000 x s squared and fuel 1000 + 2000 x s squared (game manual 15.7); a base of size 1 gets 8000 / 3000, matching the base screen. "Over" is shown as `-` when not over | formula verified for size 1 (Bassein); the rule that there is no limit at s of 10 or more is from the manual and unverified (a patch note suggests the limit is shown below 9) |
+| Ship upgrades | One row per arrived ship whose class has a further upgrade (ships not yet arrived are left out, because reinforcements arrive with the upgrades of their arrival date): current class, target class, type change (for example DD -> DE), the date the upgrade becomes available, months until then relative to the game date, and the Location. Search (ship or class name), Side and "Due within" (default 3 months) filters | link (ship class u16 at 256 = next class id, available on the target class's date) matches the game's "Upgrade on" dates for Maryland and Kanawha; chains end when the id is 0, the class itself or an unused record |
+| Yard? column (target class i16 at 260) | the shipyard size shown for the upgrade target | unverified |
+
+The code is in `witpae/reports.py`; the upgrade link and yard fields are in `witpae/ships.py`.
+
+### Industry reports
+
+Three more sub-tabs cover factories, using the Region column and filter described
+below. They are computed from the factory slots of every named location of type
+0, 1 or 5 and are recomputed whenever the Reports tab is shown.
+
+| Report | What it shows |
+|---|---|
+| Industry | Side (Allied or Japanese; sums across sides are meaningless) and Region filters. One row per factory type present: factories (slots), size, damaged, size with production off, size with repair off, daily output and daily input. Below it a "Daily balance (factories only)" table for Oil, Resources, Fuel, Supply, Manpower and HI points: stored (the places' own stocks; `?` for manpower and HI, whose side-wide pools are not mapped), produced/day, used/day, net/day and days left (stored / -net when net is negative) |
+| Factories | One row per factory slot: place, kind, side, region, slot, factory, size, damage, production and repair switches, daily output and input. Side, Region and Factory type filters and "Only damaged or switched off" (damage, production off or repair off). Double-click jumps to the place in the Bases tab |
+| Raw materials | One row per place: oil, resources, fuel and supply stored, their net daily rate from that place's own factories, and "Shortest", the material that runs out first at that rate (for example `Resources: 3 days`, `-` when nothing runs down). Default sort is shortest first; "Only places with industry" (default on) keeps places with at least one producing factory. Double-click jumps to the place in the Bases tab |
+
+Production rules (game manual 13.2), per factory size point per day, only for
+factories with production switched on (production off uses and makes nothing).
+Size is the working size; damage is extra capacity awaiting repair, shown but not
+subtracted.
+
+| Factory | Uses | Makes |
+|---|---|---|
+| Oil (518) | - | 10 oil |
+| Resources (519) | - | 20 resources |
+| Manpower (520) | - | 5 manpower |
+| Heavy Industry (521) | 20 resources, 2 fuel | 2 HI points, 2 supply |
+| Light Industry (527) | 15 resources | 1 supply |
+| Refinery (528) | 10 oil | 9 fuel, 1 supply |
+| Naval Shipyard (522) | 3 HI | 1 naval point |
+| Merchant Shipyard (523) | 3 HI | 1 merchant point |
+| Armament (525) | 6 HI | 1 armament point |
+| Vehicle (526) | 6 HI | 1 vehicle point |
+| Repair Shipyard (524) | - | - |
+| Aircraft (2000+) and engine (below 500) factories | HI, unknown (shown as `-`) | size / 30 aircraft or engines |
+
+Not included: supply used by units, fuel used by ships, daily supply and fuel
+allotments, and the side-wide HI and manpower pools. There is no "not building"
+estimate. For the Allied side of the sample save the totals match WitPTracker's
+factory counts and sizes (Resources 252 factories / size 25969, Manpower 181 /
+1174, Light Industry 138 / 17836); WitPTracker also adds daily allotments that are
+not stored in the fields known here, so its oil, fuel and supply production are
+higher.
+
+Minor places: besides bases (type 1) and towns (type 5), the game has named
+locations of type 0 that hold factories and stocks (for example Kofu, Corunna
+Downs, Sholapur). The industry reports include them with the kind "Minor". The
+Bases tab does not list them, so double-clicking one only shows a message in the
+status bar.
+
+Regions: `witpae/data/regions/Kull_Regions_v131a.txt` is the region file by Kull
+(version 1.31a, from the `region-mappings` folder of WitPTracker AE Release 1.11),
+bundled unchanged (see the README next to it). Each line is location id, name,
+region id and region name, TAB-separated with CR line endings, and the location ids
+match the save's location table. Locations missing from the file (for example
+Truscott, #1601) are "Unassigned". Region names can repeat under two ids ("Line
+Islands" is 20 and 36), so the filter lists those with their id. The code is in
+`witpae/industry.py` (rules and sums) and `witpae/regions.py` (file reader).
+
 ## Backups
 
 Always keep a copy of your saves before editing. Prefer saving to a new file

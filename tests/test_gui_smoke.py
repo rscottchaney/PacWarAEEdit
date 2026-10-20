@@ -694,6 +694,178 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertEqual(app.plane_vars["ready"].get(), "10")
         self.assertIn("not arrived", app.plane_note.get())
 
+    def test_reports_tab(self):
+        import witpae_editor
+        app = witpae_editor.EditorApp(self.root)
+        self.assertEqual(app.game_date_var.get(), "Game date: unknown")
+        self.assertTrue(app.load(SAVE_015))
+        self.root.update()
+        self.assertEqual(app.game_date_var.get(), "Game date: 10 Dec 1941")
+        self.assertEqual(len(app.spoilage_tree.get_children()), 7)
+        self.assertEqual(app.spoilage_tree.get_children()[0], "369")  # largest total excess first
+        self.assertEqual(app.spoilage_tree.set("731", "supply_over"), "-")
+        self.assertEqual(app.spoilage_tree.set("731", "fuel_over"), "7238")
+        app.spoilage_side_var.set("Japanese")
+        app.refresh_spoilage_list()
+        self.assertNotIn("582", app.spoilage_tree.get_children())
+        app.sort_spoilage_by("fuel")
+        app.sort_spoilage_by("fuel")
+        app.spoilage_side_var.set("All")
+        app.refresh_spoilage_list()
+        # Due within: Maryland is due in 1 month, Kanawha in 6.
+        app.upgrade_due_var.set("1 month")
+        app.refresh_upgrade_list()
+        self.assertIn("3144", app.upgrade_tree.get_children())
+        self.assertNotIn("4988", app.upgrade_tree.get_children())
+        self.assertEqual(app.upgrade_tree.set("3144", "due"), "1 month")
+        self.assertEqual(app.upgrade_tree.set("3144", "date"), "1/42")
+        app.upgrade_due_var.set("All")
+        app.refresh_upgrade_list()
+        self.assertIn("4988", app.upgrade_tree.get_children())
+        app.upgrade_search_var.set("kanawha")  # matches the class name too
+        self.assertEqual(app.upgrade_tree.get_children(), ("4986", "4987", "4988", "4989", "4990"))
+        app.upgrade_search_var.set("neches")
+        self.assertEqual(app.upgrade_tree.get_children(), ("4989",))
+        app.upgrade_search_var.set("kanawha")
+        self.assertEqual(app.upgrade_tree.set("4988", "target"), "Kanawha #2389")
+        app.sort_upgrades_by("ship")
+        # Jumping clears the filters of the target tab so the row is visible.
+        app.shiprec_search_var.set("zzz")
+        app.upgrade_tree.selection_set("4988")
+        app.jump_to_upgrade_ship()
+        self.root.update()
+        self.assertEqual(app.notebook.select(), str(app.shiprec_tab))
+        self.assertEqual(app.shiprec_tree.selection(), ("4988",))
+        app.search_var.set("zzz")
+        app.spoilage_tree.selection_set("731")
+        app.jump_to_spoilage_base()
+        self.root.update()
+        self.assertEqual(app.notebook.select(), str(app.bases_tab))
+        self.assertEqual(app.tree.selection(), ("731",))
+        # Edits are picked up when the Reports tab is shown again.
+        app.bases[731].set("fuel", 0)
+        app.notebook.select(app.reports_tab)
+        self.root.update()
+        self.assertNotIn("731", app.spoilage_tree.get_children())
+
+    def test_industry_reports(self):
+        import witpae_editor
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        self.root.update()
+        # Industry: Allied by default, one row per factory type present.
+        self.assertEqual(app.industry_side_var.get(), "Allied")
+        self.assertEqual(app.industry_tree.set("Resources", "count"), "252")
+        self.assertEqual(app.industry_tree.set("Resources", "size"), "25,969")
+        self.assertEqual(app.industry_tree.set("Heavy Industry", "output"), "14,548 HI, 14,548 supply")
+        self.assertEqual(app.industry_tree.set("Heavy Industry", "input"), "145,480 resources, 14,548 fuel")
+        self.assertEqual(app.industry_tree.set("Aircraft", "input"), "-")
+        self.assertEqual(app.balance_tree.set("supply", "produced"), "40,049")
+        self.assertEqual(app.balance_tree.set("manpower", "stored"), "?")
+        self.assertEqual(app.balance_tree.set("oil", "net"), "-15,320")
+        self.assertEqual(app.balance_tree.set("oil", "days"), "10")
+        self.assertEqual(app.balance_tree.set("fuel", "days"), "-")
+        app.industry_region_var.set("Continental US")
+        app.refresh_industry_report()
+        self.assertNotEqual(app.industry_tree.set("Resources", "count"), "252")
+        app.industry_side_var.set("Japanese")
+        app.industry_region_var.set("All regions")
+        app.refresh_industry_report()
+        self.assertIn("Oil", app.industry_tree.get_children())
+        self.assertNotEqual(app.industry_tree.set("Oil", "size"), "6,133")
+        app.industry_side_var.set("Allied")
+        app.refresh_industry_report()
+
+        # Factories
+        everything = len(app.factory_report_tree.get_children())
+        self.assertGreater(everything, 500)
+        self.assertEqual(app.factory_report_tree.set("506:0", "region"), "Continental US")
+        app.factory_report_type_var.set("Resources")
+        app.refresh_factory_report()
+        self.assertTrue(all(app.factory_report_tree.set(i, "factory") == "Resources" for i in app.factory_report_tree.get_children()))
+        app.factory_report_type_var.set("All types")
+        app.factory_report_side_var.set("Japanese")
+        app.refresh_factory_report()
+        self.assertTrue(all(app.factory_report_tree.set(i, "side") == "Japanese" for i in app.factory_report_tree.get_children()))
+        app.factory_report_side_var.set("All")
+        app.factory_report_region_var.set("Unassigned")
+        app.refresh_factory_report()
+        self.assertTrue(all(app.factory_report_tree.set(i, "region") == "Unassigned" for i in app.factory_report_tree.get_children()))
+        app.factory_report_region_var.set("All regions")
+        app.factory_report_problem_var.set(True)
+        app.refresh_factory_report()
+        damaged = len(app.factory_report_tree.get_children())
+        self.assertTrue(0 < damaged < everything)
+        app.factory_report_problem_var.set(False)
+        app.sort_factory_report_by("size")
+        app.sort_factory_report_by("size")
+        self.assertEqual(len(app.factory_report_tree.get_children()), everything)
+        sizes = [int(app.factory_report_tree.set(i, "size")) for i in app.factory_report_tree.get_children()]
+        self.assertEqual(sizes, sorted(sizes, reverse=True))
+
+        # Raw materials
+        rows = len(app.raw_tree.get_children())
+        self.assertIn("926", app.raw_tree.get_children())  # Corunna Downs, a minor place
+        self.assertEqual(app.raw_tree.set("926", "kind"), "Minor")
+        shortest = [app.raw_tree.set(i, "shortest") for i in app.raw_tree.get_children()]
+        self.assertTrue(shortest[0].endswith(("day", "days")) and shortest[0] != "-")
+        self.assertEqual(shortest[-1], "-")
+        app.raw_only_var.set(False)
+        app.refresh_raw_list()
+        self.assertGreater(len(app.raw_tree.get_children()), rows)
+        app.raw_only_var.set(True)
+        app.raw_side_var.set("Japanese")
+        app.raw_region_var.set("Japan")
+        app.refresh_raw_list()
+        self.assertNotIn("926", app.raw_tree.get_children())
+        app.raw_side_var.set("All")
+        app.raw_region_var.set("All regions")
+        app.sort_raw_by("resources")
+        app.refresh_raw_list()
+        self.assertIn("926", app.raw_tree.get_children())
+
+        # Double-click targets: a base opens the Bases tab, a minor place only reports in the status bar.
+        app.search_var.set("zzz")
+        app.raw_tree.selection_set("506")
+        app.jump_to_industry_place(app.raw_tree)
+        self.root.update()
+        self.assertEqual(app.notebook.select(), str(app.bases_tab))
+        self.assertEqual(app.tree.selection(), ("506",))
+        app.notebook.select(app.reports_tab)
+        app.factory_report_tree.selection_set("506:0")
+        app.search_var.set("zzz")
+        app.jump_to_industry_place(app.factory_report_tree)
+        self.assertEqual(app.tree.selection(), ("506",))
+        app.notebook.select(app.reports_tab)
+        app.raw_tree.selection_set("926")
+        app.jump_to_industry_place(app.raw_tree)
+        self.root.update()
+        self.assertEqual(app.notebook.select(), str(app.reports_tab))
+        self.assertIn("minor place", app.status.get())
+        self.assertIn("Corunna Downs", app.status.get())
+
+        # Edits in the Bases tab show up when the Reports tab is shown again.
+        from witpae import factories
+        before = app.industry_tree.set("Heavy Industry", "output")
+        place, f = next((p, f) for p in app.industry_places if p.base.side == "Allied"
+                        for f in factories.list_factories(p.base) if f.type == 521 and f.size > 0)
+        factories.set_factory(place.base, f.slot, f.size, f.damage, False, f.repair_on)
+        app.notebook.select(app.bases_tab)
+        app.notebook.select(app.reports_tab)
+        self.root.update()
+        self.assertNotEqual(app.industry_tree.set("Heavy Industry", "output"), before)
+
+    def test_reports_without_game_date(self):
+        import witpae_editor
+        from witpae import reports
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        del app.save[reports.DATE_SECTION].data[reports.YEAR_OFFSET:]
+        app.refresh_reports()
+        self.assertEqual(app.game_date_var.get(), "Game date: unknown")
+        self.assertEqual(app.upgrade_tree.get_children(), ())
+        self.assertEqual(len(app.spoilage_tree.get_children()), 7)
+
     def test_load_folder_gives_clear_error(self):
         from unittest import mock
         import witpae_editor
