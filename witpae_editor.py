@@ -10,7 +10,8 @@ import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from witpae import aircraft, airgroups, bases, factories, landunits, shiprecords, ships, taskforces
+from witpae import (aircraft, airgroups, bases, factories, industry, landunits, regions, reports, shiprecords,
+                    ships, taskforces)
 from witpae.container import SaveFile, SaveFormatError
 from witpae.fileio import is_pbem, save_with_backup
 
@@ -107,6 +108,166 @@ UNIT_COLUMNS = [
 ]
 UNIT_COLUMN_BY_ID = {c[0]: c for c in UNIT_COLUMNS}
 
+# Report rows are the namedtuples of witpae.reports. Over values, dates and due months sort
+# on the raw getter value and are shown through the *_TEXT formatters.
+SPOILAGE_COLUMNS = [
+    ("id", "ID", 55, True, lambda r: r.base.id),
+    ("name", "Name", 150, False, lambda r: r.base.name),
+    ("kind", "Type", 50, False, lambda r: r.base.kind),
+    ("side", "Side", 70, False, lambda r: r.base.side),
+    ("region", "Region", 110, False, lambda r: regions.default_regions().region_of(r.base.id)[1]),
+    ("port", "Port", 45, True, lambda r: r.base.get("port")),
+    ("airfield", "Airfield", 60, True, lambda r: r.base.get("airfield")),
+    ("supply", "Supply", 80, True, lambda r: r.supply),
+    ("supply_limit", "Supply limit", 80, True, lambda r: r.supply_limit),
+    ("supply_over", "Supply over", 80, True, lambda r: r.supply_over),
+    ("fuel", "Fuel", 80, True, lambda r: r.fuel),
+    ("fuel_limit", "Fuel limit", 80, True, lambda r: r.fuel_limit),
+    ("fuel_over", "Fuel over", 80, True, lambda r: r.fuel_over),
+]
+SPOILAGE_COLUMN_BY_ID = {c[0]: c for c in SPOILAGE_COLUMNS}
+SPOILAGE_TEXT = {cid: (lambda v: v if v > 0 else "-") for cid in ("supply_over", "fuel_over")}
+SPOILAGE_NOTE = ("Limits from the game manual: none when port + airfield size is 10 or more; "
+                 "supply 5000 + 3000 x s\u00b2, fuel 1000 + 2000 x s\u00b2 (s = port + airfield size).")
+
+
+def _due_text(months):
+    if months <= 0:
+        return "now"
+    return "1 month" if months == 1 else f"{months} months"
+
+
+def _class_text(cls):
+    return f"{cls.name} #{cls.id}"
+
+
+UPGRADE_COLUMNS = [
+    ("id", "ID", 55, True, lambda r: r.ship.id),
+    ("ship", "Ship", 150, False, lambda r: r.ship.name),
+    ("type", "Type", 60, False, lambda r: r.ship.type),
+    ("side", "Side", 65, False, lambda r: r.ship.side),
+    ("class", "Class", 150, False, lambda r: _class_text(r.current)),
+    ("target", "Upgrade to", 150, False, lambda r: _class_text(r.target)),
+    ("change", "Type change", 80, False, lambda r: r.type_change),
+    ("date", "Date", 55, True, lambda r: (r.year, r.month)),
+    ("due", "Due", 75, True, lambda r: r.months),
+    ("yard", "Yard?", 50, True, lambda r: r.yard),
+    ("location", "Location", 120, False, lambda r: r.location),
+]
+UPGRADE_COLUMN_BY_ID = {c[0]: c for c in UPGRADE_COLUMNS}
+UPGRADE_TEXT = {"date": lambda v: f"{v[1]}/{v[0]:02d}", "due": _due_text}
+# "Due within" choices: label -> months, None for all.
+UPGRADE_DUE = {"Now": 0, "1 month": 1, "3 months": 3, "6 months": 6, "12 months": 12, "All": None}
+
+
+def _num(v):
+    return f"{v:,}"
+
+
+def _rate(v):
+    return f"{v:+,}" if v else "0"
+
+
+def _flow_cell(amounts):
+    # None marks inputs that are not mapped (aircraft and engine factories).
+    return "-" if amounts is None else industry.flow_text(amounts)
+
+
+def _shortest_text(v):
+    days, key = v
+    if not key:
+        return "-"
+    n = int(days)
+    return f"{industry.BALANCE_ROWS[key]}: {n} day{'' if n == 1 else 's'}"
+
+
+def _days_text(days):
+    return "-" if days is None else _num(int(days))
+
+
+# The Industry report: one table of factory types, one of daily material balances.
+INDUSTRY_COLUMNS = [
+    ("group", "Type", 130, False, lambda r: r.group),
+    ("count", "Factories", 70, True, lambda r: r.count),
+    ("size", "Size", 80, True, lambda r: r.size),
+    ("damage", "Damaged", 80, True, lambda r: r.damage),
+    ("production_off", "Production off", 90, True, lambda r: r.production_off),
+    ("repair_off", "Repair off", 80, True, lambda r: r.repair_off),
+    ("output", "Daily output", 260, False, lambda r: r.makes),
+    ("input", "Daily input", 260, False, lambda r: r.uses if r.uses_known else None),
+]
+INDUSTRY_TEXT = {"count": _num, "size": _num, "damage": _num, "production_off": _num, "repair_off": _num,
+                 "output": _flow_cell, "input": _flow_cell}
+BALANCE_COLUMNS = [
+    ("label", "Material", 130, False, lambda r: r.label),
+    ("stored", "Stored", 100, True, lambda r: r.stored),
+    ("produced", "Produced/day", 100, True, lambda r: r.produced),
+    ("used", "Used/day", 100, True, lambda r: r.used),
+    ("net", "Net/day", 100, True, lambda r: r.net),
+    ("days", "Days left", 80, True, lambda r: r.days),
+]
+BALANCE_TEXT = {"stored": lambda v: "?" if v is None else _num(v), "produced": _num, "used": _num, "net": _rate,
+                "days": _days_text}
+INDUSTRY_NOTE = ("Factory flows only (game manual 13.2). Not included: supply used by units, fuel used by ships, "
+                 "daily supply/fuel allotments, and the side-wide HI and manpower pools.")
+
+FACTORY_COLUMNS = [
+    ("id", "Place ID", 60, True, lambda r: r.place.id),
+    ("place", "Place", 140, False, lambda r: r.place.name),
+    ("kind", "Kind", 50, False, lambda r: r.place.kind),
+    ("side", "Side", 70, False, lambda r: r.place.base.side),
+    ("region", "Region", 110, False, lambda r: r.place.region),
+    ("slot", "Slot", 40, True, lambda r: r.factory.slot),
+    ("factory", "Factory", 150, False, lambda r: r.factory.name),
+    ("size", "Size", 60, True, lambda r: r.factory.size),
+    ("damage", "Damage", 60, True, lambda r: r.factory.damage),
+    ("production", "Production", 70, False, lambda r: "Yes" if r.factory.production_on else "No"),
+    ("repair", "Repair", 55, False, lambda r: "Yes" if r.factory.repair_on else "No"),
+    ("output", "Daily output", 200, False, lambda r: industry.flow_text(r.flow.makes)),
+    ("input", "Daily input", 200, False, lambda r: industry.flow_text(r.flow.uses) if r.flow.uses_known else "-"),
+]
+FACTORY_COLUMN_BY_ID = {c[0]: c for c in FACTORY_COLUMNS}
+FACTORY_TYPE_ALL = "All types"
+
+RAW_COLUMNS = [
+    ("id", "Place ID", 60, True, lambda r: r.place.id),
+    ("place", "Place", 140, False, lambda r: r.place.name),
+    ("kind", "Kind", 50, False, lambda r: r.place.kind),
+    ("side", "Side", 70, False, lambda r: r.place.base.side),
+    ("region", "Region", 110, False, lambda r: r.place.region),
+    ("oil", "Oil", 80, True, lambda r: r.stored["oil"]),
+    ("oil_day", "Oil/day", 70, True, lambda r: r.net["oil"]),
+    ("resources", "Resources", 80, True, lambda r: r.stored["resources"]),
+    ("resources_day", "Res/day", 70, True, lambda r: r.net["resources"]),
+    ("fuel", "Fuel", 80, True, lambda r: r.stored["fuel"]),
+    ("fuel_day", "Fuel/day", 70, True, lambda r: r.net["fuel"]),
+    ("supply", "Supply", 80, True, lambda r: r.stored["supply"]),
+    ("supply_day", "Supply/day", 70, True, lambda r: r.net["supply"]),
+    # (days, material) so it sorts by days; places where nothing runs down sort last.
+    ("shortest", "Shortest", 130, True, lambda r: (r.shortest[1], r.shortest[0]) if r.shortest else (float("inf"), "")),
+]
+RAW_COLUMN_BY_ID = {c[0]: c for c in RAW_COLUMNS}
+RAW_TEXT = {"oil": _num, "resources": _num, "fuel": _num, "supply": _num, "oil_day": _rate,
+            "resources_day": _rate, "fuel_day": _rate, "supply_day": _rate, "shortest": _shortest_text}
+RAW_NOTE = ("Per place, from that place's own factories. The game moves oil, resources and fuel overland between "
+            "connected places, so a local shortfall does not always stop a factory.")
+
+REGION_ALL = "All regions"
+
+
+def region_choices():
+    """Region combobox label -> region id (None for all), in id order; a repeated name gets its id."""
+    found = regions.default_regions().regions()
+    names = [name for _id, name in found]
+    choices = {REGION_ALL: None}
+    for region_id, name in found:
+        choices[f"{name} ({region_id})" if names.count(name) > 1 else name] = region_id
+    choices[regions.UNASSIGNED_NAME] = regions.UNASSIGNED_ID
+    return choices
+
+
+MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
 
 class EditorApp:
     def __init__(self, root):
@@ -187,6 +348,18 @@ class EditorApp:
         self.unit_vars = {}
         self.unit_current = None
         self.unit_slot = None
+        self.spoilage_all = []
+        self.spoilage_sort_col = "total"
+        self.spoilage_sort_reverse = True
+        self.upgrades_all = []
+        self.upgrade_sort_col = "due"
+        self.upgrade_sort_reverse = False
+        self.industry_places = []
+        self.region_ids = region_choices()
+        self.factory_report_sort_col = "id"
+        self.factory_report_sort_reverse = False
+        self.raw_sort_col = "shortest"
+        self.raw_sort_reverse = False
 
         self._build_menu()
         self._build_header()
@@ -223,7 +396,7 @@ class EditorApp:
     def _build_body(self):
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(side="top", fill="both", expand=True)
-        body = ttk.Frame(self.notebook, padding=4)
+        body = self.bases_tab = ttk.Frame(self.notebook, padding=4)
         self.notebook.add(body, text="Bases")
         self._build_aircraft_tab()
         self._build_ships_tab()
@@ -231,6 +404,7 @@ class EditorApp:
         self._build_taskforces_tab()
         self._build_groups_tab()
         self._build_units_tab()
+        self._build_reports_tab()
 
         left = ttk.Frame(body)
         left.pack(side="left", fill="both", expand=True)
@@ -293,6 +467,141 @@ class EditorApp:
             self.building_checks[name] = check
         self.apply_btn = ttk.Button(right, text="Apply", command=self.apply)
         self.apply_btn.grid(row=build_row + 1, column=0, columnspan=2, pady=(10, 0))
+
+    def _build_reports_tab(self):
+        tab = self.reports_tab = ttk.Frame(self.notebook, padding=4)
+        self.notebook.add(tab, text="Reports")
+        self.game_date_var = tk.StringVar(value="Game date: unknown")
+        ttk.Label(tab, textvariable=self.game_date_var).pack(side="top", anchor="w")
+        self.reports_notebook = ttk.Notebook(tab)
+        self.reports_notebook.pack(side="top", fill="both", expand=True, pady=(4, 0))
+
+        spoil = ttk.Frame(self.reports_notebook, padding=4)
+        self.reports_notebook.add(spoil, text="Spoilage")
+        bar = ttk.Frame(spoil)
+        bar.pack(side="top", fill="x")
+        ttk.Label(bar, text="Side:").pack(side="left")
+        self.spoilage_side_var = tk.StringVar(value="All")
+        side_box = ttk.Combobox(bar, textvariable=self.spoilage_side_var, values=["All", "Allied", "Japanese"],
+                                state="readonly", width=9)
+        side_box.pack(side="left", padx=4)
+        side_box.bind("<<ComboboxSelected>>", lambda e: self.refresh_spoilage_list())
+        self.spoilage_count = tk.StringVar()
+        ttk.Label(bar, textvariable=self.spoilage_count).pack(side="left", padx=8)
+        ttk.Label(spoil, text=SPOILAGE_NOTE).pack(side="bottom", anchor="w", pady=(4, 0))
+        self.spoilage_tree = self._report_tree(spoil, SPOILAGE_COLUMNS, self.sort_spoilage_by,
+                                               ("name", "kind", "side", "region"), self.jump_to_spoilage_base)
+
+        ups = ttk.Frame(self.reports_notebook, padding=4)
+        self.reports_notebook.add(ups, text="Ship upgrades")
+        bar = ttk.Frame(ups)
+        bar.pack(side="top", fill="x")
+        ttk.Label(bar, text="Search:").pack(side="left")
+        self.upgrade_search_var = tk.StringVar()
+        self.upgrade_search_var.trace_add("write", lambda *a: self.refresh_upgrade_list())
+        ttk.Entry(bar, textvariable=self.upgrade_search_var, width=20).pack(side="left", padx=4)
+        ttk.Label(bar, text="Side:").pack(side="left")
+        self.upgrade_side_var = tk.StringVar(value="All")
+        side_box = ttk.Combobox(bar, textvariable=self.upgrade_side_var, values=["All", "Allied", "Japanese"],
+                                state="readonly", width=9)
+        side_box.pack(side="left", padx=4)
+        side_box.bind("<<ComboboxSelected>>", lambda e: self.refresh_upgrade_list())
+        ttk.Label(bar, text="Due within:").pack(side="left")
+        self.upgrade_due_var = tk.StringVar(value="3 months")
+        due_box = ttk.Combobox(bar, textvariable=self.upgrade_due_var, values=list(UPGRADE_DUE),
+                               state="readonly", width=10)
+        due_box.pack(side="left", padx=4)
+        due_box.bind("<<ComboboxSelected>>", lambda e: self.refresh_upgrade_list())
+        self.upgrade_count = tk.StringVar()
+        ttk.Label(bar, textvariable=self.upgrade_count).pack(side="left", padx=8)
+        self.upgrade_tree = self._report_tree(ups, UPGRADE_COLUMNS, self.sort_upgrades_by,
+                                              ("ship", "type", "side", "class", "target", "change", "location"),
+                                              self.jump_to_upgrade_ship)
+
+        self._build_industry_reports()
+
+        # Bound last so the handlers never run before the lists exist.
+        self.notebook.bind("<<NotebookTabChanged>>", lambda e: self._reports_shown())
+        self.reports_notebook.bind("<<NotebookTabChanged>>", lambda e: self._reports_shown())
+
+    def _report_combo(self, bar, label, var, values, command, width):
+        ttk.Label(bar, text=label).pack(side="left")
+        box = ttk.Combobox(bar, textvariable=var, values=list(values), state="readonly", width=width)
+        box.pack(side="left", padx=(4, 8))
+        box.bind("<<ComboboxSelected>>", lambda e: command())
+
+    def _build_industry_reports(self):
+        sides = ["All", "Allied", "Japanese"]
+
+        ind = ttk.Frame(self.reports_notebook, padding=4)
+        self.reports_notebook.add(ind, text="Industry")
+        bar = ttk.Frame(ind)
+        bar.pack(side="top", fill="x")
+        self.industry_side_var = tk.StringVar(value="Allied")
+        self._report_combo(bar, "Side:", self.industry_side_var, sides[1:], self.refresh_industry_report, 9)
+        self.industry_region_var = tk.StringVar(value=REGION_ALL)
+        self._report_combo(bar, "Region:", self.industry_region_var, self.region_ids, self.refresh_industry_report, 22)
+        ttk.Label(ind, text=INDUSTRY_NOTE).pack(side="bottom", anchor="w", pady=(4, 0))
+        top = ttk.Frame(ind)
+        top.pack(side="top", fill="both", expand=True, pady=(4, 0))
+        self.industry_tree = self._report_tree(top, INDUSTRY_COLUMNS, lambda c: None, ("group", "output", "input"),
+                                               lambda: None)
+        ttk.Label(ind, text="Daily balance (factories only)").pack(side="top", anchor="w", pady=(6, 0))
+        low = ttk.Frame(ind)
+        low.pack(side="top", fill="x")
+        self.balance_tree = self._report_tree(low, BALANCE_COLUMNS, lambda c: None, ("label",), lambda: None)
+        self.balance_tree.configure(height=6)
+
+        fac = ttk.Frame(self.reports_notebook, padding=4)
+        self.reports_notebook.add(fac, text="Factories")
+        bar = ttk.Frame(fac)
+        bar.pack(side="top", fill="x")
+        self.factory_report_side_var = tk.StringVar(value="All")
+        self._report_combo(bar, "Side:", self.factory_report_side_var, sides, self.refresh_factory_report, 9)
+        self.factory_report_region_var = tk.StringVar(value=REGION_ALL)
+        self._report_combo(bar, "Region:", self.factory_report_region_var, self.region_ids,
+                           self.refresh_factory_report, 22)
+        self.factory_report_type_var = tk.StringVar(value=FACTORY_TYPE_ALL)
+        self._report_combo(bar, "Factory type:", self.factory_report_type_var,
+                           [FACTORY_TYPE_ALL] + industry.GROUP_ORDER, self.refresh_factory_report, 16)
+        self.factory_report_problem_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(bar, text="Only damaged or switched off", variable=self.factory_report_problem_var,
+                        command=self.refresh_factory_report).pack(side="left", padx=(0, 8))
+        self.factory_report_count = tk.StringVar()
+        ttk.Label(bar, textvariable=self.factory_report_count).pack(side="left", padx=8)
+        self.factory_report_tree = self._report_tree(
+            fac, FACTORY_COLUMNS, self.sort_factory_report_by,
+            ("place", "kind", "side", "region", "factory", "production", "repair", "output", "input"),
+            lambda: self.jump_to_industry_place(self.factory_report_tree))
+
+        raw = ttk.Frame(self.reports_notebook, padding=4)
+        self.reports_notebook.add(raw, text="Raw materials")
+        bar = ttk.Frame(raw)
+        bar.pack(side="top", fill="x")
+        self.raw_side_var = tk.StringVar(value="All")
+        self._report_combo(bar, "Side:", self.raw_side_var, sides, self.refresh_raw_list, 9)
+        self.raw_region_var = tk.StringVar(value=REGION_ALL)
+        self._report_combo(bar, "Region:", self.raw_region_var, self.region_ids, self.refresh_raw_list, 22)
+        self.raw_only_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(bar, text="Only places with industry", variable=self.raw_only_var,
+                        command=self.refresh_raw_list).pack(side="left", padx=(0, 8))
+        self.raw_count = tk.StringVar()
+        ttk.Label(bar, textvariable=self.raw_count).pack(side="left", padx=8)
+        ttk.Label(raw, text=RAW_NOTE).pack(side="bottom", anchor="w", pady=(4, 0))
+        self.raw_tree = self._report_tree(raw, RAW_COLUMNS, self.sort_raw_by, ("place", "kind", "side", "region"),
+                                          lambda: self.jump_to_industry_place(self.raw_tree))
+
+    def _report_tree(self, parent, columns, sort_command, left_aligned, on_open):
+        tree = ttk.Treeview(parent, columns=[c[0] for c in columns], show="headings", selectmode="browse")
+        for cid, heading, width, _numeric, _get in columns:
+            tree.heading(cid, text=heading, command=lambda c=cid: sort_command(c))
+            tree.column(cid, width=width, anchor="w" if cid in left_aligned else "e")
+        scroll = ttk.Scrollbar(parent, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+        tree.pack(side="left", fill="both", expand=True)
+        tree.bind("<Double-1>", lambda e: on_open())
+        return tree
 
     def _build_aircraft_tab(self):
         tab = ttk.Frame(self.notebook, padding=4)
@@ -442,7 +751,7 @@ class EditorApp:
         ttk.Button(edit, text="Apply weapon", command=self.apply_ship_weapon).pack(side="left", padx=4)
 
     def _build_shiprecs_tab(self):
-        tab = ttk.Frame(self.notebook, padding=4)
+        tab = self.shiprec_tab = ttk.Frame(self.notebook, padding=4)
         self.notebook.add(tab, text="Ships")
         left = ttk.Frame(tab)
         left.pack(side="left", fill="both", expand=True)
@@ -1067,6 +1376,8 @@ class EditorApp:
         self.show_group(None)
         self.refresh_unit_list()
         self.show_unit(None)
+        self.industry_places = industry.list_industry_places(save, regions.default_regions())
+        self.refresh_reports()
         return True
 
     def confirm_discard(self):
@@ -2425,6 +2736,185 @@ class EditorApp:
         self.show_unit_equipment(u)
         self.unit_equipment_vars["count"].set(str(count))
         self.unit_equipment_vars["disabled"].set(str(disabled))
+
+    # ---- reports -------------------------------------------------------
+
+    def _reports_shown(self):
+        # Edits in the Bases tab change the spoilage list, so rebuild when the reports are opened.
+        if self.notebook.select() == str(self.reports_tab):
+            self.refresh_reports()
+
+    def refresh_reports(self):
+        if self.save is None:
+            return
+        try:
+            day, month, year = reports.game_date(self.save)
+            self.game_date_var.set(f"Game date: {day} {MONTH_NAMES[month - 1]} {year}")
+            self.upgrades_all = reports.upgrade_rows(self.save, self.shiprecs.values(), self.ships)
+        except (SaveFormatError, IndexError):
+            self.game_date_var.set("Game date: unknown")
+            self.upgrades_all = []
+        self.spoilage_all = reports.spoilage_rows(self.bases.values())
+        self.refresh_spoilage_list()
+        self.refresh_upgrade_list()
+        self.refresh_industry_report()
+        self.refresh_factory_report()
+        self.refresh_raw_list()
+
+    @staticmethod
+    def _report_values(columns, texts, row):
+        return [texts[cid](get(row)) if cid in texts else get(row) for cid, _h, _w, _n, get in columns]
+
+    def _spoilage_sort_key(self, r):
+        if self.spoilage_sort_col == "total":
+            return (r.total_over, r.base.name.lower(), r.base.id)
+        _cid, _h, _w, numeric, get = SPOILAGE_COLUMN_BY_ID[self.spoilage_sort_col]
+        v = get(r)
+        return (v if numeric else str(v).lower(), r.base.id)
+
+    def refresh_spoilage_list(self):
+        self.spoilage_tree.delete(*self.spoilage_tree.get_children())
+        side = self.spoilage_side_var.get()
+        rows = [r for r in self.spoilage_all if side == "All" or r.base.side == side]
+        rows.sort(key=self._spoilage_sort_key, reverse=self.spoilage_sort_reverse)
+        for r in rows:
+            self.spoilage_tree.insert("", "end", iid=str(r.base.id),
+                                      values=self._report_values(SPOILAGE_COLUMNS, SPOILAGE_TEXT, r))
+        self.spoilage_count.set(f"{len(rows)} base{'' if len(rows) == 1 else 's'} over a limit")
+
+    def sort_spoilage_by(self, col):
+        self.spoilage_sort_reverse = (not self.spoilage_sort_reverse) if col == self.spoilage_sort_col else False
+        self.spoilage_sort_col = col
+        self.refresh_spoilage_list()
+
+    def _upgrade_sort_key(self, r):
+        _cid, _h, _w, numeric, get = UPGRADE_COLUMN_BY_ID[self.upgrade_sort_col]
+        v = get(r)
+        return (v if numeric else str(v).lower(), r.months, r.ship.name.lower(), r.ship.id)
+
+    def refresh_upgrade_list(self):
+        self.upgrade_tree.delete(*self.upgrade_tree.get_children())
+        needle = self.upgrade_search_var.get().strip().lower()
+        side = self.upgrade_side_var.get()
+        within = UPGRADE_DUE[self.upgrade_due_var.get()]
+        rows = [r for r in self.upgrades_all
+                if (needle in r.ship.name.lower() or needle in r.current.name.lower())
+                and (side == "All" or r.ship.side == side) and (within is None or r.months <= within)]
+        rows.sort(key=self._upgrade_sort_key, reverse=self.upgrade_sort_reverse)
+        for r in rows:
+            self.upgrade_tree.insert("", "end", iid=str(r.ship.id),
+                                     values=self._report_values(UPGRADE_COLUMNS, UPGRADE_TEXT, r))
+        self.upgrade_count.set(f"{len(rows)} ship{'' if len(rows) == 1 else 's'}")
+
+    def sort_upgrades_by(self, col):
+        self.upgrade_sort_reverse = (not self.upgrade_sort_reverse) if col == self.upgrade_sort_col else False
+        self.upgrade_sort_col = col
+        self.refresh_upgrade_list()
+
+    def _industry_places_for(self, side_var, region_var):
+        side = side_var.get()
+        return industry.filter_places(self.industry_places, None if side == "All" else side,
+                                      self.region_ids[region_var.get()])
+
+    def refresh_industry_report(self):
+        type_rows, balance = industry.summarize(self._industry_places_for(self.industry_side_var,
+                                                                          self.industry_region_var))
+        for tree, columns, texts, rows, key in (
+                (self.industry_tree, INDUSTRY_COLUMNS, INDUSTRY_TEXT, type_rows, lambda r: r.group),
+                (self.balance_tree, BALANCE_COLUMNS, BALANCE_TEXT, balance, lambda r: r.material)):
+            tree.delete(*tree.get_children())
+            for r in rows:
+                tree.insert("", "end", iid=key(r), values=self._report_values(columns, texts, r))
+
+    @staticmethod
+    def _industry_sort_key(columns, col, r, tie):
+        _cid, _h, _w, numeric, get = columns[col]
+        v = get(r)
+        return (v if numeric else str(v).lower(), tie)
+
+    def refresh_factory_report(self):
+        self.factory_report_tree.delete(*self.factory_report_tree.get_children())
+        rows = industry.factory_rows(self._industry_places_for(self.factory_report_side_var,
+                                                               self.factory_report_region_var))
+        group = self.factory_report_type_var.get()
+        if group != FACTORY_TYPE_ALL:
+            rows = [r for r in rows if r.group == group]
+        if self.factory_report_problem_var.get():
+            rows = [r for r in rows if r.factory.damage > 0 or not r.factory.production_on or not r.factory.repair_on]
+        rows.sort(key=lambda r: self._industry_sort_key(FACTORY_COLUMN_BY_ID, self.factory_report_sort_col, r,
+                                                        (r.place.id, r.factory.slot)),
+                  reverse=self.factory_report_sort_reverse)
+        for r in rows:
+            self.factory_report_tree.insert("", "end", iid=f"{r.place.id}:{r.factory.slot}",
+                                     values=self._report_values(FACTORY_COLUMNS, {}, r))
+        self.factory_report_count.set(f"{len(rows)} factor{'y' if len(rows) == 1 else 'ies'}")
+
+    def sort_factory_report_by(self, col):
+        same = col == self.factory_report_sort_col
+        self.factory_report_sort_reverse = (not self.factory_report_sort_reverse) if same else False
+        self.factory_report_sort_col = col
+        self.refresh_factory_report()
+
+    def refresh_raw_list(self):
+        self.raw_tree.delete(*self.raw_tree.get_children())
+        rows = industry.raw_rows(self._industry_places_for(self.raw_side_var, self.raw_region_var),
+                                 self.raw_only_var.get())
+        rows.sort(key=lambda r: self._industry_sort_key(RAW_COLUMN_BY_ID, self.raw_sort_col, r,
+                                                        (r.place.name.lower(), r.place.id)),
+                  reverse=self.raw_sort_reverse)
+        for r in rows:
+            self.raw_tree.insert("", "end", iid=str(r.place.id), values=self._report_values(RAW_COLUMNS, RAW_TEXT, r))
+        self.raw_count.set(f"{len(rows)} place{'' if len(rows) == 1 else 's'}")
+
+    def sort_raw_by(self, col):
+        self.raw_sort_reverse = (not self.raw_sort_reverse) if col == self.raw_sort_col else False
+        self.raw_sort_col = col
+        self.refresh_raw_list()
+
+    def jump_to_industry_place(self, report_tree):
+        sel = report_tree.selection()
+        if not sel:
+            return
+        place_id = int(sel[0].split(":")[0])
+        if place_id not in self.bases:
+            # Minor places (location type 0) are not listed in the Bases tab.
+            self.status.set(f"{report_tree.set(sel[0], 'place')} (#{place_id}) is a minor place; "
+                            "the Bases tab does not list it")
+            return
+        iid = str(place_id)
+        if not self.tree.exists(iid):
+            self.search_var.set("")
+            self.side_var.set("All")
+            self.refresh_list()
+        self.notebook.select(self.bases_tab)
+        self.tree.selection_set(iid)
+        self.tree.see(iid)
+
+    def jump_to_spoilage_base(self):
+        sel = self.spoilage_tree.selection()
+        if not sel:
+            return
+        iid = sel[0]
+        if not self.tree.exists(iid):
+            self.search_var.set("")
+            self.side_var.set("All")
+            self.refresh_list()
+        self.notebook.select(self.bases_tab)
+        self.tree.selection_set(iid)
+        self.tree.see(iid)
+
+    def jump_to_upgrade_ship(self):
+        sel = self.upgrade_tree.selection()
+        if not sel:
+            return
+        iid = sel[0]
+        if not self.shiprec_tree.exists(iid):
+            self.shiprec_search_var.set("")
+            self.shiprec_side_var.set("All")
+            self.refresh_shiprec_list()
+        self.notebook.select(self.shiprec_tab)
+        self.shiprec_tree.selection_set(iid)
+        self.shiprec_tree.see(iid)
 
     def apply_title(self):
         if self.save is None:
