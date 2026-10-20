@@ -25,7 +25,7 @@ class GuiSmokeTests(unittest.TestCase):
         app = witpae_editor.EditorApp(self.root)
         self.assertTrue(app.load(SAVE_015))
         self.root.update()
-        self.assertEqual(len(app.tree.get_children()), 781 + 271)
+        self.assertEqual(len(app.tree.get_children()), 781 + 271 + 102)
         app.search_var.set("pearl")
         app.side_var.set("Allied")
         app.refresh_list()
@@ -90,6 +90,40 @@ class GuiSmokeTests(unittest.TestCase):
         for name in ("port", "port_max", "port_damage"):
             self.assertFalse(app.field_entries[name].instate(["disabled"]), name)
         self.assertFalse(app.building_checks["port"].instate(["disabled"]))
+
+    def test_minor_place_row_and_locks(self):
+        from unittest import mock
+        import witpae_editor
+        from witpae import bases
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        app.tree.selection_set("233")
+        self.root.update()
+        self.assertEqual(app.tree.set("233", "kind"), "Minor")
+        self.assertIn("Kofu", app.detail_title.get())
+        for name in bases.MINOR_READONLY_FIELDS:
+            self.assertTrue(app.field_entries[name].instate(["disabled"]), name)
+        for name in bases.MINOR_READONLY_BUILD:
+            self.assertTrue(app.building_checks[name].instate(["disabled"]), name)
+        self.assertFalse(app.field_entries["supply"].instate(["disabled"]))
+        self.assertFalse(app.building_checks["forts"].instate(["disabled"]))
+        app.field_vars["supply"].set("88")
+        with mock.patch("tkinter.messagebox.showerror") as err:
+            app.apply()
+        err.assert_not_called()
+        self.assertEqual(app.bases[233].get("supply"), 88)
+        self.assertIn(233, app.edited)
+        self.assertTrue(app.tree.item("233", "tags"))
+        app.tree.selection_set("584")
+        self.root.update()
+        self.assertFalse(app.field_entries["airfield"].instate(["disabled"]))
+        self.assertFalse(app.building_checks["airfield"].instate(["disabled"]))
+        # Not move destinations, and not in the spoilage report.
+        label = "Kofu (233)"
+        self.assertNotIn(label, app.place_ids)
+        self.assertTrue(all(p.id != 233 for p, _label in app.tf_dest_items))
+        self.assertNotIn("233", app.spoilage_tree.get_children())
+        self.assertTrue(all(app.bases[int(i)].kind != "Minor" for i in app.spoilage_tree.get_children()))
 
     def test_stockpile_checkbox_applies(self):
         import witpae_editor
@@ -848,7 +882,7 @@ class GuiSmokeTests(unittest.TestCase):
         app.refresh_raw_list()
         self.assertIn("926", app.raw_tree.get_children())
 
-        # Double-click targets: a base opens the Bases tab, a minor place only reports in the status bar.
+        # Double-click targets: bases and minor places open the Bases tab.
         app.search_var.set("zzz")
         app.raw_tree.selection_set("506")
         app.jump_to_industry_place(app.raw_tree)
@@ -861,12 +895,13 @@ class GuiSmokeTests(unittest.TestCase):
         app.jump_to_industry_place(app.factory_report_tree)
         self.assertEqual(app.tree.selection(), ("506",))
         app.notebook.select(app.reports_tab)
+        app.search_var.set("zzz")
         app.raw_tree.selection_set("926")
         app.jump_to_industry_place(app.raw_tree)
         self.root.update()
-        self.assertEqual(app.notebook.select(), str(app.reports_tab))
-        self.assertIn("minor place", app.status.get())
-        self.assertIn("Corunna Downs", app.status.get())
+        self.assertEqual(app.notebook.select(), str(app.bases_tab))
+        self.assertEqual(app.tree.selection(), ("926",))
+        app.notebook.select(app.reports_tab)
 
         # Edits in the Bases tab show up when the Reports tab is shown again.
         from witpae import factories

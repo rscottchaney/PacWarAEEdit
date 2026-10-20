@@ -1286,7 +1286,7 @@ class EditorApp:
             return False
         try:
             save = SaveFile.load(path)
-            blist = bases.list_bases(save, include_towns=True)
+            blist = bases.list_bases(save, include_towns=True, include_minor=True)
             alist = aircraft.list_aircraft(save)
             slist = ships.list_ships(save)
             srlist = shiprecords.list_ship_records(save)
@@ -1364,7 +1364,7 @@ class EditorApp:
         self.unit_slot = None
         self.file_label.set(f"File: {os.path.basename(path)}    Key variant: {save.variant}")
         self.title_var.set(save.description)
-        self.status.set(f"{path} - {len(blist)} bases and towns, {len(alist)} aircraft, {len(slist)} ship classes, {len(srlist)} ships, {len(glist)} air groups, {len(ulist)} land units"
+        self.status.set(f"{path} - {len(blist)} bases, towns and minor places, {len(alist)} aircraft, {len(slist)} ship classes, {len(srlist)} ships, {len(glist)} air groups, {len(ulist)} land units"
                         + (" - PBEM game: saving is disabled" if self.pbem else ""))
         self.refresh_list()
         self.show_detail(None)
@@ -1441,10 +1441,10 @@ class EditorApp:
                 var.set("")
             for var in list(self.stockpile_vars.values()) + list(self.building_vars.values()):
                 var.set(False)
-            self._set_port_editable(True)
+            self._set_port_editable("Base")
             self.show_factories(None)
             return
-        self._set_port_editable(base.kind != "Town")
+        self._set_port_editable(base.kind)
         self.detail_title.set(f"{base.name} (#{base.id}, {base.side}, hex {base.x},{base.y})")
         for f in bases.FIELDS:
             self.field_vars[f.name].set(str(base.get(f.name)))
@@ -1456,12 +1456,22 @@ class EditorApp:
             self.factory_slot = None
         self.show_factories(base)
 
-    def _set_port_editable(self, editable):
-        """Towns have no port, so lock the port entries and build switch for them."""
-        state = ["!disabled"] if editable else ["disabled"]
-        for name in bases.TOWN_READONLY_FIELDS:
-            self.field_entries[name].state(state)
-        self.building_checks["port"].state(state)
+    def _set_port_editable(self, kind):
+        """Lock the port entries and build switch for towns, and the airfield ones too for minor places."""
+        locked_fields, locked_builds = self._locked_for(kind)
+        for name in bases.MINOR_READONLY_FIELDS:
+            self.field_entries[name].state(["disabled" if name in locked_fields else "!disabled"])
+        for name in bases.MINOR_READONLY_BUILD:
+            self.building_checks[name].state(["disabled" if name in locked_builds else "!disabled"])
+
+    @staticmethod
+    def _locked_for(kind):
+        """(read-only field names, read-only build switch names) for a Base.kind."""
+        if kind == "Minor":
+            return bases.MINOR_READONLY_FIELDS, bases.MINOR_READONLY_BUILD
+        if kind == "Town":
+            return bases.TOWN_READONLY_FIELDS, ("port",)
+        return (), ()
 
     def show_factories(self, base):
         self.factory_tree.delete(*self.factory_tree.get_children())
@@ -1536,9 +1546,9 @@ class EditorApp:
             return
         base = self.bases[self.current]
         values = {}
-        is_town = base.kind == "Town"
+        locked_fields, locked_builds = self._locked_for(base.kind)
         for f in bases.FIELDS:
-            if not f.editable or (is_town and f.name in bases.TOWN_READONLY_FIELDS):
+            if not f.editable or f.name in locked_fields:
                 continue
             text = self.field_vars[f.name].get().strip()
             try:
@@ -1551,7 +1561,7 @@ class EditorApp:
         before = {n: base.get(n) for n in values}
         flags = {n: bool(v.get()) for n, v in self.stockpile_vars.items()}
         flags_before = base.get_stockpile()
-        building = {n: bool(v.get()) for n, v in self.building_vars.items() if not (is_town and n == "port")}
+        building = {n: bool(v.get()) for n, v in self.building_vars.items() if n not in locked_builds}
         building_before = {n: v for n, v in base.get_building().items() if n in building}
         base.set_many(values)
         base.set_stockpile(flags)
@@ -2758,7 +2768,8 @@ class EditorApp:
         except (SaveFormatError, IndexError):
             self.game_date_var.set("Game date: unknown")
             self.upgrades_all = []
-        self.spoilage_all = reports.spoilage_rows(self.bases.values())
+        # Whether minor places spoil is unknown, so the report stays with bases and towns.
+        self.spoilage_all = reports.spoilage_rows(b for b in self.bases.values() if b.kind != "Minor")
         self.refresh_spoilage_list()
         self.refresh_upgrade_list()
         self.refresh_industry_report()
@@ -2887,9 +2898,6 @@ class EditorApp:
             return
         place_id = int(sel[0].split(":")[0])
         if place_id not in self.bases:
-            # Minor places (location type 0) are not listed in the Bases tab.
-            self.status.set(f"{report_tree.set(sel[0], 'place')} (#{place_id}) is a minor place; "
-                            "the Bases tab does not list it")
             return
         iid = str(place_id)
         if not self.tree.exists(iid):

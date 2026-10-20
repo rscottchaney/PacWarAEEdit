@@ -36,6 +36,14 @@ Towns are listed in the Bases tab too (Type column) and edited the same way, exc
 that towns have no port, so Port size, Port max, Port damage and the Port build
 switch are read-only for them.
 
+Minor places (Type "Minor", for example Kofu, Corunna Downs, Sholapur) are listed
+too. Their Supply, Fuel, Resource and Oil storage, Forts, value multipliers, supply
+cap, garrison, stockpile switches and factories are editable. They have no port or
+airfield, so every port and airfield field (size, max, damage) and the Port and
+Airfield build switches are read-only for them. Edits to minor places are not yet
+tested in-game. Minor places are not move destinations for units, air groups or
+task forces.
+
 Name, side and hex coordinates are read-only. The field table is in
 `witpae/bases.py`; adding a field is one line.
 
@@ -252,9 +260,9 @@ Manpower 181 / 1174, Light Industry 138 / 17836).
 
 Minor places: besides bases (type 1) and towns (type 5), the game has named
 locations of type 0 that hold factories and stocks (for example Kofu, Corunna
-Downs, Sholapur). The industry reports include them with the kind "Minor". The
-Bases tab does not list them, so double-clicking one only shows a message in the
-status bar.
+Downs, Sholapur). The industry reports include them with the kind "Minor", and
+double-clicking one jumps to it in the Bases tab. The spoilage report covers only
+bases and towns, because it is unknown whether minor places spoil.
 
 Regions: `witpae/data/regions/Kull_Regions_v131a.txt` is the region file by Kull
 (version 1.31a, from the `region-mappings` folder of WitPTracker AE Release 1.11),

@@ -65,6 +65,12 @@ class IndustryReportTests(unittest.TestCase):
         self.assertTrue(listed < set(by_id))
         self.assertEqual({p.kind for p in self.places}, {"Base", "Town", "Minor"})
 
+    def test_non_place_type_zero_records_are_excluded(self):
+        listed = {p.id for p in self.places}
+        for loc_id in (3327, 14425, 14474):
+            self.assertNotIn(loc_id, listed)
+        self.assertEqual(sum(1 for p in self.places if p.kind == "Minor"), 102)
+
     def test_allied_totals(self):
         type_rows, _balance = industry.summarize(self.allied)
         rows = by_group(type_rows)
