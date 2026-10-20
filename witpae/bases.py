@@ -19,6 +19,7 @@ RECORD_SIZE = 1172
 RECORD_COUNT = 18000
 INDEX_RECORD_SIZE = 20
 TYPE_OFFSET = 28
+TYPE_MINOR = 0
 TYPE_BASE = 1
 TYPE_TOWN = 5
 # Records a unit can be located at: bases and named towns.
@@ -28,6 +29,10 @@ NAME_KEY = b"AdmiralEdition"
 X_OFFSET = 36
 Y_OFFSET = 38
 SIDE_OFFSET = 8  # within the 20-byte record of the location index section
+INDEX_TYPE_OFFSET = 12  # i32 in the same record
+# Type-0 location records are minor places only when the index type is 10; the other
+# named type-0 records (index type 14 or 18) are units or reinforcement pools.
+INDEX_TYPE_MINOR = 10
 # Map position in pixels, i32 x at 0 and y at 4 of the index record.
 PIXEL_X_OFFSET = 0
 PIXEL_Y_OFFSET = 4
@@ -96,6 +101,10 @@ BUILD_BY_NAME = {name: (live, copy) for name, _label, live, copy in BUILD_SWITCH
 
 # Towns have no port (every port field is 0 on them), so these stay read-only there.
 TOWN_READONLY_FIELDS = ("port", "port_max", "port_damage")
+# Minor places have no port or airfield (all these fields are 0, airfield max marks possible sites).
+MINOR_READONLY_FIELDS = ("port", "port_max", "port_damage", "airfield", "airfield_max", "runway_damage",
+                         "service_damage")
+MINOR_READONLY_BUILD = ("port", "airfield")
 
 _cipher = None
 
@@ -136,6 +145,8 @@ class Base:
     @property
     def kind(self):
         t = struct.unpack_from("<h", self._save[LOCATION_SECTION].data, self._offset + TYPE_OFFSET)[0]
+        if t == TYPE_MINOR:
+            return "Minor"
         return "Town" if t == TYPE_TOWN else "Base"
 
     @property
@@ -168,6 +179,8 @@ class Base:
             raise ValueError(f"{f.label} is read-only")
         if name in TOWN_READONLY_FIELDS and self.kind == "Town":
             raise ValueError(f"{f.label} is read-only for towns")
+        if name in MINOR_READONLY_FIELDS and self.kind == "Minor":
+            raise ValueError(f"{f.label} is read-only for minor places")
         if isinstance(value, bool) or not isinstance(value, int):
             raise ValueError(f"{f.label} must be an integer")
         if not f.min <= value <= f.max:
@@ -218,6 +231,8 @@ class Base:
                 raise ValueError(f"build switch {name!r} must be True or False")
             if name == "port" and self.kind == "Town":
                 raise ValueError("Port build switch is read-only for towns")
+            if name in MINOR_READONLY_BUILD and self.kind == "Minor":
+                raise ValueError(f"{name.capitalize()} build switch is read-only for minor places")
         data = self._save[LOCATION_SECTION].data
         for name, value in flags.items():
             live, copy = (self._offset + off for off in BUILD_BY_NAME[name])
@@ -229,13 +244,30 @@ class Base:
                 struct.pack_into("<h", data, live, max(struct.unpack_from("<h", data, copy)[0], 1))
 
 
-def list_bases(save, include_towns=False):
+def is_minor_place(save, loc_id, name=None):
+    """True for a named type-0 location whose index record has type 10."""
+    data = save[LOCATION_SECTION].data
+    index = save[INDEX_SECTION].data
+    start = loc_id * RECORD_SIZE
+    pos = loc_id * INDEX_RECORD_SIZE + INDEX_TYPE_OFFSET
+    if start + RECORD_SIZE > len(data) or pos + 4 > len(index):
+        return False
+    if struct.unpack_from("<h", data, start + TYPE_OFFSET)[0] != TYPE_MINOR:
+        return False
+    if struct.unpack_from("<i", index, pos)[0] != INDEX_TYPE_MINOR:
+        return False
+    return bool(decode_name(data[start:start + NAME_SIZE]) if name is None else name)
+
+
+def list_bases(save, include_towns=False, include_minor=False):
     types = (TYPE_BASE, TYPE_TOWN) if include_towns else (TYPE_BASE,)
     data = save[LOCATION_SECTION].data
     bases = []
     for loc_id in range(min(RECORD_COUNT, len(data) // RECORD_SIZE)):
         start = loc_id * RECORD_SIZE
         if struct.unpack_from("<h", data, start + TYPE_OFFSET)[0] not in types:
+            if include_minor and is_minor_place(save, loc_id):
+                bases.append(Base(save, loc_id, decode_name(data[start:start + NAME_SIZE])))
             continue
         bases.append(Base(save, loc_id, decode_name(data[start:start + NAME_SIZE])))
     return bases

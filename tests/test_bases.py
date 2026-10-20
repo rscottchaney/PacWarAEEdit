@@ -3,7 +3,7 @@ import struct
 import tempfile
 import unittest
 
-from witpae import bases
+from witpae import bases, factories
 from witpae.container import SaveFile
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
@@ -268,6 +268,52 @@ class BaseTests(unittest.TestCase):
         b.set_building({"port": False})
         self.assertEqual((b.get("port"), b.get("port_max"), b.get("port_damage")), (3, 4, 5))
         self.assertFalse(b.get_building()["port"])
+
+    def everything(self, sf=None):
+        sf = sf or self.sf
+        return {b.id: b for b in bases.list_bases(sf, include_towns=True, include_minor=True)}
+
+    def test_include_minor(self):
+        self.assertEqual(len(bases.list_bases(self.sf, include_towns=True)), 781 + 271)
+        self.assertEqual(len(bases.list_bases(self.sf, include_minor=True)), 781 + 102)
+        everything = bases.list_bases(self.sf, include_towns=True, include_minor=True)
+        self.assertEqual(len(everything), 781 + 271 + 102)
+        ids = [b.id for b in everything]
+        self.assertEqual(ids, sorted(ids))
+        kinds = [b.kind for b in everything]
+        self.assertEqual((kinds.count("Base"), kinds.count("Town"), kinds.count("Minor")), (781, 271, 102))
+        by_id = self.everything()
+        self.assertEqual((by_id[233].name, by_id[233].kind), ("Kofu", "Minor"))
+        self.assertEqual((by_id[926].name, by_id[926].kind), ("Corunna Downs", "Minor"))
+        for loc_id in (3327, 14425, 14474):
+            self.assertNotIn(loc_id, by_id)
+        # Minor places are still not move destinations.
+        self.assertFalse(bases.is_place(self.sf, 233))
+        self.assertNotIn(233, {p.id for p in bases.list_places(self.sf)})
+
+    def test_minor_port_and_airfield_are_read_only(self):
+        m = self.everything()[233]
+        before = bytes(self.sf[bases.LOCATION_SECTION].data)
+        for name in bases.MINOR_READONLY_FIELDS:
+            with self.assertRaises(ValueError, msg=name):
+                m.set(name, 1)
+            with self.assertRaises(ValueError, msg=name):
+                m.set_many({"supply": 5, name: 1})
+        for flags in ({"port": True}, {"airfield": False}, {"forts": True, "airfield": True}):
+            with self.assertRaises(ValueError, msg=flags):
+                m.set_building(flags)
+        self.assertEqual(bytes(self.sf[bases.LOCATION_SECTION].data), before)
+
+    def test_minor_edit_roundtrip(self):
+        m = self.everything()[233]
+        m.set_many({"supply": 4321, "resources": 777, "forts": 2})
+        m.set_building({"forts": False})
+        factory = factories.list_factories(m)[0]
+        factories.set_factory(m, factory.slot, factory.size + 5, 0, factory.production_on, factory.repair_on)
+        again = self.everything(self.roundtrip())[233]
+        self.assertEqual((again.get("supply"), again.get("resources"), again.get("forts")), (4321, 777, 2))
+        self.assertFalse(again.get_building()["forts"])
+        self.assertEqual(factories.get_factory(again, factory.slot).size, factory.size + 5)
 
 
 if __name__ == "__main__":

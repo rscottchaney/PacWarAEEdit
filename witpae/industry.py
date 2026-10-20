@@ -14,8 +14,6 @@ from collections import namedtuple
 from . import bases, factories, regions
 from .container import SaveFormatError
 
-TYPE_MINOR = 0
-KIND_BY_TYPE = {TYPE_MINOR: "Minor", bases.TYPE_BASE: "Base", bases.TYPE_TOWN: "Town"}
 
 # Materials in display order: key -> label.
 MATERIALS = {
@@ -70,20 +68,21 @@ NO_FLOW = Flow({}, {}, True)
 
 
 def list_industry_places(save, region_map=None):
-    """Every location of type 0 (minor), 1 (base) or 5 (town) with a name, in id order."""
+    """Every named base (type 1), town (type 5) and minor place (type 0, index type 10), in id order."""
     region_map = regions.default_regions() if region_map is None else region_map
     data = save[bases.LOCATION_SECTION].data
     places = []
     for loc_id in range(min(bases.RECORD_COUNT, len(data) // bases.RECORD_SIZE)):
         start = loc_id * bases.RECORD_SIZE
-        kind = KIND_BY_TYPE.get(struct.unpack_from("<h", data, start + bases.TYPE_OFFSET)[0])
-        if kind is None:
+        loc_type = struct.unpack_from("<h", data, start + bases.TYPE_OFFSET)[0]
+        if loc_type not in (bases.TYPE_MINOR, bases.TYPE_BASE, bases.TYPE_TOWN):
             continue
         name = bases.decode_name(data[start:start + bases.NAME_SIZE])
-        if not name:
+        if not name or (loc_type == bases.TYPE_MINOR and not bases.is_minor_place(save, loc_id, name)):
             continue
         region_id, region = region_map.region_of(loc_id)
-        places.append(IndustryPlace(loc_id, name, kind, region_id, region, bases.Base(save, loc_id, name)))
+        base = bases.Base(save, loc_id, name)
+        places.append(IndustryPlace(loc_id, name, base.kind, region_id, region, base))
     return places
 
 
