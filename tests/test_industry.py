@@ -17,9 +17,13 @@ def by_material(balance):
 
 
 class FlowRuleTests(unittest.TestCase):
-    def factory(self, type_id, size, production_on=True):
+    @classmethod
+    def setUpClass(cls):
+        cls.save = SaveFile.load(SAVE_015) if os.path.exists(SAVE_015) else None
+
+    def factory(self, type_id, size, production_on=True, available=None):
         return factories.Factory(0, type_id, "x", factories.kind_of(type_id), size, 0, production_on, True, False,
-                                 None)
+                                 available)
 
     def test_rules(self):
         flow = industry.factory_flow(self.factory(521, 10))
@@ -29,11 +33,24 @@ class FlowRuleTests(unittest.TestCase):
         self.assertEqual(industry.factory_flow(self.factory(526, 2)).uses, {"hi": 12})
         self.assertEqual(industry.factory_flow(self.factory(524, 50)), industry.NO_FLOW)
 
-    def test_aircraft_and_engines_have_unknown_inputs(self):
-        for type_id in (2001, 12):
-            flow = industry.factory_flow(self.factory(type_id, 60))
-            self.assertFalse(flow.uses_known)
-            self.assertEqual(list(flow.makes.values()), [2])
+    def test_engine_factory_uses_hi(self):
+        flow = industry.factory_flow(self.factory(12, 60))
+        self.assertEqual((flow.uses, flow.makes), ({"hi": 36}, {"engines": 2}))
+
+    @unittest.skipUnless(os.path.exists(SAVE_015), "sample save missing")
+    def test_aircraft_factory_flow(self):
+        # Game date is 10 Dec 1941. Model ids: 603 A6M2 Zero (1 engine), 746 Ki-21-Ic Sally (2 engines),
+        # 2 A-29A Hudson (Allied, 2 engines).
+        zero = industry.factory_flow(self.factory(2603, 60, available=(41, 12)), self.save)
+        self.assertEqual((zero.uses, zero.makes), ({"hi": 36, "engines": 2}, {"aircraft": 2}))
+        sally = industry.factory_flow(self.factory(2746, 30, available=(41, 12)), self.save)
+        self.assertEqual((sally.uses, sally.makes), ({"hi": 36, "engines": 2}, {"aircraft": 1}))
+        hudson = industry.factory_flow(self.factory(2002, 30, available=(42, 7)), self.save)
+        self.assertEqual(hudson, industry.NO_FLOW)  # researching: nothing built, nothing used
+        hudson = industry.factory_flow(self.factory(2002, 30, available=(41, 1)), self.save)
+        self.assertEqual((hudson.uses, hudson.makes), ({"hi": 36}, {"aircraft": 1}))  # Allied: no engines
+        with self.assertRaises(ValueError):
+            industry.factory_flow(self.factory(2603, 60))
 
     def test_production_off_does_nothing(self):
         for type_id in (521, 519, 2001):
@@ -84,7 +101,9 @@ class IndustryReportTests(unittest.TestCase):
         self.assertTrue(all(r.production_off == 0 for r in type_rows))
         self.assertEqual(industry.flow_text(rows["Heavy Industry"].makes), "14,548 HI, 14,548 supply")
         self.assertEqual(industry.flow_text(rows["Heavy Industry"].uses), "145,480 resources, 14,548 fuel")
-        self.assertFalse(rows["Aircraft"].uses_known)
+        # Only the six factories whose models are available on 10 Dec 1941 use HI; the rest are researching.
+        self.assertAlmostEqual(rows["Aircraft"].uses["hi"], 67.8)
+        self.assertEqual(rows["Aircraft"].uses.keys(), {"hi"})
 
     def test_allied_balance(self):
         _types, balance = industry.summarize(self.allied)
@@ -100,6 +119,7 @@ class IndustryReportTests(unittest.TestCase):
         self.assertEqual(rows["supply"].produced, 40049)
         self.assertEqual(rows["manpower"].produced, 1174 * 5)
         self.assertEqual(rows["hi"].produced, 7274 * 2)
+        self.assertAlmostEqual(rows["hi"].used, 67.8)
         # Oil runs down, so days left is stored / -net; the others do not.
         self.assertEqual((rows["oil"].allotted, rows["oil"].net), (50, -15270))
         self.assertAlmostEqual(rows["oil"].days, rows["oil"].stored / 15270)
@@ -116,7 +136,9 @@ class IndustryReportTests(unittest.TestCase):
         rows = by_material(balance)
         self.assertEqual({k: rows[k].stored for k in industry.POOLS},
                          {"manpower": 17555, "hi": 37846, "naval": 0, "merchant": 0, "armament": 0, "vehicle": 0})
-        self.assertEqual((rows["hi"].produced, rows["hi"].used, rows["hi"].net), (14548, 0, 14548))
+        self.assertEqual(rows["hi"].produced, 14548)
+        self.assertAlmostEqual(rows["hi"].used, 67.8)
+        self.assertAlmostEqual(rows["hi"].net, 14548 - 67.8)
         self.assertIsNone(rows["hi"].days)
         # A pool that is used faster than it is made has days left, unless a region is selected.
         sf = SaveFile.load(SAVE_015)
@@ -177,6 +199,42 @@ class IndustryReportTests(unittest.TestCase):
         self.assertEqual(by_group(types)["Heavy Industry"].production_off, f.size)
         row = next(r for r in industry.factory_rows([place]) if r.factory.slot == f.slot)
         self.assertEqual((row.flow.makes, row.flow.uses), ({}, {}))
+
+    def test_engine_pool_value(self):
+        # Japanese pools of engine devices: 239 Hitachi (early), 242 Mitsubishi Ha-31, 243 Ha-32, 244 Ha-33, 237 Aichi Ha-60.
+        got = {d: industry.pool_value(self.save, d, 0) for d in (239, 242, 243, 244, 237)}
+        self.assertEqual(got, {239: 332, 242: 245, 243: 43, 244: 119, 237: 0})
+        self.assertEqual(industry.pool_value(self.save, 521, 1), 37846)
+        sf = SaveFile.load(SAVE_015)
+        sf[industry.POOL_SECTION].data = sf[industry.POOL_SECTION].data[:8000]
+        with self.assertRaises(SaveFormatError):
+            industry.pool_value(sf, 239, 0)
+
+    def test_research_factories_contribute_nothing(self):
+        sf = SaveFile.load(SAVE_015)
+        allied = industry.filter_places(industry.list_industry_places(sf), "Allied")
+        research = [(p, f) for p in allied for f in factories.list_factories(p.base)
+                    if f.kind == "aircraft" and industry.is_researching(sf, f)]
+        self.assertEqual(len(research), 27)
+        self.assertEqual(sum(f.size for _p, f in research), 796)
+        for p, f in research:
+            self.assertEqual(industry.factory_flow(f, sf), industry.NO_FLOW)
+        before = by_material(industry.summarize(allied)[1])["hi"].used
+        for p, f in research:
+            factories.set_factory(p.base, f.slot, f.size, f.damage, False, f.repair_on)
+        self.assertAlmostEqual(by_material(industry.summarize(allied)[1])["hi"].used, before)
+        # Once the game date passes a model's date its factories are no longer researching.
+        sf[industry.reports.DATE_SECTION].data[industry.reports.YEAR_OFFSET] = 46  # Dec 1946
+        self.assertEqual(industry.game_month(sf), (46, 12))
+        self.assertFalse(any(industry.is_researching(sf, f) for _p, f in research))
+
+    def test_japanese_aircraft_use_engines(self):
+        japanese = industry.filter_places(self.places, "Japanese")
+        types = by_group(industry.summarize(japanese)[0])
+        self.assertIn("engines", types["Aircraft"].uses)
+        self.assertGreater(types["Aircraft"].uses["engines"], 0)
+        self.assertAlmostEqual(types["Engines"].uses["hi"], types["Engines"].size / 30 * 18)
+        self.assertAlmostEqual(types["Engines"].makes["engines"], types["Engines"].size / 30)
 
     def test_regions_add_up(self):
         all_rows = by_material(industry.summarize(self.allied)[1])

@@ -1,4 +1,5 @@
 import os
+import struct
 import tempfile
 import unittest
 
@@ -102,6 +103,88 @@ class FactoryTests(unittest.TestCase):
                      if factories.get_factory(b, k) is None)
         with self.assertRaises(ValueError):
             factories.set_factory(empty[0], empty[1], 1, 0, True, True)
+
+    def test_set_aircraft_model(self):
+        # Slot 8 is a P-38G Lightning (id 332); id 2 is the Allied A-29A Hudson.
+        factories.set_factory(self.la, 8, 20, 5, False, False, False)
+        before = factories.get_factory(self.la, 8)
+        factories.set_aircraft_model(self.la, 8, 2)
+        after = factories.get_factory(self.la, 8)
+        self.assertEqual((after.type, after.name, after.kind), (2002, "A-29A Hudson", "aircraft"))
+        self.assertEqual((after.size, after.damage, after.production_on, after.repair_on, after.upgrade_on),
+                         (before.size, before.damage, before.production_on, before.repair_on, before.upgrade_on))
+        self.assertEqual(after.available, (42, 7))
+        data = self.sf[bases.LOCATION_SECTION].data
+        start = LA * bases.RECORD_SIZE
+        self.assertEqual(struct.unpack_from("<h", data, start + factories.TYPE_OFFSET + 16)[0], 2002)
+        self.assertEqual(struct.unpack_from("<h", data, start + factories.ORIGINAL_TYPE_OFFSET + 16)[0], 2002)
+        again = self.roundtrip()
+        f = factories.get_factory({b.id: b for b in bases.list_bases(again)}[LA], 8)
+        self.assertEqual((f.type, f.size, f.damage, f.production_on, f.repair_on, f.upgrade_on),
+                         (2002, 20, 5, False, False, False))
+        old, new = self.rec(SaveFile.load(SAVE_015)), self.rec(again)
+        changed = {i - start for i in range(len(old)) if old[i] != new[i]}
+        # Type and original type (two bytes each), plus what the earlier set_factory call changed.
+        self.assertEqual(changed, {136 + 16, 136 + 17, 336 + 16, 336 + 17, 216 + 16, 844 + 8, 870 + 8, 1073 + 8})
+
+    def test_set_aircraft_model_refusals(self):
+        before = self.rec(self.sf)
+        for slot, aircraft_id in ((3, 2),        # Heavy Industry, not an aircraft factory
+                                  (8, 603),      # Japanese A6M2 Zero for an Allied factory
+                                  (8, 0),        # no such model
+                                  (8, 999),      # unnamed record
+                                  (8, 5000),
+                                  (8, 332),      # already building it
+                                  (8, True),
+                                  (8, "2")):
+            with self.assertRaises(ValueError, msg=(slot, aircraft_id)):
+                factories.set_aircraft_model(self.la, slot, aircraft_id)
+            self.assertEqual(self.rec(self.sf), before, (slot, aircraft_id))
+        with self.assertRaises(ValueError):
+            factories.set_aircraft_model(self.by_id[252], 10, 2)  # engine factory
+        empty = next((b, k) for b in self.by_id.values() for k in range(20) if factories.get_factory(b, k) is None)
+        with self.assertRaises(ValueError):
+            factories.set_aircraft_model(empty[0], empty[1], 2)
+
+    def test_set_switches_writes_only_the_two_bytes(self):
+        before = self.rec(self.sf)
+        factories.set_switches(self.la, 4, production_on=False)
+        base = LA * bases.RECORD_SIZE
+        after = self.rec(self.sf)
+        changed = {i - base for i in range(len(before)) if after[i] != before[i]}
+        self.assertEqual(changed, {844 + 4})
+        factories.set_switches(self.la, 4, repair_on=False)
+        f = factories.get_factory(self.la, 4)
+        self.assertEqual((f.production_on, f.repair_on, f.size, f.damage), (False, False, 2500, 0))
+        factories.set_switches(self.la, 4, True, True)
+        self.assertEqual(self.rec(self.sf), before)
+        factories.set_switches(self.la, 4)  # None, None changes nothing
+        self.assertEqual(self.rec(self.sf), before)
+
+    def test_set_switches_ignores_size_and_damage(self):
+        data = self.sf[bases.LOCATION_SECTION].data
+        struct.pack_into("<h", data, LA * bases.RECORD_SIZE + factories.SIZE_OFFSET + 2 * 8, 0)
+        struct.pack_into("<h", data, LA * bases.RECORD_SIZE + factories.DAMAGE_OFFSET + 2 * 8, 8)
+        factories.set_switches(self.la, 8, production_on=False, repair_on=False)
+        f = factories.get_factory(self.la, 8)
+        self.assertEqual((f.size, f.damage, f.production_on, f.repair_on), (0, 8, False, False))
+        with self.assertRaises(ValueError):
+            factories.set_factory(self.la, 8, 0, 8, True, True)  # the editor's own rule is unchanged
+
+    def test_set_switches_refusals(self):
+        before = self.rec(self.sf)
+        for args in ((2, False),            # Oil: production cannot be switched off
+                     (8, 1),                # not a bool
+                     (8, None, "no"),
+                     (20, True),
+                     (-1, True)):
+            with self.assertRaises(ValueError, msg=args):
+                factories.set_switches(self.la, *args)
+            self.assertEqual(self.rec(self.sf), before, args)
+        factories.set_switches(self.la, 2, repair_on=False)  # repair on a locked type is fine
+        empty = next((b, k) for b in self.by_id.values() for k in range(20) if factories.get_factory(b, k) is None)
+        with self.assertRaises(ValueError):
+            factories.set_switches(empty[0], empty[1], True)
 
     def test_production_back_on_allowed_for_locked(self):
         factories.set_factory(self.la, 2, 2000, 0, True, False)

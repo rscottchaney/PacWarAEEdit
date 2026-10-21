@@ -28,6 +28,7 @@ Tests: `python -m unittest discover -s tests -v`
 | Stockpile Yes/No switches (Supply, Fuel, Resources, Oil; one bitfield byte, other bits preserved) | verified in-game, editable |
 | Factories (per base, 20 slots: size, damage, production Yes/No, repair Yes/No; production cannot be switched off for Oil, Resources, Manpower, Repair Shipyard, Light Industry) | verified, editable |
 | Factory Keep/Upgd switch (aircraft and engine factories) and aircraft availability date | verified in-game; switch editable, date display only |
+| Factory model (aircraft factories): the "Model" box under the factory table lists the aircraft models of the same side as the factory's current model, shown as `name (#id)`; "Set model" writes the new type (2000 + aircraft id) to both the type array (offset 136 + 2 x slot) and the original-type array (336 + 2 x slot) and keeps size, damage and the switches. Refused for industry and engine factories, for a model of the other side, for the model it already builds and for a missing model. In the game only the Japanese player can convert factories and the game damages a factory when it converts; the editor does not damage it | not yet tested in-game |
 | Supply cap (the "max" on the base screen), Garrison required (Allied) | values verified against game screens, editable (edit not yet tested in-game) |
 | Garrison required (Japanese) | unverified (not yet checked on a Japanese-held base), editable |
 | Supply required, Aviation support, Ships in port, Aircraft at base | verified, display only (recalculated by the game) |
@@ -56,7 +57,7 @@ the ID. Edits use the same Apply button, row highlight and Save As as bases.
 | Field | Status |
 |---|---|
 | Max speed, Cruise speed, Climb, Maneuver, Armor, Durability, Load | verified in-game, editable |
-| Production rate, In pool (side-wide aircraft pool) | verified in-game, editable |
+| Production rate, In pool (side-wide aircraft pool) | verified in-game for Allied models, editable. The pool and used tables hold a (Japan, Allies) pair per model and each model reads its own side's half; Japanese values are not yet checked in-game |
 | Used, produced last turn, produced this month | verified in-game, read-only |
 | Max altitude | verified in-game, editable |
 | Max range (hexes, miles) | verified in-game, editable |
@@ -67,6 +68,7 @@ the ID. Edits use the same Apply button, row highlight and Save As as bases.
 | Type: Fighter and Dive Bomber verified; other labels are guesses and end in `?` | read-only |
 | Nation: IJA, IJN, USN, USA, NZ verified; other labels are guesses and end in `?`; unknown codes show the number | read-only |
 | Weapons (max load and reduced load: name, count, facing F/TR/C/XT), gun value, maneuver modifiers per altitude band | verified, read-only |
+| Engines: the engine is weapon slot 9, a device id (i16 at offset 60) and a count (u8 at offset 100; the reduced-load copies at 80 and 120 are not used). Japanese models name a specific engine device (A6M2 Zero: 1 x Nakajima Ha-35; Ki-21-Ic Sally: 2 x Nakajima Ha-5), Allied models use the generic device 1852 "Engine" and show "2 engines" | read-only |
 | Upgrade (id and name of the record it points at) | unverified, read-only |
 
 The field table is in `witpae/aircraft.py`.
@@ -193,7 +195,7 @@ Load cost and AV are computed by the game.
 
 ## Reports
 
-The Reports tab holds five read-only reports; nothing in them edits the save. It
+The Reports tab holds seven reports; only the bulk switch buttons of Air production edit the save. It
 shows the game date (section 0x01: day at 42, month at 44, two-digit year at 46,
 all i16) and refreshes whenever the tab is shown, so edits made in the Bases tab
 are reflected. Double-click a row to jump to that base (Bases tab) or ship (Ships
@@ -237,13 +239,28 @@ subtracted.
 | Armament (525) | 6 HI | 1 armament point |
 | Vehicle (526) | 6 HI | 1 vehicle point |
 | Repair Shipyard (524) | - | - |
-| Aircraft (2000+) and engine (below 500) factories | HI, unknown (shown as `-`) | size / 30 aircraft or engines |
+| Aircraft (2000+) factories | 18 HI x engines per aircraft per aircraft built; Japanese aircraft also use one engine per engine fitted (Allied aircraft need none) | size / 30 aircraft |
+| Engine factories (a device id such as 237 or 1932) | 18 HI per engine | size / 30 engines |
+
+Aircraft and engine rules are manual 13.2.2.4 and 13.2.2.5 (not yet checked in-game): the size of an
+aircraft factory is planes per month, so planes per day = size / 30, HI per day = planes per day x 18 x
+engines per aircraft (see the Aircraft tab), and a Japanese aircraft also uses planes per day x engines
+engines per day. An aircraft factory whose model is not yet available on the game date (the date shown as
+"(yy/m)" in the Bases tab) is researching: it builds and uses nothing yet, so it adds nothing to the
+Industry tab's Aircraft row or the HI used. The game date comes from section 0x01; if it cannot be read, no
+factory counts as researching. On the sample save (10 Dec 1941) 27 of the 33 Allied aircraft factories
+(size 796 of 856) are still researching, so the Allied aircraft HI is 67.8 per day; with every model
+available it would be 1096.2. WitPTracker shows 361 HI per day for the Allied airframes of this save, which
+these rules do not reproduce; its rule is unknown.
 
 Side-wide production pools (section 0x01): an i32 little-endian at byte
 `8184 + 8 * device + 4 * side`, side 0 = Japan, 1 = Allies. Devices: 520 manpower,
 521 HI points, 522 naval shipyard points, 523 merchant shipyard points, 525 armament
 points, 526 vehicle points. A missing or short section is a format error and the
-pool rows then show `?`.
+pool rows then show `?`. The same formula gives the side's pool of an engine: the device id of the engine
+(for example 239 Hitachi (early), 242 Mitsubishi Ha-31, 244 Mitsubishi Ha-33) in place of the point
+devices, with side 0 for Japan. The offset was found by reading WitPTracker's code; the Japanese values on
+the sample save (239: 332, 242: 245, 243: 43, 244: 119, 237: 0) are what it reads there.
 
 Daily allotments: in each location record (section 0x13), u16 at offset 824 = daily
 supply, 826 = daily fuel, 828 = daily oil (830 is always 0 in the sample and is not
@@ -257,6 +274,42 @@ Not included: supply used by units and fuel used by ships. There is no "not
 building" estimate. For the Allied side of the sample save the totals match
 WitPTracker's factory counts and sizes (Resources 252 factories / size 25969,
 Manpower 181 / 1174, Light Industry 138 / 17836).
+
+### Air production and Engines
+
+Two more sub-tabs, after Raw materials, report aircraft and engine production for the whole map (minor
+places included). Both follow the rules above and are not yet tested in-game.
+
+Air production lists one row per aircraft model, with Search, Side (All, Allied, Japanese) and "Only
+models in production or use" (default on: the model has a factory, a pool or an air group). Click a
+heading to sort. Columns: ID, Aircraft, Type, Side, Engines ("2 x Nakajima Ha-5" for Japanese models,
+"2 engines" for Allied ones), Pool and Used (the side's aircraft pool and the number used), Factories
+(slots building the model, all states), Size (planes per month of factories with production on whose
+model is available), Research (size of factories whose model is not yet available), Damaged (sum of the
+factories' damage), Prod off (size of available factories with production off), Repair off (size of
+factories with repair off), Planes/day (size / 30), HI/day (planes/day x 18 x engines), Engines/day
+(Japanese models only, `-` for Allied), Groups and In groups (air groups that have arrived flying the model
+and the planes they hold), Short (sum over those groups of maximum size minus planes, when positive), Next
+group (smallest days to arrival, offset 220, among groups of the model that have not arrived, `-` if none;
+many groups store 9999 or a large value there), and Available (from and to dates). Group fields are in `witpae/airgroups.py` (aircraft id i16 at 30, location i16 at 40 with 0 = not
+yet arrived, planes u8 at 210, maximum size u8 at 245).
+
+Select a model to list the factories building it below the table: place, kind, side, region, slot, size,
+damage, Production and Repair (Yes/No), Upgrade (Keep/Upgd) and the availability date. Double-click
+opens the place in the Bases tab. The buttons "Production on", "Production off", "Repair on" and "Repair
+off" set that switch in every factory building the selected model (size, damage and the other switches
+are kept), mark those bases as edited and report in the status bar how many factories changed. Only the
+production-off byte (offset 844 + slot) and the repair-off byte (870 + slot) are written, so factories
+whose stored damage is above their size (capacity still being built up, for example size 0 and damage 8)
+are switched too. Production cannot be switched off for the locked industry types, which do not occur
+among aircraft factories.
+
+Engines lists the Japanese engines (every engine fitted to a Japanese model or built by a Japanese engine
+factory; Allied aircraft use the generic engine and do not need engines): Factories, Size (engines per
+month of factories with production on), Damaged, Prod off, Pool (the Japanese pool, see the formula above),
+Needed/month (for every Japanese aircraft factory with production on and an available model, size x
+engines per aircraft), Net/month (size - needed), HI/day (size / 30 x 18) and Used by (model names,
+the first four and a count of the rest). The code is in `witpae/airproduction.py`.
 
 Minor places: besides bases (type 1) and towns (type 5), the game has named
 locations of type 0 that hold factories and stocks (for example Kofu, Corunna

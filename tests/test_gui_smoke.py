@@ -793,7 +793,7 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertEqual(app.industry_tree.set("Resources", "size"), "25,969")
         self.assertEqual(app.industry_tree.set("Heavy Industry", "output"), "14,548 HI, 14,548 supply")
         self.assertEqual(app.industry_tree.set("Heavy Industry", "input"), "145,480 resources, 14,548 fuel")
-        self.assertEqual(app.industry_tree.set("Aircraft", "input"), "-")
+        self.assertEqual(app.industry_tree.set("Aircraft", "input"), "67.8 HI")
         self.assertEqual(app.balance_tree.set("supply", "produced"), "40,049")
         self.assertEqual(app.balance_tree.set("manpower", "stored"), "17,555")
         self.assertEqual(app.balance_tree.set("hi", "stored"), "37,846")
@@ -914,6 +914,139 @@ class GuiSmokeTests(unittest.TestCase):
         self.root.update()
         self.assertNotEqual(app.industry_tree.set("Heavy Industry", "output"), before)
 
+    def test_air_production_reports(self):
+        import witpae_editor
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        self.root.update()
+        tabs = [app.reports_notebook.tab(t, "text") for t in app.reports_notebook.tabs()]
+        self.assertEqual(tabs[-2:], ["Air production", "Engines"])
+        self.assertEqual(tabs.index("Raw materials") + 1, tabs.index("Air production"))
+        # Air production: the Zero is Japanese, built by one factory (place 236, slot 6).
+        shown = len(app.air_tree.get_children())
+        self.assertGreater(shown, 100)
+        self.assertEqual(app.air_count.get(), f"{shown} models")
+        self.assertEqual(app.air_tree.set("603", "engines"), "1 x Nakajima Ha-35")
+        self.assertEqual(app.air_tree.set("603", "size"), "56")
+        self.assertEqual(app.air_tree.set("603", "planes_day"), "1.9")
+        self.assertEqual(app.air_tree.set("603", "hi_day"), "33.6")
+        self.assertEqual(app.air_tree.set("2", "engines_day"), "-")
+        self.assertEqual(app.air_tree.set("2", "engines"), "2 engines")
+        self.assertEqual(app.air_tree.set("603", "next_group"), "112")
+        self.assertEqual(app.air_tree.set("332", "research"), "20")
+        app.air_only_var.set(False)
+        app.refresh_air_list()
+        self.assertGreater(len(app.air_tree.get_children()), shown)
+        app.air_only_var.set(True)
+        app.air_search_var.set("zero")
+        self.assertIn("603", app.air_tree.get_children())
+        self.assertTrue(all("zero" in app.air_tree.set(i, "name").lower() for i in app.air_tree.get_children()))
+        app.air_search_var.set("")
+        app.air_side_var.set("Allied")
+        app.refresh_air_list()
+        self.assertTrue(all(app.air_tree.set(i, "side") == "Allied" for i in app.air_tree.get_children()))
+        app.air_side_var.set("All")
+        for col in ("engines", "next_group", "engines_day", "hi_day", "size", "size"):
+            app.sort_air_by(col)
+        sizes = [int(app.air_tree.set(i, "size").replace(",", "")) for i in app.air_tree.get_children()]
+        self.assertEqual(sizes, sorted(sizes, reverse=True))
+        # Selecting a model fills the factory table; double-click jumps to the place.
+        app.air_tree.selection_set("603")
+        self.root.update()
+        self.assertEqual(app.air_factory_tree.get_children(), ("236:6",))
+        self.assertEqual(app.air_factory_tree.set("236:6", "size"), "56")
+        self.assertEqual(app.air_factory_tree.set("236:6", "production"), "Yes")
+        app.search_var.set("zzz")
+        app.air_factory_tree.selection_set("236:6")
+        app.jump_to_industry_place(app.air_factory_tree)
+        self.root.update()
+        self.assertEqual(app.notebook.select(), str(app.bases_tab))
+        self.assertEqual(app.tree.selection(), ("236",))
+        app.notebook.select(app.reports_tab)
+        self.root.update()
+        self.assertEqual(app.air_tree.selection(), ("603",))
+        # Bulk switches mark the bases edited and change only that model.
+        self.assertFalse(app.edited)
+        app.apply_air_switch("Production off", False, None)
+        self.assertEqual(app.edited, {236})
+        self.assertTrue(app.dirty)
+        self.assertIn("1 of 1 factories changed", app.status.get())
+        self.assertEqual(app.air_factory_tree.set("236:6", "production"), "No")
+        self.assertEqual(app.air_tree.set("603", "size"), "0")
+        self.assertEqual(app.air_tree.set("603", "production_off"), "56")
+        app.apply_air_switch("Repair off", None, False)
+        self.assertEqual(app.air_factory_tree.set("236:6", "repair"), "No")
+        app.apply_air_switch("Production on", True, None)
+        app.apply_air_switch("Repair on", None, True)
+        self.assertEqual(app.air_tree.set("603", "size"), "56")
+        self.assertEqual(app.air_factory_tree.set("236:6", "repair"), "Yes")
+        app.air_tree.selection_remove("603")
+        self.root.update()
+        app.apply_air_switch("Production off", False, None)
+        self.assertIn("select a model", app.status.get())
+        # Engines: Japanese only.
+        self.assertEqual(app.engine_count.get(), f"{len(app.engine_tree.get_children())} engines")
+        self.assertEqual(app.engine_tree.set("1932", "name"), "Nakajima Ha-35")
+        self.assertEqual(app.engine_tree.set("1932", "size"), "180")
+        self.assertEqual(app.engine_tree.set("244", "pool"), "119")
+        self.assertEqual(app.engine_tree.set("244", "size"), "65")
+        self.assertNotIn("1852", app.engine_tree.get_children())
+        for col in ("name", "pool", "net", "used_by", "size", "size"):
+            app.sort_engines_by(col)
+        sizes = [int(app.engine_tree.set(i, "size").replace(",", "")) for i in app.engine_tree.get_children()]
+        self.assertEqual(sizes, sorted(sizes, reverse=True))
+        # The Aircraft tab shows the engines read-only.
+        app.aircraft_tree.selection_set("746")
+        self.root.update()
+        self.assertEqual(app.aircraft_info["engines"].get(), "2 x Nakajima Ha-5")
+
+    def test_factory_model_box(self):
+        from unittest import mock
+        from witpae import factories
+        import witpae_editor
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        self.assertTrue(app.factory_model_box.instate(["disabled"]))
+        app.tree.selection_set("506")
+        self.root.update()
+        app.factory_tree.selection_set("2")  # Oil: no model
+        self.root.update()
+        self.assertTrue(app.factory_model_box.instate(["disabled"]))
+        self.assertTrue(app.factory_model_button.instate(["disabled"]))
+        app.factory_tree.selection_set("8")  # P-38G Lightning
+        self.root.update()
+        self.assertFalse(app.factory_model_box.instate(["disabled"]))
+        self.assertEqual(app.factory_model_var.get(), "P-38G Lightning (#332)")
+        labels = list(app.factory_model_box.cget("values"))
+        self.assertIn("A-29A Hudson (#2)", labels)
+        self.assertNotIn("A6M2 Zero (#603)", labels)
+        self.assertEqual(len(labels), sum(1 for a in app.aircraft.values() if a.side_id == 1))
+        # Set model changes the row and keeps size and switches.
+        factories.set_factory(app.bases[506], 8, 20, 0, False, True)
+        app.factory_model_var.set("A-29A Hudson (#2)")
+        app.apply_factory_model()
+        self.root.update()
+        f = factories.get_factory(app.bases[506], 8)
+        self.assertEqual((f.type, f.size, f.production_on), (2002, 20, False))
+        self.assertEqual(app.factory_tree.set("8", "name"), "A-29A Hudson")
+        self.assertEqual(app.factory_model_var.get(), "A-29A Hudson (#2)")
+        self.assertIn(506, app.edited)
+        self.assertTrue(app.dirty)
+        # The same model again is refused with a message and changes nothing.
+        with mock.patch.object(witpae_editor.messagebox, "showerror") as err:
+            app.apply_factory_model()
+        err.assert_called_once()
+        self.assertIn("already", err.call_args[0][1])
+        # Japanese factories list Japanese models only.
+        app.tree.selection_set("236")
+        self.root.update()
+        slot = next(f.slot for f in factories.list_factories(app.bases[236]) if f.type == 2603)
+        app.factory_tree.selection_set(str(slot))
+        self.root.update()
+        labels = list(app.factory_model_box.cget("values"))
+        self.assertIn("A6M2 Zero (#603)", labels)
+        self.assertNotIn("A-29A Hudson (#2)", labels)
+
     def test_reports_without_game_date(self):
         import witpae_editor
         from witpae import reports
@@ -924,6 +1057,9 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertEqual(app.game_date_var.get(), "Game date: unknown")
         self.assertEqual(app.upgrade_tree.get_children(), ())
         self.assertEqual(len(app.spoilage_tree.get_children()), 7)
+        # The pools sit in the same truncated section, so the air tables are empty rather than failing.
+        self.assertEqual(app.air_tree.get_children(), ())
+        self.assertEqual(app.engine_tree.get_children(), ())
 
     def test_load_folder_gives_clear_error(self):
         from unittest import mock

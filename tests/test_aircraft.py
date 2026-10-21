@@ -1,4 +1,5 @@
 import os
+import struct
 import tempfile
 import unittest
 
@@ -42,8 +43,17 @@ class AircraftTests(unittest.TestCase):
         self.assertEqual((a.pool, a.used, a.get("rate")), (50, 4, 40))
         old = bytes(SaveFile.load(SAVE_015)[aircraft.POOL_SECTION].data)
         new = bytes(again[aircraft.POOL_SECTION].data)
-        pos = aircraft.POOL[0] + 342 * aircraft.POOL[1]
+        pos = aircraft.POOL[0] + 342 * aircraft.POOL[1] + 4  # the Allied half of the pair
         self.assertEqual({i for i in range(len(old)) if old[i] != new[i]}, {pos})
+
+    def test_japanese_pool_reads_and_writes_the_japanese_half(self):
+        # The pool and used tables are (Japan, Allies) pairs; Japanese models read the first half.
+        self.assertEqual((self.by_id[603].name, self.by_id[603].pool), ("A6M2 Zero", 32))
+        self.assertEqual((self.by_id[752].name, self.by_id[752].used), ("Ki-27b Nate", 40))
+        self.by_id[603].set_pool(50)
+        data = self.sf[aircraft.POOL_SECTION].data
+        start = aircraft.POOL[0] + 603 * aircraft.POOL[1]
+        self.assertEqual(struct.unpack_from("<ii", data, start), (50, 0))
 
     def test_pool_validation(self):
         before = bytes(self.sf[aircraft.POOL_SECTION].data)
@@ -135,6 +145,19 @@ class AircraftTests(unittest.TestCase):
         self.assertEqual(aircraft.nation_label(9), "UK")
         self.assertEqual(aircraft.nation_label(12), "China?")
         self.assertEqual(aircraft.nation_label(77), "77")
+
+    def test_engines(self):
+        # Japanese models name their engine device; Allied ones use the generic device 1852.
+        expected = {603: ("A6M2 Zero", 1932, 1, "1 x Nakajima Ha-35"),
+                    746: ("Ki-21-Ic Sally", 1930, 2, "2 x Nakajima Ha-5"),
+                    2: ("A-29A Hudson", 1852, 2, "2 engines")}
+        for aid, (name, engine, count, text) in expected.items():
+            a = self.by_id[aid]
+            self.assertEqual((a.name, a.engine_id, a.engine_count, a.engines_text), (name, engine, count, text))
+        self.assertEqual(self.by_id[603].engine_name, "Nakajima Ha-35")
+        self.assertEqual(self.by_id[2].engine_name, "Engine")
+        self.assertEqual(self.by_id[603].side_id, 0)
+        self.assertEqual(self.by_id[2].side_id, 1)
 
     def test_upgrade(self):
         a = self.by_id[332]
