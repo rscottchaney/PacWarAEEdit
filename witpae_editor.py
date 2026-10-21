@@ -597,7 +597,7 @@ def region_choices():
 MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
 HISTORY_SIDE_COLORS = {"Allied": "#2f6fd0", "Japanese": "#d03a2f"}
-HISTORY_VIEWS = ("Sides", "Base")
+HISTORY_VIEWS = ("Sides", "Base", "Aircraft")
 HISTORY_BOTH = "Both"
 HISTORY_NONE_TEXT = "-"
 # One table for both views; the view picks the columns it shows.
@@ -609,6 +609,7 @@ HISTORY_COLUMNS = [
 ]
 HISTORY_SIDES_COLUMNS = ("date", "turn", "allied", "allied_change", "japanese", "japanese_change")
 HISTORY_BASE_COLUMNS = ("date", "turn", "side", "value", "change")
+HISTORY_AIRCRAFT_COLUMNS = ("date", "turn", "value", "change")
 
 
 def _history_number(value):
@@ -742,6 +743,7 @@ class EditorApp:
         self.history_problems = []
         self.history_kept = None  # the RecordResult of the open save when its date was kept from another file
         self.history_choices = {}
+        self.history_aircraft_choices = {}
         self.industry_places = []
         self.region_ids = region_choices()
         self.factory_report_sort_col = "id"
@@ -1327,6 +1329,7 @@ class EditorApp:
         for k, letter in enumerate("AB"):
             ttk.Button(buttons, text=f"Compare as {letter}", command=lambda k=k: self.compare_aircraft(k)).pack(
                 side="left", padx=4)
+        ttk.Button(buttons, text="History", command=self.show_aircraft_history).pack(side="left", padx=4)
         row += 1
         self.aircraft_info = {}
         for name, label in (("type", "Type (read-only)"), ("nation", "Nation (read-only)"),
@@ -4200,6 +4203,18 @@ class EditorApp:
         self.history_base_metric_var = tk.StringVar(value=history.BASE_METRICS["supply"])
         self._report_combo(self.history_base_bar, "Metric:", self.history_base_metric_var,
                            history.BASE_METRICS.values(), self.refresh_history_view, 11)
+        self.history_aircraft_bar = ttk.Frame(view_bar)
+        ttk.Label(self.history_aircraft_bar, text="Aircraft filter:").pack(side="left")
+        self.history_aircraft_filter_var = tk.StringVar()
+        self.history_aircraft_filter_var.trace_add("write", lambda *a: self.show_history_aircraft_choices())
+        ttk.Entry(self.history_aircraft_bar, textvariable=self.history_aircraft_filter_var, width=16).pack(
+            side="left", padx=4)
+        self.history_aircraft_var = tk.StringVar()
+        self.history_aircraft_box = self._report_combo(self.history_aircraft_bar, "Aircraft:",
+                                                       self.history_aircraft_var, [], self.refresh_history_view, 30)
+        self.history_aircraft_metric_var = tk.StringVar(value=history.AIRCRAFT_METRICS["pool"])
+        self._report_combo(self.history_aircraft_bar, "Metric:", self.history_aircraft_metric_var,
+                           history.AIRCRAFT_METRICS.values(), self.refresh_history_view, 18)
         self.history_chart = chart.LineChart(tab)
         self.history_chart.pack(side="top", fill="both", expand=True, pady=(4, 0))
         table = ttk.Frame(tab)
@@ -4209,11 +4224,10 @@ class EditorApp:
         self._show_history_view()
 
     def _show_history_view(self):
-        sides = self.history_view_var.get() == HISTORY_VIEWS[0]
-        shown, hidden = (self.history_sides_bar, self.history_base_bar) if sides else (
-            self.history_base_bar, self.history_sides_bar)
-        hidden.pack_forget()
-        shown.pack(side="left", padx=(12, 0))
+        bars = dict(zip(HISTORY_VIEWS, (self.history_sides_bar, self.history_base_bar, self.history_aircraft_bar)))
+        for view, bar in bars.items():
+            bar.pack_forget()
+        bars[self.history_view_var.get()].pack(side="left", padx=(12, 0))
         self.refresh_history_view()
 
     def show_history_base_choices(self):
@@ -4221,13 +4235,25 @@ class EditorApp:
         needle = self.history_filter_var.get().strip().lower()
         self.history_base_box.configure(values=[l for l in self.history_choices if needle in l.lower()])
 
-    def _set_history_choices(self, extra=None):
+    def show_history_aircraft_choices(self):
+        needle = self.history_aircraft_filter_var.get().strip().lower()
+        self.history_aircraft_box.configure(
+            values=[l for l in self.history_aircraft_choices if needle in l.lower()])
+
+    def _set_history_choices(self, extra=None, extra_aircraft=None):
         names = {b.id: b.name for b in self.bases.values()}
         items = history.base_choices(self.history_snaps, names)
         if extra is not None and extra not in [i for _l, i in items]:
             items.append((f"{names[extra]} ({extra})" if extra in names else f"#{extra}", extra))
         self.history_choices = dict(items)
         self.show_history_base_choices()
+        planes = history.aircraft_choices(self.history_snaps, {a.id: a.name for a in self.aircraft.values()})
+        if extra_aircraft is not None and extra_aircraft not in [i for _l, i in planes]:
+            a = self.aircraft.get(extra_aircraft)
+            side = bases.SIDES.get(a.side_id, "?") if a else "?"
+            planes.append((f"{a.name} ({side})" if a else f"#{extra_aircraft} ({side})", extra_aircraft))
+        self.history_aircraft_choices = dict(planes)
+        self.show_history_aircraft_choices()
 
     def load_history_view(self):
         """Read the history folder of the open save and redraw."""
@@ -4238,6 +4264,8 @@ class EditorApp:
         self._set_history_choices()
         if self.history_base_var.get() not in self.history_choices:
             self.history_base_var.set(next(iter(self.history_choices), ""))
+        if self.history_aircraft_var.get() not in self.history_aircraft_choices:
+            self.history_aircraft_var.set(next(iter(self.history_aircraft_choices), ""))
         self.history_info.set(f"Campaign: {history.slug(history.scenario_name(self.save))}    "
                               f"Folder: {self.history_dir}    Turns recorded: {len(self.history_snaps)}")
         self.refresh_history_view()
@@ -4323,6 +4351,18 @@ class EditorApp:
         self.notebook.select(self.history_tab)
         self._show_history_view()
 
+    def show_aircraft_history(self):
+        """The Aircraft tab's History button: the History tab in Aircraft view with the selected model."""
+        if self.aircraft_current is None:
+            return
+        self._set_history_choices(extra_aircraft=self.aircraft_current)
+        self.history_aircraft_var.set(
+            next(l for l, i in self.history_aircraft_choices.items() if i == self.aircraft_current))
+        self.history_aircraft_filter_var.set("")
+        self.history_view_var.set(HISTORY_VIEWS[2])
+        self.notebook.select(self.history_tab)
+        self._show_history_view()
+
     def refresh_history_view(self):
         """Redraw the chart and the table from the loaded snapshots."""
         tree = self.history_tree
@@ -4343,6 +4383,20 @@ class EditorApp:
                     "allied_change": _history_change(changes[0][n]), "japanese": _history_number(r[3]),
                     "japanese_change": _history_change(changes[1][n])}))
             message = "No turns recorded yet" if not snaps else "No data for this metric"
+        elif self.history_view_var.get() == HISTORY_VIEWS[2]:
+            plane_id = self.history_aircraft_choices.get(self.history_aircraft_var.get())
+            key = next(k for k, label in history.AIRCRAFT_METRICS.items()
+                       if label == self.history_aircraft_metric_var.get())
+            rows = history.aircraft_series(snaps, plane_id, key) if plane_id is not None else []
+            changes = history.changes([r[3] for r in rows])
+            side = bases.SIDES.get(rows[0][2]) if rows else None
+            series = [chart.Series(side, HISTORY_SIDE_COLORS[side], [(r[0], r[3]) for r in rows])] if side else []
+            shown = HISTORY_AIRCRAFT_COLUMNS
+            for n, r in reversed(list(enumerate(rows))):
+                tree.insert("", "end", iid=str(r[0]), values=self._history_values({
+                    "date": chart.date_label(r[0]), "turn": r[1], "value": _history_number(r[3]),
+                    "change": _history_change(changes[n])}))
+            message = "No turns recorded yet" if not snaps else "No data for this aircraft"
         else:
             loc_id = self.history_choices.get(self.history_base_var.get())
             key = next(k for k, label in history.BASE_METRICS.items() if label == self.history_base_metric_var.get())

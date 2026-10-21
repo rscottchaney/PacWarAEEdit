@@ -1539,6 +1539,43 @@ class GuiSmokeTests(unittest.TestCase):
         app.history_filter_var.set("pearl")
         self.assertTrue(app.history_base_box.cget("values"))
 
+    def test_history_aircraft_view(self):
+        import witpae_editor
+        from witpae import history
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        folder = app.history_dir
+        snap = history.read_snapshot(os.path.join(folder, "19411210.json.gz"))
+        plane_id, entry = next((int(k), v) for k, v in snap["aircraft"].items() if v[0] == 0 and v[1] > 0)
+        snap2 = dict(snap, date=411211, turn=5, aircraft={})
+        history.write_snapshot(folder, snap2)
+        app.load_history_view()
+        # The Aircraft tab's button opens the view with that model selected.
+        app.aircraft_tree.selection_set(str(plane_id))
+        self.root.update()
+        app.show_aircraft_history()
+        self.assertEqual(app.notebook.select(), str(app.history_tab))
+        self.assertEqual(app.history_view_var.get(), "Aircraft")
+        self.assertIn(f"({'Japanese'})", app.history_aircraft_var.get())
+        tree = app.history_tree
+        self.assertEqual(list(tree["displaycolumns"]), ["date", "turn", "value", "change"])
+        self.assertEqual(tree.get_children(), ("411211", "411210"))
+        self.assertEqual(tree.set("411210", "value"), f"{entry[1]:,}")
+        self.assertEqual(tree.set("411211", "value"), "0")
+        self.assertEqual(tree.set("411211", "change"), f"{-entry[1]:+,}")
+        self.assertEqual([s.label for s in app.history_chart.series], ["Japanese"])
+        app.history_aircraft_metric_var.set("Lost (total)")
+        app.refresh_history_view()
+        self.assertEqual(tree.set("411210", "value"), f"{sum(entry[2:]):,}")
+        # The selection survives a reload of the folder.
+        label = app.history_aircraft_var.get()
+        app.load_history_view()
+        self.assertEqual(app.history_aircraft_var.get(), label)
+        app.history_aircraft_filter_var.set("zzzz")
+        self.assertFalse(app.history_aircraft_box.cget("values"))
+        app.history_aircraft_filter_var.set("")
+        self.assertTrue(app.history_aircraft_box.cget("values"))
+
     def test_history_empty_state(self):
         import witpae_editor
         app = witpae_editor.EditorApp(self.root)
