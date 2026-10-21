@@ -75,6 +75,11 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual((a["ships_sunk"], a["loss_total"], a["damaged_ships"]), (11, 184, 69))
         self.assertEqual(self.snap["sides"]["Japanese"]["damaged_tons"], 101365)
 
+    def test_mines_laid(self):
+        self.assertEqual(history.SIDE_METRICS["mines"], "Mines laid")
+        self.assertEqual((self.snap["sides"]["Allied"]["mines"], self.snap["sides"]["Japanese"]["mines"]),
+                         (10108, 8988))
+
     def test_bases_and_aircraft_entries(self):
         pearl = self.snap["bases"]["584"]
         self.assertEqual(pearl[:2], [1, 982531])
@@ -251,6 +256,14 @@ class SeriesTests(unittest.TestCase):
         self.assertEqual(history.side_series(self.snaps, "supply"),
                          [(411210, 4, 100, 50), (411211, 5, None, 70), (411212, 6, 95, 70)])
         self.assertEqual(history.side_series(self.snaps, "nothing")[0], (411210, 4, None, None))
+
+    def test_side_series_of_a_snapshot_without_the_mines_metric(self):
+        # Snapshots recorded before the metric existed have no "mines" key: a gap, not a crash.
+        self.snaps[2]["sides"]["Allied"]["mines"] = 7
+        self.assertEqual(history.side_series(self.snaps, "mines"),
+                         [(411210, 4, None, None), (411211, 5, None, None), (411212, 6, 7, None)])
+        self.assertEqual(history.changes([r[2] for r in history.side_series(self.snaps, "mines")]),
+                         [None, None, None])
 
     def test_base_series_with_gaps_and_owner(self):
         self.assertEqual(history.base_series(self.snaps, 584, "supply"),

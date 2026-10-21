@@ -266,7 +266,7 @@ edits go through `airgroups.Leader`.
 
 ## Reports
 
-The Reports tab holds twelve reports; only the bulk switch buttons of Air production edit the save. It
+The Reports tab holds thirteen reports; only the bulk switch buttons of Air production edit the save. It
 shows the game date (section 0x01: day at 42, month at 44, two-digit year at 46,
 all i16) and refreshes whenever the tab is shown, so edits made in the Bases tab
 are reflected. Double-click a row to jump to that base (Bases tab) or ship (Ships
@@ -543,6 +543,38 @@ they hide it).
   Java in a TF at Soerabaja, Amagisan Maru at Kagoshima). The offsets come from WiTPTracker's reader and match the sample saves;
   they have not been compared with the game's own screens yet. The code is in `witpae/shiprepair.py`.
 
+### Minefields
+
+The "Minefields" sub-tab (after Ship repair) is read-only. A small table on top gives, per side, the minefield
+records, the hexes they cover, the total mines and the mines by type. Below it: a Side filter (All, Allied,
+Japanese), a By hex / Fields view switch, a Search box (place name, mine type) and a sortable table. Double-click a
+row that has a base or town in its hex to open it in the Bases tab (filters are cleared if they hide it); rows in
+open sea do nothing.
+
+- Records: section 0x1E, 6000 records of 20 bytes. Per record: hex x u16 at 0, hex y u16 at 2, side u16 at 4 (0
+  Japanese, 1 Allied), u16 at 6, the mine device id u16 at 8 (section 0x1F, device type 21 Mine: 1645 Mk 6 Mine, 1650
+  Mk XVII Mine, 1651 VH Mk II Mine, 1710 Type 4 Mine, 1711 Type 88 Mine; an id outside the table shows as `#id`) and
+  the number of mines u16 at 10. Bytes 12 to 19 were all zero. A record is used when the mine count is above 0; like
+  WiTPTracker's reader, records with x or y of 0 or above 250, or a count of 32768 or more, are skipped (so are
+  records whose side is neither 0 nor 1).
+- The u16 at 6 is probably the minefield's detection level by the enemy (values 0, 2 and 9 seen). It is shown as
+  "Detection (unverified)"; in By hex the highest value of the fields is shown.
+- By hex: one row per (hex, side), since several fields can share a hex (manual 6.6.1; Bataan holds two Mk 6 fields
+  of 495 and 500 mines). Columns: X, Y, Side, Place (the base or town in the hex, a base winning over a town; `-` for
+  open sea; "Bataan (enemy base)" when the place belongs to the other side), Mines, Fields, Mine types (largest
+  first, for example "Mk XVII Mine 300; Mk 6 Mine 145"), Detection, Decay, ACMs and Protected. Fields: one row per
+  record with the record number, hex, side, place, mine type, mines and detection.
+- Decay (manual 6.6.1.2.1) is 1% a day at a friendly base with port size 1 or more, 5% a day in shallow water and 33%
+  a day in deep water. The save has no water depth, so a hex with a base or town of the minefield's own side with port
+  size 1 or more shows "1%/day (friendly port)" and every other hex "5-33%/day".
+- Minefield tenders (manual 6.6.1.2.2): each ACM ship (ship class type 74) that is docked at a base (ship base set, not
+  in a task force) protects 150 mines there; ACMs in a task force do not count. ACMs is the number of arrived ACMs of
+  the minefield's side docked at a base or town in the hex, and Protected the smaller of Mines and ACMs x 150.
+- The sample save has 67 records (34 Allied, 33 Japanese) in 65 (hex, side) groups; the biggest is Bataan with 995
+  Allied mines, then Osaka/Kyoto (496), Fukuoka (495) and Tokyo (490) for Japan. The layout comes from WiTPTracker's
+  reader and matches the sample saves; it has not been compared with the game's own screens yet. The code is in
+  `witpae/minefields.py`.
+
 ## History
 
 The History tab (after Reports) shows trends over the turns you have opened, like WiTPTracker. Nothing here writes
@@ -552,7 +584,7 @@ to a save.
   (summed over the places of the Industry report, so the totals match WiTPTracker), the production pools (manpower,
   HI, naval, merchant, armament, vehicle), the daily supply, fuel and oil allotments, the aircraft pool, aircraft
   lost this turn and in total (air, ground, flak, operations), ships sunk, damaged ships, damaged tonnage and
-  damaged ships in port. Per base: side, supply, fuel, resources and oil (only bases with some stock). Per aircraft
+  damaged ships in port, mines laid. Per base: side, supply, fuel, resources and oil (only bases with some stock). Per aircraft
   model: pool and total losses. The metric table is `SIDE_METRICS` in `witpae/history.py`.
 - Where: `<save folder>\history\<campaign>\<YYYYMMDD>.json.gz`, one gzip-compressed JSON file per date, written
   atomically (temporary file, then rename). A save in a folder called `autosave` uses the parent folder, so
@@ -581,7 +613,8 @@ to a save.
   and is a gap before its first appearance.
 - Files that cannot be read (corrupt, or another schema version) are skipped and named on the status line. Auto-record
   replaces a corrupt file for its own date but keeps one of another schema version. The snapshot has `"version": 1`; a future change of layout will raise it, and older
-  editors then skip those files.
+  editors then skip those files. A metric added later (such as "Mines laid") does not raise the version: snapshots
+  recorded before it lack the key and show a gap for it.
 
 The code is in `witpae/history.py` (snapshots and files) and `witpae/chart.py` (the line chart).
 

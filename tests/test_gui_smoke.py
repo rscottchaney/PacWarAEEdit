@@ -228,7 +228,7 @@ class GuiSmokeTests(unittest.TestCase):
         app = witpae_editor.EditorApp(self.root)
         self.assertTrue(app.load(SAVE_015))
         tabs = [app.reports_notebook.tab(t, "text") for t in app.reports_notebook.tabs()]
-        self.assertEqual(tabs[-3:], ["Aircraft comparison", "Losses", "Ship repair"])
+        self.assertEqual(tabs[-4:], ["Aircraft comparison", "Losses", "Ship repair", "Minefields"])
         col_a, col_b = app.compare_cols
         # Defaults: the first Japanese and the first Allied fighter.
         model_a = app.aircraft[app.compare_ids[col_a["model"].get()]]
@@ -1129,7 +1129,7 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertTrue(app.load(SAVE_015))
         self.root.update()
         tabs = [app.reports_notebook.tab(t, "text") for t in app.reports_notebook.tabs()]
-        self.assertEqual(tabs[-5:-3], ["Air production", "Engines"])
+        self.assertEqual(tabs[-6:-4], ["Air production", "Engines"])
         self.assertEqual(tabs.index("Raw materials") + 1, tabs.index("Air production"))
         # Air production: the Zero is Japanese, built by one factory (place 236, slot 6).
         shown = len(app.air_tree.get_children())
@@ -1534,6 +1534,96 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertEqual(app.notebook.select(), str(app.shiprec_tab))
         self.assertEqual(app.shiprec_tree.selection(), ("240",))
 
+    def test_minefield_report(self):
+        import witpae_editor
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        app.notebook.select(app.reports_tab)
+        self.root.update()
+        tabs = [app.reports_notebook.tab(t, "text") for t in app.reports_notebook.tabs()]
+        self.assertEqual(tabs.index("Minefields"), tabs.index("Ship repair") + 1)
+        summary, tree = app.minefield_summary_tree, app.minefield_hex_tree
+        self.assertEqual(summary.set("Allied", "fields"), "34")
+        self.assertEqual(summary.set("Allied", "hexes"), "33")
+        self.assertEqual(summary.set("Allied", "mines"), "10,108")
+        self.assertEqual(summary.set("Japanese", "mines"), "8,988")
+        self.assertEqual(summary.set("Japanese", "types"), "Type 4 Mine 8876; Type 88 Mine 112")
+        self.assertEqual(len(tree.get_children()), 65)
+        self.assertEqual(app.minefield_count.get(), "65 hexes")
+        first = tree.get_children()[0]  # default sort: most mines first
+        self.assertEqual(first, "621:78,77,Allied")
+        self.assertEqual(tree.set(first, "place"), "Bataan")
+        self.assertEqual(tree.set(first, "mines"), "995")
+        self.assertEqual(tree.set(first, "decay"), "1%/day (friendly port)")
+        self.assertEqual(tree.set("-:70,83,Japanese", "place"), "-")
+        self.assertEqual(tree.set("722:50,84,Japanese", "place"), "Singapore (enemy base)")
+        self.assertEqual(tree.set("246:109,59,Japanese", "protected"), "300")
+        mines = [int(tree.set(i, "mines").replace(",", "")) for i in tree.get_children()]
+        self.assertEqual(mines, sorted(mines, reverse=True))
+        app.sort_minefield_hexes_by("mines")
+        mines = [int(tree.set(i, "mines").replace(",", "")) for i in tree.get_children()]
+        self.assertEqual(mines, sorted(mines))
+        app.sort_minefield_hexes_by("place")
+        places = [tree.set(i, "place").lower() for i in tree.get_children()]
+        self.assertEqual(places, sorted(places))
+        # Side filter and search (place name, mine type).
+        app.minefield_side_var.set("Japanese")
+        app.refresh_minefield_list()
+        self.assertEqual(len(tree.get_children()), 32)
+        self.assertTrue(all(tree.set(i, "side") == "Japanese" for i in tree.get_children()))
+        app.minefield_side_var.set("All")
+        app.minefield_search_var.set("bataan")
+        self.assertEqual(len(tree.get_children()), 2)
+        app.minefield_search_var.set("type 88")
+        self.assertTrue(all("Type 88" in tree.set(i, "types") for i in tree.get_children()))
+        app.minefield_search_var.set("osaka")
+        self.assertEqual(app.minefield_count.get(), "1 hex")
+        app.minefield_search_var.set("")
+        # Double-click: a row with a place opens it in the Bases tab, an open-sea row does nothing.
+        app.search_var.set("zzz")
+        tree.selection_set("621:78,77,Allied")
+        app.jump_to_minefield_place()
+        self.root.update()
+        self.assertEqual(app.notebook.select(), str(app.bases_tab))
+        self.assertEqual(app.tree.selection(), ("621",))
+        app.notebook.select(app.reports_tab)
+        app.tree.selection_set("584")
+        tree.selection_set("-:70,83,Japanese")
+        app.jump_to_minefield_place()
+        self.root.update()
+        self.assertEqual(app.notebook.select(), str(app.reports_tab))
+        self.assertEqual(app.tree.selection(), ("584",))
+        # Fields view.
+        app.minefield_view_var.set("Fields")
+        app._show_minefield_view()
+        self.root.update()
+        fields = app.minefield_field_tree
+        self.assertEqual(app.minefield_field_frame.winfo_manager(), "pack")
+        self.assertEqual(app.minefield_hex_frame.winfo_manager(), "")
+        self.assertEqual(len(fields.get_children()), 67)
+        self.assertEqual(app.minefield_count.get(), "67 fields")
+        self.assertEqual(fields.set("621:2", "mines"), "500")
+        self.assertEqual(fields.set("621:2", "device"), "Mk 6 Mine")
+        self.assertEqual(fields.set("621:2", "detection"), "9")
+        app.minefield_search_var.set("mk xvii")
+        self.assertTrue(all(fields.set(i, "device") == "Mk XVII Mine" for i in fields.get_children()))
+        app.minefield_search_var.set("")
+        app.minefield_side_var.set("Allied")
+        app.refresh_minefield_list()
+        self.assertEqual(app.minefield_count.get(), "34 fields")
+        app.sort_minefield_fields_by("id")
+        ids = [int(fields.set(i, "id")) for i in fields.get_children()]
+        self.assertEqual(ids, sorted(ids))
+        app.minefield_side_var.set("All")
+        app.refresh_minefield_list()
+        app.search_var.set("zzz")
+        app.notebook.select(app.reports_tab)
+        fields.selection_set("621:2")
+        app.jump_to_minefield_place()
+        self.root.update()
+        self.assertEqual(app.notebook.select(), str(app.bases_tab))
+        self.assertEqual(app.tree.selection(), ("621",))
+
     def test_reports_without_game_date(self):
         import witpae_editor
         from witpae import reports
@@ -1581,7 +1671,8 @@ class GuiSmokeTests(unittest.TestCase):
         # A second turn, made from the first by editing the dict.
         snap = history.read_snapshot(os.path.join(folder, "19411210.json.gz"))
         snap2 = dict(snap, date=411211, turn=5,
-                     sides={s: dict(m, supply=m["supply"] + 1000) for s, m in snap["sides"].items()})
+                     sides={s: dict({k: v for k, v in m.items() if k != "mines"}, supply=m["supply"] + 1000)
+                            for s, m in snap["sides"].items()})
         snap2["bases"] = {k: v for k, v in snap["bases"].items() if k != "584"}
         history.write_snapshot(folder, snap2)
         app.load_history_view()
@@ -1605,6 +1696,11 @@ class GuiSmokeTests(unittest.TestCase):
         app.notebook.select(app.history_tab)
         self.root.update()
         self.assertGreater(len(app.history_chart.find_all()), 10)
+        app.history_side_var.set("Japanese")
+        app.history_metric_var.set(history.SIDE_METRICS["mines"])
+        app.refresh_history_view()
+        self.assertEqual(tree.set("411210", "japanese"), "8,988")
+        self.assertEqual(tree.set("411211", "japanese"), "-")  # recorded without the metric: a gap
         app.history_side_var.set("Both")
         app.history_metric_var.set(history.SIDE_METRICS["supply"])
         app.refresh_history_view()
