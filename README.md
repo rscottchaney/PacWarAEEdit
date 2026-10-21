@@ -540,6 +540,11 @@ to a save.
   base. The chart draws one line per side (blue Allied, red Japanese; in the Base view the colour is the owner of
   that turn); a turn without a value leaves a gap. The table lists the turns newest first with the change from the
   previous recorded turn. Base names come from the open save ("#id" if unknown).
+- Aircraft view: pick a model (a filter box and a list like "A6M2 Zero (Japanese)"; the Aircraft tab's History button
+  opens it for the selected model) and Pool, Lost (total), Lost in air combat, Lost on the ground, Lost to flak or
+  Operational losses (all totals, not per turn). One line in the colour of the model's side. Snapshots only store
+  models with a pool or losses, so a turn without the model counts as 0 once the model has appeared in the history,
+  and is a gap before its first appearance.
 - Files that cannot be read (corrupt, or another schema version) are skipped and named on the status line. Auto-record
   replaces a corrupt file for its own date but keeps one of another schema version. The snapshot has `"version": 1`; a future change of layout will raise it, and older
   editors then skip those files.

@@ -268,6 +268,43 @@ class SeriesTests(unittest.TestCase):
         self.assertEqual(history.changes([10, None, 15, 12]), [None, None, 5, -3])
 
 
+class AircraftSeriesTests(unittest.TestCase):
+    def setUp(self):
+        self.snaps = [fake_snap(411210, 4, 1, 1), fake_snap(411211, 5, 1, 1), fake_snap(411212, 6, 1, 1),
+                      fake_snap(411213, 7, 1, 1)]
+        self.snaps[1]["aircraft"] = {"5": [0, 30, 1, 2, 3, 4]}
+        self.snaps[2]["aircraft"] = {"9": [1, 7, 0, 0, 0, 0]}
+        self.snaps[3]["aircraft"] = {"5": [0, 25, 2, 2, 3, 4], "9": [1, 0, 1, 0, 0, 0]}
+
+    def test_values_zero_after_first_appearance_none_before(self):
+        series = history.aircraft_series(self.snaps, 5, "pool")
+        self.assertEqual([r[3] for r in series], [None, 30, 0, 25])
+        self.assertEqual([r[:3] for r in series][:2], [(411210, 4, 0), (411211, 5, 0)])
+        self.assertEqual([r[3] for r in history.aircraft_series(self.snaps, 9, "pool")], [None, None, 7, 0])
+        self.assertEqual([r[3] for r in history.aircraft_series(self.snaps, 77, "pool")], [None] * 4)
+
+    def test_metrics(self):
+        for metric, expected in (("lost", [None, 10, 0, 11]), ("air", [None, 1, 0, 2]), ("ground", [None, 2, 0, 2]),
+                                 ("flak", [None, 3, 0, 3]), ("ops", [None, 4, 0, 4])):
+            self.assertEqual([r[3] for r in history.aircraft_series(self.snaps, 5, metric)], expected, metric)
+        self.assertEqual(list(history.AIRCRAFT_METRICS), ["pool", "lost", "air", "ground", "flak", "ops"])
+        self.assertEqual(history.AIRCRAFT_METRICS["lost"], "Lost (total)")
+
+    def test_side_of_series(self):
+        self.assertEqual({r[2] for r in history.aircraft_series(self.snaps, 9, "pool")}, {1})
+
+    def test_seen_and_choices(self):
+        self.assertEqual(history.aircraft_seen(self.snaps), [5, 9])
+        self.assertEqual(history.aircraft_choices(self.snaps, {5: "A6M2 Zero"}),
+                         [("#9 (Allied)", 9), ("A6M2 Zero (Japanese)", 5)])
+        dup = history.aircraft_choices(self.snaps, {5: "Same", 9: "Same"})
+        self.assertEqual(len(dup), 2)
+        same_side = [fake_snap(411210, 4, 1, 1)]
+        same_side[0]["aircraft"] = {"1": [1, 1, 0, 0, 0, 0], "2": [1, 1, 0, 0, 0, 0]}
+        self.assertEqual(history.aircraft_choices(same_side, {1: "P-40E", 2: "P-40E"}),
+                         [("P-40E (Allied, #1)", 1), ("P-40E (Allied, #2)", 2)])
+
+
 class ChartMathTests(unittest.TestCase):
     def test_nice_ticks(self):
         self.assertEqual(chart.nice_ticks(0, 100), [0, 25, 50, 75, 100])

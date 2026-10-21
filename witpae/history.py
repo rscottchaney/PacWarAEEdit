@@ -63,6 +63,10 @@ SIDE_METRICS = {
 # Stock fields of a base entry (after the side id) and their labels.
 BASE_METRICS = {"supply": "Supply", "fuel": "Fuel", "resources": "Resources", "oil": "Oil"}
 BASE_KEYS = tuple(BASE_METRICS)
+# Aircraft metrics: "lost" is the sum of the four loss kinds; the others index the entry's losses (air, ground, flak, ops).
+AIRCRAFT_METRICS = {"pool": "Pool", "lost": "Lost (total)", "air": "Lost in air combat",
+                    "ground": "Lost on the ground", "flak": "Lost to flak", "ops": "Operational losses"}
+AIRCRAFT_KEYS = ("pool", "air", "ground", "flak", "ops")
 STOCK_KEYS = BASE_KEYS
 ALLOTMENT_KEYS = ("supply", "fuel", "oil")
 LOSS_KINDS = ("air", "ground", "flak", "ops")
@@ -326,4 +330,56 @@ def changes(values):
         out.append(None if v is None or previous is None else v - previous)
         if v is not None:
             previous = v
+    return out
+
+
+def aircraft_seen(snaps):
+    """Sorted ids of the aircraft models recorded in any snapshot."""
+    return sorted({int(k) for s in snaps for k in s["aircraft"]})
+
+
+def _aircraft_side(snaps, aircraft_id):
+    """Side id of a model from the newest snapshot that holds it, None when none does."""
+    for s in reversed(snaps):
+        entry = s["aircraft"].get(str(aircraft_id))
+        if entry:
+            return entry[0]
+    return None
+
+
+def aircraft_choices(snaps, names):
+    """[(label, id)] like "A6M2 Zero (Japanese)", sorted by name; names is {id: name} from the open save.
+
+    Unknown ids are shown as "#id". Models with the same name and side get ", #id" added to stay distinct.
+    """
+    items = []
+    for i in aircraft_seen(snaps):
+        side = bases.SIDES.get(_aircraft_side(snaps, i), "?")
+        items.append((f"{names[i]} ({side})" if i in names else f"#{i} ({side})", i))
+    counts = {}
+    for label, _i in items:
+        counts[label] = counts.get(label, 0) + 1
+    items = [(label if counts[label] == 1 else f"{label[:-1]}, #{i})", i) for label, i in items]
+    return sorted(items, key=lambda t: (t[0].lower(), t[1]))
+
+
+def aircraft_series(snaps, aircraft_id, metric):
+    """[(date, turn, side id, value)] for one model.
+
+    A snapshot only stores models with a pool or losses, so a turn without the model is 0 once the model has
+    appeared in an earlier or the same turn, and None before its first appearance.
+    """
+    index = None if metric == "lost" else 1 + AIRCRAFT_KEYS.index(metric)  # entry: side, pool, air, ground, flak, ops
+    side = _aircraft_side(snaps, aircraft_id)
+    out, seen = [], False
+    for s in snaps:
+        entry = s["aircraft"].get(str(aircraft_id))
+        seen = seen or entry is not None
+        if entry is None:
+            value = 0 if seen else None
+        elif metric == "lost":
+            value = sum(entry[2:6])
+        else:
+            value = entry[index]
+        out.append((s["date"], s["turn"], side, value))
     return out
