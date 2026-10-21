@@ -80,6 +80,10 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual((self.snap["sides"]["Allied"]["mines"], self.snap["sides"]["Japanese"]["mines"]),
                          (10108, 8988))
 
+    def test_victory_points(self):
+        self.assertEqual(history.SIDE_METRICS["vp"], "Victory points")
+        self.assertEqual((self.snap["sides"]["Allied"]["vp"], self.snap["sides"]["Japanese"]["vp"]), (11303, 2165))
+
     def test_bases_and_aircraft_entries(self):
         pearl = self.snap["bases"]["584"]
         self.assertEqual(pearl[:2], [1, 982531])
@@ -264,6 +268,12 @@ class SeriesTests(unittest.TestCase):
                          [(411210, 4, None, None), (411211, 5, None, None), (411212, 6, 7, None)])
         self.assertEqual(history.changes([r[2] for r in history.side_series(self.snaps, "mines")]),
                          [None, None, None])
+
+    def test_side_series_of_a_snapshot_without_the_vp_metric(self):
+        self.snaps[2]["sides"]["Japanese"]["vp"] = 2165
+        self.assertEqual(history.side_series(self.snaps, "vp"),
+                         [(411210, 4, None, None), (411211, 5, None, None), (411212, 6, None, 2165)])
+        self.assertEqual(history.changes([r[3] for r in history.side_series(self.snaps, "vp")]), [None, None, None])
 
     def test_base_series_with_gaps_and_owner(self):
         self.assertEqual(history.base_series(self.snaps, 584, "supply"),

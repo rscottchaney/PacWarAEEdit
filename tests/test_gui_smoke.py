@@ -228,7 +228,7 @@ class GuiSmokeTests(unittest.TestCase):
         app = witpae_editor.EditorApp(self.root)
         self.assertTrue(app.load(SAVE_015))
         tabs = [app.reports_notebook.tab(t, "text") for t in app.reports_notebook.tabs()]
-        self.assertEqual(tabs[-4:], ["Aircraft comparison", "Losses", "Ship repair", "Minefields"])
+        self.assertEqual(tabs[-5:], ["Aircraft comparison", "Losses", "Ship repair", "Minefields", "Victory points"])
         col_a, col_b = app.compare_cols
         # Defaults: the first Japanese and the first Allied fighter.
         model_a = app.aircraft[app.compare_ids[col_a["model"].get()]]
@@ -1129,7 +1129,7 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertTrue(app.load(SAVE_015))
         self.root.update()
         tabs = [app.reports_notebook.tab(t, "text") for t in app.reports_notebook.tabs()]
-        self.assertEqual(tabs[-6:-4], ["Air production", "Engines"])
+        self.assertEqual(tabs[-7:-5], ["Air production", "Engines"])
         self.assertEqual(tabs.index("Raw materials") + 1, tabs.index("Air production"))
         # Air production: the Zero is Japanese, built by one factory (place 236, slot 6).
         shown = len(app.air_tree.get_children())
@@ -1624,6 +1624,56 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertEqual(app.notebook.select(), str(app.bases_tab))
         self.assertEqual(app.tree.selection(), ("621",))
 
+    def test_victory_report(self):
+        import witpae_editor
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        app.notebook.select(app.reports_tab)
+        self.root.update()
+        tabs = [app.reports_notebook.tab(t, "text") for t in app.reports_notebook.tabs()]
+        self.assertEqual(tabs.index("Victory points"), tabs.index("Minefields") + 1)
+        summary, tree = app.vp_summary_tree, app.vp_tree
+        self.assertEqual(summary.set("Allied", "score"), "11,303")
+        self.assertEqual(summary.set("Japanese", "score"), "2,165")
+        self.assertEqual(summary.set("Allied", "political_points"), "250")
+        self.assertEqual(summary.set("Japanese", "ground_points"), "72")
+        self.assertEqual(summary.set("Allied", "ground_points"), "2")
+        self.assertEqual(app.vp_status.get(),
+                         "Allied Decisive Victory (Allied 5.22 : 1). No automatic victory before 1943.")
+        rows = {r.id: r for r in app.vp_bases_all}
+        self.assertEqual(len(tree.get_children()), len(rows))
+        self.assertEqual(app.vp_count.get(), f"{len(rows)} bases")
+        first = tree.get_children()[0]  # default sort: best scored value first
+        self.assertEqual(tree.set(first, "name"), "Singapore")
+        self.assertEqual(tree.set(first, "scored"), f"{rows[int(first)].scored:,}")
+        scored = [int(tree.set(i, "scored").replace(",", "")) for i in tree.get_children()]
+        self.assertEqual(scored, sorted(scored, reverse=True))
+        app.sort_vp_by("scored")
+        scored = [int(tree.set(i, "scored").replace(",", "")) for i in tree.get_children()]
+        self.assertEqual(scored, sorted(scored))
+        app.sort_vp_by("name")
+        names = [tree.set(i, "name").lower() for i in tree.get_children()]
+        self.assertEqual(names, sorted(names))
+        # Side filter and search (base name, region).
+        app.vp_side_var.set("Japanese")
+        app.refresh_vp_list()
+        self.assertEqual(len(tree.get_children()), sum(1 for r in rows.values() if r.side == "Japanese"))
+        self.assertTrue(all(tree.set(i, "side") == "Japanese" for i in tree.get_children()))
+        app.vp_side_var.set("All")
+        app.vp_search_var.set("bataan")
+        self.assertEqual([tree.set(i, "name") for i in tree.get_children()], ["Bataan"])
+        app.vp_search_var.set("luzon")
+        self.assertTrue(all(tree.set(i, "region") == "Luzon" for i in tree.get_children()))
+        app.vp_search_var.set("")
+        self.assertEqual(app.vp_count.get(), f"{len(rows)} bases")
+        # Double-click opens the base in the Bases tab.
+        app.search_var.set("zzz")
+        tree.selection_set("621")
+        app.jump_to_vp_base()
+        self.root.update()
+        self.assertEqual(app.notebook.select(), str(app.bases_tab))
+        self.assertEqual(app.tree.selection(), ("621",))
+
     def test_reports_without_game_date(self):
         import witpae_editor
         from witpae import reports
@@ -1701,6 +1751,9 @@ class GuiSmokeTests(unittest.TestCase):
         app.refresh_history_view()
         self.assertEqual(tree.set("411210", "japanese"), "8,988")
         self.assertEqual(tree.set("411211", "japanese"), "-")  # recorded without the metric: a gap
+        app.history_metric_var.set(history.SIDE_METRICS["vp"])
+        app.refresh_history_view()
+        self.assertEqual(tree.set("411210", "japanese"), "2,165")
         app.history_side_var.set("Both")
         app.history_metric_var.set(history.SIDE_METRICS["supply"])
         app.refresh_history_view()
