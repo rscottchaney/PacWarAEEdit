@@ -13,7 +13,7 @@ import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from witpae import (aircraft, airgroups, airproduction, bases, chart, factories, history, industry, landunits, lcuproduction, losses,
+from witpae import (aircraft, airgroups, airproduction, bases, chart, factories, history, industry, landunits, lcuproduction, leaders, losses,
                     pilotpool, planeart, regions, reports, shipproduction, shiprecords, shiprepair, ships, taskforces)
 from witpae.container import SaveFile, SaveFormatError
 from witpae.fileio import is_pbem, save_with_backup
@@ -110,6 +110,26 @@ UNIT_COLUMNS = [
     ("supplies", "Supplies", 70, True, lambda u: u.get("supplies")),
 ]
 UNIT_COLUMN_BY_ID = {c[0]: c for c in UNIT_COLUMNS}
+
+# Rows are the LeaderRow tuples of witpae.leaders.
+LEADER_COLUMNS = [
+    ("id", "ID", 50, True, lambda r: r.id),
+    ("name", "Name", 140, False, lambda r: r.name),
+    ("nation", "Nation", 55, False, lambda r: r.nation),
+    ("rank", "Rank", 50, False, lambda r: r.rank),
+    ("type", "Type", 110, False, lambda r: r.type),
+    ("leadership", "Leadership", 70, True, lambda r: r.leadership),
+    ("inspiration", "Inspiration", 70, True, lambda r: r.inspiration),
+    ("naval", "Naval", 45, True, lambda r: r.naval),
+    ("air", "Air", 35, True, lambda r: r.air),
+    ("land", "Land", 40, True, lambda r: r.land),
+    ("admin", "Admin", 45, True, lambda r: r.admin),
+    ("aggression", "Aggression", 70, True, lambda r: r.aggression),
+    ("political", "Political", 55, True, lambda r: r.political),
+    ("delay", "Delay", 45, True, lambda r: r.delay),
+    ("commands", "Commands", 150, False, lambda r: r.commands),
+]
+LEADER_COLUMN_BY_ID = {c[0]: c for c in LEADER_COLUMNS}
 
 # Report rows are the namedtuples of witpae.reports. Over values, dates and due months sort
 # on the raw getter value and are shown through the *_TEXT formatters.
@@ -690,6 +710,14 @@ class EditorApp:
         self.pilot_vars = {}
         self.leader_vars = {}
         self.leader_current = None
+        self.ldr_rows = {}
+        self.ldr_assign = {}
+        self.ldr_edited = set()
+        self.ldr_sort_col = "id"
+        self.ldr_sort_reverse = False
+        self.ldr_vars = {}
+        self.ldr_current = None
+        self.ldr_search_job = None
         self.pools = {}
         self.pools_edited = set()
         self.pool_current = None
@@ -802,6 +830,7 @@ class EditorApp:
         self._build_taskforces_tab()
         self._build_groups_tab()
         self._build_units_tab()
+        self._build_leaders_tab()
         self._build_reports_tab()
         self._build_history_tab()
 
@@ -1512,7 +1541,7 @@ class EditorApp:
         ttk.Button(edit, text="Apply weapon", command=self.apply_shiprec_weapon).pack(side="left", padx=4)
 
     def _build_taskforces_tab(self):
-        tab = ttk.Frame(self.notebook, padding=4)
+        tab = self.tf_tab = ttk.Frame(self.notebook, padding=4)
         self.notebook.add(tab, text="Task Forces")
         left = ttk.Frame(tab)
         left.pack(side="left", fill="both", expand=True)
@@ -1618,12 +1647,12 @@ class EditorApp:
         ttk.Button(quick, text="Refuel all ships", command=self.refuel_tf).pack(side="left", padx=4)
 
     def _build_groups_tab(self):
-        tab = ttk.Frame(self.notebook, padding=4)
+        tab = self.groups_tab = ttk.Frame(self.notebook, padding=4)
         self.notebook.add(tab, text="Air Groups")
         # The pilot pool is nation-wide, not per group, so it gets its own page beside the group editor.
         self.groups_notebook = ttk.Notebook(tab)
         self.groups_notebook.pack(fill="both", expand=True)
-        groups_page = ttk.Frame(self.groups_notebook, padding=4)
+        groups_page = self.groups_page = ttk.Frame(self.groups_notebook, padding=4)
         self.groups_notebook.add(groups_page, text="Groups")
         pool_page = ttk.Frame(self.groups_notebook, padding=4)
         self.groups_notebook.add(pool_page, text="Pilot pool")
@@ -1833,9 +1862,9 @@ class EditorApp:
         box.pack(side="top", fill="x", pady=(6, 0))
         self.leader_name = tk.StringVar(value="(none)")
         ttk.Label(box, textvariable=self.leader_name).grid(row=0, column=0, columnspan=2, sticky="w", pady=1)
-        self.leader_age = tk.StringVar()
-        ttk.Label(box, text="Age (unverified)").grid(row=0, column=2, sticky="w", padx=(0, 2), pady=1)
-        ttk.Label(box, textvariable=self.leader_age).grid(row=0, column=3, sticky="w", pady=1)
+        self.leader_rank = tk.StringVar()
+        ttk.Label(box, text="Rank").grid(row=0, column=2, sticky="w", padx=(0, 2), pady=1)
+        ttk.Label(box, textvariable=self.leader_rank).grid(row=0, column=3, sticky="w", pady=1)
         # Same four-per-row grid as the pilot editor, below the name row.
         per_row = 4
         self.leader_entries = []
@@ -1941,6 +1970,71 @@ class EditorApp:
         self.unit_move_var, self.unit_move_box, self.unit_move_button, self.unit_move_note = self._build_move_row(
             right, row, self.move_unit)
 
+    def _build_leaders_tab(self):
+        tab = self.leaders_tab = ttk.Frame(self.notebook, padding=4)
+        self.notebook.add(tab, text="Leaders")
+        right = ttk.LabelFrame(tab, text="Leader", padding=8)
+        right.pack(side="right", fill="y", padx=(8, 0))
+        left = ttk.Frame(tab)
+        left.pack(side="left", fill="both", expand=True)
+
+        bar = ttk.Frame(left)
+        bar.pack(side="top", fill="x")
+        ttk.Label(bar, text="Search:").pack(side="left")
+        self.ldr_search_var = tk.StringVar()
+        self.ldr_search_var.trace_add("write", lambda *a: self._ldr_search_changed())
+        ttk.Entry(bar, textvariable=self.ldr_search_var, width=20).pack(side="left", padx=4)
+        self.ldr_filter_vars = {}
+        for name, label, values, width in (
+                ("side", "Side:", ["All", "Allied", "Japanese"], 9),
+                ("branch", "Branch:", ["All"] + list(leaders.BRANCHES), 6),
+                ("type", "Type:", ["All"] + list(leaders.TYPES.values()), 17),
+                ("assigned", "Assigned:", ["All", "Assigned", "Unassigned"], 11)):
+            ttk.Label(bar, text=label).pack(side="left")
+            var = self.ldr_filter_vars[name] = tk.StringVar(value="All")
+            box = ttk.Combobox(bar, textvariable=var, values=values, state="readonly", width=width)
+            box.pack(side="left", padx=4)
+            box.bind("<<ComboboxSelected>>", lambda e: self.refresh_ldr_list())
+        self.ldr_count = tk.StringVar()
+        ttk.Label(bar, textvariable=self.ldr_count).pack(side="right")
+
+        self.ldr_tree = ttk.Treeview(left, columns=[c[0] for c in LEADER_COLUMNS], show="headings",
+                                     selectmode="browse", height=8)
+        for cid, heading, width, _numeric, _get in LEADER_COLUMNS:
+            self.ldr_tree.heading(cid, text=heading, command=lambda c=cid: self.sort_ldr_by(c))
+            self.ldr_tree.column(cid, width=width, anchor="w" if cid in ("name", "nation", "rank", "type", "commands")
+                                 else "e")
+        self.ldr_tree.tag_configure("edited", background="#fff2b3")
+        scroll = ttk.Scrollbar(left, orient="vertical", command=self.ldr_tree.yview)
+        self.ldr_tree.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+        self.ldr_tree.pack(side="left", fill="both", expand=True)
+        self.ldr_tree.bind("<<TreeviewSelect>>", lambda e: self.on_ldr_select())
+        self.ldr_tree.bind("<Double-1>", lambda e: self.jump_to_ldr_unit())
+
+        self.ldr_title = tk.StringVar(value="(select a leader)")
+        ttk.Label(right, textvariable=self.ldr_title, font=("TkDefaultFont", 11, "bold")).grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
+        row = 1
+        for f in airgroups.LEADER_FIELDS:
+            ttk.Label(right, text=f.label).grid(row=row, column=0, sticky="w", pady=2)
+            self.ldr_vars[f.name] = tk.StringVar()
+            ttk.Entry(right, textvariable=self.ldr_vars[f.name], width=12).grid(row=row, column=1, padx=(8, 0), pady=2)
+            row += 1
+        self.ldr_button = ttk.Button(right, text="Apply", command=self.apply_ldr)
+        self.ldr_button.grid(row=row, column=0, columnspan=2, pady=6)
+        row += 1
+        self.ldr_info = {}
+        for name, label in (("rank", "Rank (read-only)"), ("branch", "Branch"), ("nation", "Nation"),
+                            ("type", "Type (read-only)"), ("political", "Political (unverified)"),
+                            ("delay", "Delay, days"), ("commands", "Commands")):
+            ttk.Label(right, text=label).grid(row=row, column=0, sticky="w", pady=1)
+            self.ldr_info[name] = tk.StringVar()
+            ttk.Label(right, textvariable=self.ldr_info[name]).grid(row=row, column=1, sticky="w", padx=(8, 0))
+            row += 1
+        ttk.Label(right, text="Double-click a leader to jump to the unit.", foreground="gray").grid(
+            row=row, column=0, columnspan=2, sticky="w", pady=(6, 0))
+
     def _build_move_row(self, parent, row, command):
         """Destination box, Move button and a gray note for why moving is not possible."""
         ttk.Label(parent, text="Move to").grid(row=row, column=0, sticky="w", pady=(8, 2))
@@ -2035,6 +2129,8 @@ class EditorApp:
             tflist = self._load_task_forces(save)
             glist = airgroups.list_airgroups(save)
             ulist = landunits.list_land_units(save)
+            lassign = leaders.assignments(save)
+            lrows = leaders.list_leaders(save, lassign)
             pindex = airgroups.pilots_by_group(save)
             places = bases.list_places(save)
             devices = landunits.available_devices(save)
@@ -2112,6 +2208,10 @@ class EditorApp:
         self.units_edited.clear()
         self.unit_current = None
         self.unit_slot = None
+        self.ldr_assign = lassign
+        self.ldr_rows = {r.id: r for r in lrows}
+        self.ldr_edited.clear()
+        self.ldr_current = None
         self.file_label.set(f"File: {os.path.basename(path)}    Key variant: {save.variant}")
         self.title_var.set(save.description)
         self.status.set(f"{path} - {len(blist)} bases, towns and minor places, {len(alist)} aircraft, {len(slist)} ship classes, {len(srlist)} ships, {len(glist)} air groups, {len(ulist)} land units"
@@ -2132,6 +2232,8 @@ class EditorApp:
         self.show_pool(None)
         self.refresh_unit_list()
         self.show_unit(None)
+        self.refresh_ldr_list()
+        self.show_ldr(None)
         self.industry_places = industry.list_industry_places(save, regions.default_regions())
         self.refresh_reports()
         self.record_history()
@@ -3438,7 +3540,7 @@ class EditorApp:
         for widget in self.leader_entries + [self.leader_button]:
             widget.state([state])
         self.leader_name.set(leader.name if leader else "(none)")
-        self.leader_age.set(str(leader.age) if leader else "")
+        self.leader_rank.set(f"{leaders.rank_label(leader.rank_code)} ({leader.rank_code})" if leader else "")
         for f in airgroups.LEADER_FIELDS:
             self.leader_vars[f.name].set(str(leader.get(f.name)) if leader else "")
 
@@ -3454,6 +3556,7 @@ class EditorApp:
         if before != values:
             self.groups_edited.add(self.group_current)
             self.dirty = True
+            self._leader_changed(leader.id)
         self.refresh_group_list()
         self.show_leader(leader)
 
@@ -3687,6 +3790,130 @@ class EditorApp:
         self.show_unit_equipment(u)
         self.unit_equipment_vars["count"].set(str(count))
         self.unit_equipment_vars["disabled"].set(str(disabled))
+
+    # ---- leaders -------------------------------------------------------
+
+    def _ldr_search_changed(self):
+        """Rebuilding 27,000 rows per keystroke is slow, so wait until typing pauses."""
+        if self.ldr_search_job is not None:
+            self.root.after_cancel(self.ldr_search_job)
+        self.ldr_search_job = self.root.after(250, self.refresh_ldr_list)
+
+    def _ldr_sort_key(self, r):
+        _cid, _h, _w, numeric, get = LEADER_COLUMN_BY_ID[self.ldr_sort_col]
+        v = get(r)
+        return (v if numeric else str(v).lower(), r.id)
+
+    def refresh_ldr_list(self):
+        if self.ldr_search_job is not None:
+            self.root.after_cancel(self.ldr_search_job)
+            self.ldr_search_job = None
+        selected = self.ldr_current
+        self.ldr_tree.delete(*self.ldr_tree.get_children())
+        f = self.ldr_filter_vars
+        rows = leaders.filter_leaders(self.ldr_rows.values(), f["side"].get(), f["branch"].get(), f["type"].get(),
+                                      f["assigned"].get(), self.ldr_search_var.get())
+        rows.sort(key=self._ldr_sort_key, reverse=self.ldr_sort_reverse)
+        for r in rows:
+            tags = ("edited",) if r.id in self.ldr_edited else ()
+            self.ldr_tree.insert("", "end", iid=str(r.id), values=[get(r) for *_, get in LEADER_COLUMNS], tags=tags)
+        self.ldr_count.set(f"{len(rows)} of {len(self.ldr_rows)} leaders")
+        if selected is not None and self.ldr_tree.exists(str(selected)):
+            self.ldr_tree.selection_set(str(selected))
+
+    def sort_ldr_by(self, col):
+        self.ldr_sort_reverse = (not self.ldr_sort_reverse) if col == self.ldr_sort_col else False
+        self.ldr_sort_col = col
+        self.refresh_ldr_list()
+
+    def on_ldr_select(self):
+        sel = self.ldr_tree.selection()
+        self.show_ldr(self.ldr_rows[int(sel[0])] if sel else None)
+
+    def show_ldr(self, r):
+        self.ldr_current = r.id if r else None
+        self.ldr_button.state(["!disabled" if r else "disabled"])
+        if r is None:
+            self.ldr_title.set("(select a leader)")
+            for var in list(self.ldr_vars.values()) + list(self.ldr_info.values()):
+                var.set("")
+            return
+        self.ldr_title.set(f"{r.name} (#{r.id}, {r.side})")
+        for f in airgroups.LEADER_FIELDS:
+            self.ldr_vars[f.name].set(str(getattr(r, f.name)))
+        self.ldr_info["rank"].set(f"{r.rank} ({r.rank_code})")
+        self.ldr_info["branch"].set(r.branch)
+        self.ldr_info["nation"].set(f"{r.nation} ({r.nation_id})")
+        self.ldr_info["type"].set(r.type)
+        self.ldr_info["political"].set(str(r.political))
+        self.ldr_info["delay"].set("available" if r.delay == 0 else str(r.delay))
+        self.ldr_info["commands"].set(f"{r.kind}: {r.commands}" if r.kind else "")
+
+    def _leader_changed(self, leader_id):
+        """Rebuild a leader's row after an edit in either tab and mark it edited."""
+        old = self.ldr_rows.get(leader_id)
+        if old is None:
+            return
+        self.ldr_rows[leader_id] = leaders.make_row(self.save, leader_id, old.name, self.ldr_assign.get(leader_id, ()))
+        self.ldr_edited.add(leader_id)
+        self.refresh_ldr_list()
+        if self.ldr_current == leader_id:
+            self.show_ldr(self.ldr_rows[leader_id])
+
+    def apply_ldr(self):
+        if self.ldr_current is None:
+            return
+        leader = airgroups.get_leader(self.save, self.ldr_current)
+        values = self._read_entries(leader, airgroups.LEADER_FIELDS, self.ldr_vars)
+        if values is None:
+            return
+        before = {n: leader.get(n) for n in values}
+        leader.set_many(values)
+        if before != values:
+            self.dirty = True
+            self._leader_changed(leader.id)
+            # The Air Groups tab shows the commander of the selected group and highlights the group.
+            for kind, group_id, _text in self.ldr_assign.get(leader.id, ()):
+                if kind == leaders.KIND_AIR_GROUP:
+                    self.groups_edited.add(group_id)
+            self.refresh_group_list()
+            if self.leader_current is not None and self.leader_current.id == leader.id:
+                self.show_leader(self.leader_current)
+        self.show_ldr(self.ldr_rows[leader.id])
+
+    def jump_to_ldr_unit(self):
+        """Select the unit the leader commands in its own tab; nothing for an unassigned leader."""
+        row = self.ldr_rows.get(self.ldr_current)
+        if row is None or not row.kind:
+            return
+        iid = str(row.unit_id)
+        if row.kind == leaders.KIND_AIR_GROUP:
+            tab, tree = self.groups_tab, self.group_tree
+            filters = ((self.group_search_var, ""), (self.group_side_var, "All"))
+            refresh = self.refresh_group_list
+        elif row.kind == leaders.KIND_SHIP:
+            tab, tree = self.shiprec_tab, self.shiprec_tree
+            filters = ((self.shiprec_search_var, ""), (self.shiprec_side_var, "All"))
+            refresh = self.refresh_shiprec_list
+        elif row.kind == leaders.KIND_TF:
+            tab, tree = self.tf_tab, self.tf_tree
+            filters = ((self.tf_search_var, ""), (self.tf_side_var, "All"))
+            refresh = self.refresh_tf_list
+        else:
+            tab, tree = self.units_tab, self.unit_tree
+            filters = ((self.unit_search_var, ""), (self.unit_side_var, "All"))
+            refresh = self.refresh_unit_list
+        if not tree.exists(iid):
+            for var, value in filters:
+                var.set(value)
+            refresh()
+        if not tree.exists(iid):
+            return
+        self.notebook.select(tab)
+        if tab is self.groups_tab:
+            self.groups_notebook.select(self.groups_page)
+        tree.selection_set(iid)
+        tree.see(iid)
 
     # ---- reports -------------------------------------------------------
 

@@ -177,7 +177,8 @@ highlights the group row. The Side filter uses the group's side byte
 | Pilot experience | verified in-game, editable |
 | Pilot 12 skills (Air, NavB, NavT, NavS, Recn, ASW, Tran, GrdB, LowN, LowG, Staf, Defn) | verified in-game, editable; written to both stored copies |
 | Commander leadership, inspiration, naval, air, land, admin, aggression | verified in-game, editable |
-| Pilot and commander "Age?" | unverified, read-only |
+| Pilot "Age?" | unverified, read-only |
+| Commander rank (shown as text and code, for example `LTC (37)`; same decoding as the Leaders tab) | read-only |
 
 Each pilot skill is stored twice (bytes 65..76 and 78..89). The game's pilot
 list shows the second copy, so edits write both. The byte at 122 is left
@@ -229,6 +230,39 @@ game-style HQ names.
 | Types HQ, INF, ART, ENG, CD verified; AA and ARM are guesses ending in `?` | read-only |
 
 Load cost and AV are computed by the game.
+
+## Leaders
+
+The Leaders tab lists every named leader (section 0x15, 50000 records of 180
+bytes; the ID is the leader id that air groups, ships and land units refer to).
+Filters: Side, Branch (Army, Navy, Air, from the rank), Type, Assigned, and a
+Search box that matches the name or the unit the leader commands. All columns
+sort. Select a leader to edit the ratings (same Apply, validation and row
+highlight as the other tabs); double-click one that commands a unit to jump to
+that unit in its tab (Air Groups, Ships, Task Forces or Land Units), with that
+tab's filters cleared. Edits in the Air Groups commander box and in this tab
+show in both.
+
+| Field | Status |
+|---|---|
+| Leadership, Inspiration, Naval, Air, Land, Admin, Aggression (0..99; u8 at 26..32) | verified in-game, editable |
+| Rank (u8 at 25, not age; text from the game's rank table: 0-9 and 32-42 Army, 10-31 Navy, 43-53 Air; other codes show `Rank n`) and Branch (from the rank) | decoded from WiTPTracker and ae-editor, checked on a save; read-only |
+| Nation (u8 at 42, same codes as ships and aircraft; IJA and IJN are Japanese, everything else Allied) | read-only |
+| Type (u8 at 49, the best command: None, Headquarters, Large/Small Ground Unit, Task Force, Ship, Air Group; other codes show `Type n`) | decoded, read-only |
+| Delay (i32 at 44, days until the leader is available, 0 = available) | decoded, read-only |
+| Political points (u8 at 48) | not verified in-game, read-only |
+
+Who commands what is not stored on the leader, so the editor reads it from the
+units, once per save load: air groups (i16 at 32 of the group record), ships
+(u16 at 32 of the ship record) and location records (u16 at 128: task forces,
+shown as `TF <id>`, and land units and HQs, shown by their game name). Only
+used records (named, task forces with ships) count. A leader named by more than
+one unit shows the first (air groups, then ships, then locations) and `+n`
+for the others (70 leaders on the sample save, all of them ships). The unit
+fields were checked on the sample save (for example 10,722 of 10,757 ships name
+a leader of type Ship) but not in-game. Offset 38 is not used because it names
+the unit only for some air group leaders. The code is in `witpae/leaders.py`;
+edits go through `airgroups.Leader`.
 
 ## Reports
 

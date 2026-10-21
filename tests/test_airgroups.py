@@ -67,7 +67,7 @@ class AirGroupTests(unittest.TestCase):
         leader = airgroups.get_leader(self.sf, g.leader_id)
         self.assertEqual(leader.name, "Dionne E.")
         self.assertEqual([leader.get(f.name) for f in airgroups.LEADER_FIELDS], [49, 41, 15, 57, 42, 59, 36])
-        self.assertEqual(leader.age, 37)
+        self.assertEqual(leader.rank_code, 37)
 
     def test_patrol_levels(self):
         # 19th TS trains 40%; the naval search groups patrol 50%; the Dutch fighters fly 30% CAP.

@@ -83,7 +83,7 @@ PILOT_AGE_OFFSET = 43
 # 1 for active pilots; 2-4 are rarer (a pilot the game counts as killed in action has 2),
 # probably killed/wounded/missing. Only 1 is confirmed as active.
 PILOT_STATUS_OFFSET = 46
-LEADER_AGE_OFFSET = 25
+LEADER_RANK_OFFSET = 25
 
 # fmt is a struct code: B = u8, H = u16.
 GROUP_FIELDS = [
@@ -584,8 +584,9 @@ class Leader(Record):
     section, record_size, fields = LEADER_SECTION, LEADER_RECORD_SIZE, LEADER_FIELDS
 
     @property
-    def age(self):
-        return self._u8(LEADER_AGE_OFFSET)
+    def rank_code(self):
+        """Rank code; the text is `leaders.rank_label`."""
+        return self._u8(LEADER_RANK_OFFSET)
 
 
 def list_airgroups(save):
