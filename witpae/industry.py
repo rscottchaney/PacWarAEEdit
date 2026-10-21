@@ -11,7 +11,7 @@ Nothing here writes to the save.
 import struct
 from collections import namedtuple
 
-from . import bases, factories, regions
+from . import aircraft, bases, factories, regions, reports
 from .container import SaveFormatError
 
 
@@ -50,21 +50,23 @@ RULES = {
     526: ("Vehicle", {"hi": 6}, {"vehicle": 1}),
     524: ("Repair Shipyard", {}, {}),
 }
-# Aircraft and engine factories build size / 30 per day; their HI use depends on the
-# engines per aircraft, which is not mapped, so their inputs are unknown.
+# Aircraft and engine factories build size / 30 per day (manual 13.2.2.4/13.2.2.5). Each engine
+# takes HI_PER_UNIT HI, and so does each engine of an airframe; Japanese airframes also use up
+# one engine per engine fitted. Allied aircraft do not need engines.
 AIRCRAFT_DIVISOR = 30
+HI_PER_UNIT = 18
 # Row order of the Industry report; also the choices of the Factories report.
 GROUP_ORDER = ["Oil", "Resources", "Manpower", "Heavy Industry", "Light Industry", "Refinery", "Naval Shipyard",
                "Merchant Shipyard", "Repair Shipyard", "Armament", "Vehicle", "Aircraft", "Engines"]
 
 IndustryPlace = namedtuple("IndustryPlace", "id name kind region_id region base")
-Flow = namedtuple("Flow", "uses makes uses_known")
-TypeRow = namedtuple("TypeRow", "group count size damage production_off repair_off makes uses uses_known")
+Flow = namedtuple("Flow", "uses makes")
+TypeRow = namedtuple("TypeRow", "group count size damage production_off repair_off makes uses")
 BalanceRow = namedtuple("BalanceRow", "material label stored produced allotted used net days")
 FactoryRow = namedtuple("FactoryRow", "place factory group flow")
 RawRow = namedtuple("RawRow", "place stored net shortest allotment")
 
-NO_FLOW = Flow({}, {}, True)
+NO_FLOW = Flow({}, {})
 
 
 def list_industry_places(save, region_map=None):
@@ -86,16 +88,20 @@ def list_industry_places(save, region_map=None):
     return places
 
 
-def side_pools(save):
-    """side id -> {pool key: value} of the side-wide production pools."""
+def pool_value(save, device, side):
+    """The side's pool of a device id: the i32 at POOL_BASE + 8 * device + 4 * side (engines use their device id)."""
     if POOL_SECTION not in save:
         raise SaveFormatError(f"section 0x{POOL_SECTION:02x} (production pools) is missing")
     data = save[POOL_SECTION].data
-    last = POOL_BASE + 8 * max(POOL_DEVICES.values()) + 4 * max(bases.SIDES) + 4
-    if len(data) < last:
+    pos = POOL_BASE + 8 * device + 4 * side
+    if len(data) < pos + 4:
         raise SaveFormatError(f"section 0x{POOL_SECTION:02x} (production pools) is too short")
-    return {side: {key: struct.unpack_from("<i", data, POOL_BASE + 8 * device + 4 * side)[0]
-                   for key, device in POOL_DEVICES.items()}
+    return struct.unpack_from("<i", data, pos)[0]
+
+
+def side_pools(save):
+    """side id -> {pool key: value} of the side-wide production pools."""
+    return {side: {key: pool_value(save, device, side) for key, device in POOL_DEVICES.items()}
             for side in bases.SIDES}
 
 
@@ -113,16 +119,46 @@ def group_of(factory):
     return RULES[factory.type][0] if factory.kind == "industry" else "Engines"
 
 
-def factory_flow(factory):
-    """Daily uses and makes of one factory; empty when production is off."""
+def game_month(save):
+    """(two-digit year, month) of the save, or None when the date cannot be read."""
+    try:
+        _day, month, year = reports.game_date(save)
+    except SaveFormatError:
+        return None
+    return year - 1900, month
+
+
+def is_researching(save, factory):
+    """True for an aircraft factory whose model is not yet available: it builds nothing yet."""
+    if factory.kind != "aircraft" or factory.available is None:
+        return False
+    today = game_month(save)
+    return today is not None and factory.available > today
+
+
+def factory_flow(factory, save=None):
+    """Daily uses and makes of one factory; empty when production is off.
+
+    Aircraft factories need the save, for the engines of the model and the game date.
+    """
     if not factory.production_on:
         return NO_FLOW
     if factory.kind == "industry":
         _label, uses, makes = RULES[factory.type]
         return Flow({k: v * factory.size for k, v in uses.items()},
-                    {k: v * factory.size for k, v in makes.items()}, True)
-    key = "aircraft" if factory.kind == "aircraft" else "engines"
-    return Flow({}, {key: factory.size / AIRCRAFT_DIVISOR}, False)
+                    {k: v * factory.size for k, v in makes.items()})
+    per_day = factory.size / AIRCRAFT_DIVISOR
+    if factory.kind == "engine":
+        return Flow({"hi": per_day * HI_PER_UNIT}, {"engines": per_day})
+    if save is None:
+        raise ValueError("an aircraft factory needs the save to find its engines")
+    if is_researching(save, factory):
+        return NO_FLOW
+    model = aircraft.Aircraft(save, factory.type - factories.AIRCRAFT_BASE, factory.name)
+    uses = {"hi": per_day * HI_PER_UNIT * model.engine_count}
+    if model.side_id == 0:
+        uses["engines"] = per_day * model.engine_count
+    return Flow(uses, {"aircraft": per_day})
 
 
 def flow_text(amounts):
@@ -161,21 +197,19 @@ def summarize(places, pools=None, regional=False):
         _add(allotted, allotment(p))
         for f in factories.list_factories(p.base):
             g = groups.setdefault(group_of(f), {"count": 0, "size": 0, "damage": 0, "production_off": 0,
-                                                "repair_off": 0, "makes": {}, "uses": {}, "uses_known": True})
+                                                "repair_off": 0, "makes": {}, "uses": {}})
             g["count"] += 1
             g["size"] += f.size
             g["damage"] += f.damage
             g["production_off"] += 0 if f.production_on else f.size
             g["repair_off"] += 0 if f.repair_on else f.size
-            flow = factory_flow(f)
+            flow = factory_flow(f, p.base._save)
             _add(g["makes"], flow.makes)
             _add(g["uses"], flow.uses)
             _add(produced, flow.makes)
             _add(used, flow.uses)
-            if not flow.uses_known:
-                g["uses_known"] = False
     type_rows = [TypeRow(name, g["count"], g["size"], g["damage"], g["production_off"], g["repair_off"],
-                         g["makes"], g["uses"], g["uses_known"])
+                         g["makes"], g["uses"])
                  for name in GROUP_ORDER for g in [groups.get(name)] if g]
     balance = []
     for key, label in BALANCE_ROWS.items():
@@ -190,7 +224,7 @@ def summarize(places, pools=None, regional=False):
 
 def factory_rows(places):
     """One row per factory slot of the places, in place then slot order."""
-    return [FactoryRow(p, f, group_of(f), factory_flow(f))
+    return [FactoryRow(p, f, group_of(f), factory_flow(f, p.base._save))
             for p in places for f in factories.list_factories(p.base)]
 
 
@@ -208,7 +242,7 @@ def raw_rows(places, only_industry=True):
     """
     rows = []
     for p in places:
-        flows = [(f, factory_flow(f)) for f in factories.list_factories(p.base)]
+        flows = [(f, factory_flow(f, p.base._save)) for f in factories.list_factories(p.base)]
         given = allotment(p)
         if only_industry and not is_supply_source(given, flows):
             continue

@@ -11,7 +11,7 @@ import struct
 from .bases import Field
 from .nations import label as lookup_label, nation_label
 from .factories import (
-    AIRCRAFT_MONTH_OFFSET, AIRCRAFT_RECORD_SIZE, AIRCRAFT_SECTION, AIRCRAFT_YEAR_OFFSET,
+    AIRCRAFT_MONTH_OFFSET, AIRCRAFT_RECORD_SIZE, AIRCRAFT_SECTION, AIRCRAFT_SIDE_OFFSET, AIRCRAFT_YEAR_OFFSET,
     DEVICE_RECORD_SIZE, DEVICE_SECTION, _plain_name,
 )
 
@@ -20,7 +20,7 @@ TYPE_OFFSET = 25
 UPGRADE_OFFSET = 26
 NATION_OFFSET = 284
 # 0 = Japanese, 1 = Allied; matches the side of every group flying the model.
-SIDE_OFFSET = 228
+SIDE_OFFSET = AIRCRAFT_SIDE_OFFSET
 CARRIER_OFFSET = 232
 CARRIER_BIT = 0x08
 TO_MONTH_OFFSET = 282
@@ -72,6 +72,10 @@ SLOTS = 10
 MAX_LOAD = (42, 82, 122)
 REDUCED_LOAD = (62, 102, 132)
 FACINGS = {0: "F", 5: "TR", 8: "C", 12: "XT"}
+# The engine is weapon slot 9 of the max-load table: device id and count. The reduced-load
+# copies (@80, @120) are never written.
+ENGINE_OFFSET = 60
+ENGINE_COUNT_OFFSET = 100
 
 DEVICE_TYPE_OFFSET = 26  # 0 = aircraft gun; bombs are 3, drop tanks 5, engines 27
 DEVICE_EFFECT_OFFSET = 32
@@ -83,12 +87,13 @@ MANEUVER_MOD_BANDS = ["<10K", "10-15K", "16-20K", "21-31K", ">32K"]
 
 
 # Side-wide production pool, in section 0x01 and indexed by aircraft id:
-# (offset of entry 0, stride). Verified against the production screen.
+# (offset of entry 0, stride, paired). Paired tables hold a (Japan, Allies) i32 pair per
+# aircraft, read with the model's side; the Allied half was verified against the production screen.
 POOL_SECTION = 0x01
-POOL = (188, 8)
-USED = (28188, 8)
-LAST_TURN = (65848, 4)
-THIS_MONTH = (69848, 4)
+POOL = (184, 8, True)
+USED = (28184, 8, True)
+LAST_TURN = (65848, 4, False)
+THIS_MONTH = (69848, 4, False)
 MAX_POOL = 99999
 
 
@@ -209,8 +214,8 @@ class Aircraft:
         self._data[pos] = (byte | CARRIER_BIT) if value else (byte & ~CARRIER_BIT & 0xFF)
 
     def _pool_pos(self, table):
-        start, stride = table
-        return start + self.id * stride
+        start, stride, paired = table
+        return start + self.id * stride + (4 * self.side_id if paired else 0)
 
     def _pool_value(self, table):
         return struct.unpack_from("<i", self._save[POOL_SECTION].data, self._pool_pos(table))[0]
@@ -309,6 +314,32 @@ class Aircraft:
                 total += (struct.unpack_from("<h", devices, start + DEVICE_EFFECT_OFFSET)[0]
                           * self._i16(MAX_LOAD[1] + 2 * k))
         return total
+
+    @property
+    def engine_id(self):
+        """Device id of the engine: a specific engine for Japanese models, the generic "Engine" for Allied ones."""
+        return self._i16(ENGINE_OFFSET)
+
+    @property
+    def engine_count(self):
+        return self._u8(ENGINE_COUNT_OFFSET)
+
+    @property
+    def engine_name(self):
+        devices = self._save[DEVICE_SECTION].data
+        if not 0 < self.engine_id < len(devices) // DEVICE_RECORD_SIZE:
+            return ""
+        return _plain_name(devices, self._device(self.engine_id))
+
+    @property
+    def engines_text(self):
+        """"2 x Nakajima Ha-5" for Japanese models, "2 engines" for Allied ones (generic engine)."""
+        count = self.engine_count
+        if count == 0:
+            return "-"
+        if self.side_id == 1:
+            return f"{count} engine{'' if count == 1 else 's'}"
+        return f"{count} x {self.engine_name}"
 
     @property
     def maneuver_mods(self):

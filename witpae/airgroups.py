@@ -45,6 +45,8 @@ UPGRADE_OFFSET = 308
 UPGRADE_COPY_OFFSET = 574
 LEADER_OFFSET = 32
 PLANES_OFFSET = 210
+# Days until a group that has not arrived (location 0) shows up; many store 9999 or a large value.
+ARRIVAL_DAYS_OFFSET = 220
 # For a group that has arrived, ready + maintenance + reserve + damaged == planes (the total).
 # Byte 208 is not part of this and is never written.
 READY_OFFSET = 204
@@ -460,6 +462,10 @@ class AirGroup(Record):
     @property
     def planes(self):
         return self._u8(PLANES_OFFSET)
+
+    @property
+    def days_to_arrival(self):
+        return self._i16(ARRIVAL_DAYS_OFFSET)
 
     @property
     def pilot_count(self):

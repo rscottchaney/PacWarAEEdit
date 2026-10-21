@@ -2,8 +2,9 @@
 
 Per-slot arrays: type int16 at 136, size int16 at 176, damage int16 at 216,
 production-off byte at 844, repair-off byte at 870, keep byte at 1073 (1 = Keep,
-0 = Upgd on the aircraft assembly screen). Other slot arrays (original
-type/size) are never touched. Names come from the device section (engine and
+0 = Upgd on the aircraft assembly screen). The original-type array (int16 at 336)
+is only written together with the type, when an aircraft factory changes model;
+the original size array is never touched. Names come from the device section (engine and
 industry factories) or the aircraft section (type >= 2000), both plain latin-1
 text.
 """
@@ -20,9 +21,13 @@ AIRCRAFT_RECORD_SIZE = 396
 # Availability date of an aircraft model, shown as "(yy/m)" in the game.
 AIRCRAFT_MONTH_OFFSET = 184
 AIRCRAFT_YEAR_OFFSET = 185
+# 0 = Japanese, 1 = Allied.
+AIRCRAFT_SIDE_OFFSET = 228
 
 SLOTS = 20
 TYPE_OFFSET = 136
+# Equals the type in every slot of every save checked.
+ORIGINAL_TYPE_OFFSET = 336
 SIZE_OFFSET = 176
 DAMAGE_OFFSET = 216
 PRODUCTION_OFF_OFFSET = 844
@@ -146,3 +151,52 @@ def set_factory(base, slot, size, damage, production_on, repair_on, upgrade_on=N
     data[start + REPAIR_OFF_OFFSET + slot] = 0 if repair_on else 1
     if upgrade_on is not None:
         data[start + KEEP_OFFSET + slot] = 0 if upgrade_on else 1
+
+
+def set_aircraft_model(base, slot, aircraft_id):
+    """Change an aircraft factory to another model of the same side, keeping size, damage and switches.
+
+    Writes the new type (2000 + id) to both the type and the original-type arrays.
+    """
+    factory = get_factory(base, slot)
+    if factory is None:
+        raise ValueError(f"slot {slot} is empty")
+    if factory.kind != "aircraft":
+        raise ValueError(f"{factory.name} is not an aircraft factory")
+    if isinstance(aircraft_id, bool) or not isinstance(aircraft_id, int):
+        raise ValueError("aircraft id must be an integer")
+    models = base._save[AIRCRAFT_SECTION].data
+    if not 0 < aircraft_id < len(models) // AIRCRAFT_RECORD_SIZE or not _plain_name(
+            models, aircraft_id * AIRCRAFT_RECORD_SIZE):
+        raise ValueError(f"{aircraft_id!r} is not an aircraft")
+    if aircraft_id == factory.type - AIRCRAFT_BASE:
+        raise ValueError(f"{factory.name} is already building that model")
+    side = models[aircraft_id * AIRCRAFT_RECORD_SIZE + AIRCRAFT_SIDE_OFFSET]
+    if side != models[(factory.type - AIRCRAFT_BASE) * AIRCRAFT_RECORD_SIZE + AIRCRAFT_SIDE_OFFSET]:
+        raise ValueError(f"{aircraft_id} is an aircraft of the other side")
+    data = base._save[LOCATION_SECTION].data
+    start = _start(base)
+    for offset in (TYPE_OFFSET, ORIGINAL_TYPE_OFFSET):
+        struct.pack_into("<h", data, start + offset + 2 * slot, AIRCRAFT_BASE + aircraft_id)
+
+
+def set_switches(base, slot, production_on=None, repair_on=None):
+    """Set only the production and/or repair switch of one slot; None leaves a switch as it is.
+
+    Size and damage are neither read nor checked, so factories whose stored damage exceeds their
+    size (capacity still being built up) can be switched.
+    """
+    factory = get_factory(base, slot)
+    if factory is None:
+        raise ValueError(f"slot {slot} is empty")
+    for label, value in (("Production", production_on), ("Repair", repair_on)):
+        if value is not None and not isinstance(value, bool):
+            raise ValueError(f"{label} must be True or False")
+    if production_on is False and factory.production_on and production_locked(factory.type):
+        raise ValueError(f"{factory.name} production cannot be switched off")
+    data = base._save[LOCATION_SECTION].data
+    start = _start(base)
+    if production_on is not None:
+        data[start + PRODUCTION_OFF_OFFSET + slot] = 0 if production_on else 1
+    if repair_on is not None:
+        data[start + REPAIR_OFF_OFFSET + slot] = 0 if repair_on else 1

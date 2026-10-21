@@ -10,8 +10,8 @@ import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from witpae import (aircraft, airgroups, bases, factories, industry, landunits, regions, reports, shiprecords,
-                    ships, taskforces)
+from witpae import (aircraft, airgroups, airproduction, bases, factories, industry, landunits, regions, reports,
+                    shiprecords, ships, taskforces)
 from witpae.container import SaveFile, SaveFormatError
 from witpae.fileio import is_pbem, save_with_backup
 
@@ -168,11 +168,6 @@ def _rate(v):
     return f"{v:+,}" if v else "0"
 
 
-def _flow_cell(amounts):
-    # None marks inputs that are not mapped (aircraft and engine factories).
-    return "-" if amounts is None else industry.flow_text(amounts)
-
-
 def _shortest_text(v):
     days, key = v
     if not key:
@@ -194,10 +189,10 @@ INDUSTRY_COLUMNS = [
     ("production_off", "Production off", 90, True, lambda r: r.production_off),
     ("repair_off", "Repair off", 80, True, lambda r: r.repair_off),
     ("output", "Daily output", 260, False, lambda r: r.makes),
-    ("input", "Daily input", 260, False, lambda r: r.uses if r.uses_known else None),
+    ("input", "Daily input", 260, False, lambda r: r.uses),
 ]
 INDUSTRY_TEXT = {"count": _num, "size": _num, "damage": _num, "production_off": _num, "repair_off": _num,
-                 "output": _flow_cell, "input": _flow_cell}
+                 "output": industry.flow_text, "input": industry.flow_text}
 BALANCE_COLUMNS = [
     ("label", "Material", 130, False, lambda r: r.label),
     ("stored", "Stored", 100, True, lambda r: r.stored),
@@ -227,7 +222,7 @@ FACTORY_COLUMNS = [
     ("production", "Production", 70, False, lambda r: "Yes" if r.factory.production_on else "No"),
     ("repair", "Repair", 55, False, lambda r: "Yes" if r.factory.repair_on else "No"),
     ("output", "Daily output", 200, False, lambda r: industry.flow_text(r.flow.makes)),
-    ("input", "Daily input", 200, False, lambda r: industry.flow_text(r.flow.uses) if r.flow.uses_known else "-"),
+    ("input", "Daily input", 200, False, lambda r: industry.flow_text(r.flow.uses)),
 ]
 FACTORY_COLUMN_BY_ID = {c[0]: c for c in FACTORY_COLUMNS}
 FACTORY_TYPE_ALL = "All types"
@@ -255,6 +250,78 @@ RAW_TEXT = {"oil": _num, "resources": _num, "fuel": _num, "supply": _num, "oil_d
             "resources_day": _rate, "fuel_day": _rate, "supply_day": _rate, "shortest": _shortest_text}
 RAW_NOTE = ("Per place, from that place's own factories and daily allotment. The game moves oil, resources and "
             "fuel overland between connected places, so a local shortfall does not always stop a factory.")
+
+# Air production: one row per aircraft model (airproduction.AirRow); the lower table lists the
+# factories building the selected model (airproduction.PlantEntry).
+AIR_COLUMNS = [
+    ("id", "ID", 45, True, lambda r: r.id),
+    ("name", "Aircraft", 140, False, lambda r: r.name),
+    ("type", "Type", 85, False, lambda r: r.type),
+    ("side", "Side", 65, False, lambda r: r.side),
+    ("engines", "Engines", 130, False, lambda r: r.engines),
+    ("pool", "Pool", 50, True, lambda r: r.pool),
+    ("used", "Used", 50, True, lambda r: r.used),
+    ("factories", "Factories", 60, True, lambda r: r.factories),
+    ("size", "Size", 50, True, lambda r: r.size),
+    ("research", "Research", 60, True, lambda r: r.research),
+    ("damage", "Damaged", 60, True, lambda r: r.damage),
+    ("production_off", "Prod off", 55, True, lambda r: r.production_off),
+    ("repair_off", "Repair off", 65, True, lambda r: r.repair_off),
+    ("planes_day", "Planes/day", 70, True, lambda r: r.planes_day),
+    ("hi_day", "HI/day", 65, True, lambda r: r.hi_day),
+    ("engines_day", "Engines/day", 75, True, lambda r: -1 if r.engines_day is None else r.engines_day),
+    ("groups", "Groups", 50, True, lambda r: r.groups),
+    ("in_groups", "In groups", 65, True, lambda r: r.in_groups),
+    ("short", "Short", 45, True, lambda r: r.short),
+    ("next_group", "Next group", 75, True, lambda r: float("inf") if r.next_group is None else r.next_group),
+    ("available", "Available", 110, False, lambda r: r.available),
+]
+AIR_COLUMN_BY_ID = {c[0]: c for c in AIR_COLUMNS}
+AIR_TEXT = {"pool": _num, "used": _num, "factories": _num, "size": _num, "research": _num, "damage": _num,
+            "production_off": _num, "repair_off": _num, "planes_day": lambda v: f"{v:,.1f}",
+            "hi_day": lambda v: f"{v:,.1f}", "engines_day": lambda v: "-" if v < 0 else f"{v:,.1f}",
+            "in_groups": _num, "next_group": lambda v: "-" if v == float("inf") else v}
+AIR_FACTORY_COLUMNS = [
+    ("id", "Place ID", 60, True, lambda e: e.place.id),
+    ("place", "Place", 140, False, lambda e: e.place.name),
+    ("kind", "Kind", 50, False, lambda e: e.place.kind),
+    ("side", "Side", 70, False, lambda e: e.place.base.side),
+    ("region", "Region", 110, False, lambda e: e.place.region),
+    ("slot", "Slot", 40, True, lambda e: e.factory.slot),
+    ("size", "Size", 60, True, lambda e: e.factory.size),
+    ("damage", "Damage", 60, True, lambda e: e.factory.damage),
+    ("production", "Production", 70, False, lambda e: "Yes" if e.factory.production_on else "No"),
+    ("repair", "Repair", 55, False, lambda e: "Yes" if e.factory.repair_on else "No"),
+    ("upgrade", "Upgrade", 60, False, lambda e: "Upgd" if e.factory.upgrade_on else "Keep"),
+    ("available", "Available", 70, False, lambda e: f"{e.factory.available[0]}/{e.factory.available[1]}"),
+]
+AIR_NOTE = ("Rules (game manual 13.2.2.4, 13.2.2.5): a factory builds size / 30 aircraft per day; HI per day = planes per "
+            "day x 18 x engines per aircraft; Japanese aircraft also use one engine per engine fitted, Allied aircraft "
+            "need none. Size counts factories with production on whose model is available; Research is the size of "
+            "factories whose model is not yet available, which build and use nothing yet. WitPTracker shows a different "
+            "HI per day for Allied airframes; its rule is unknown, this report follows the manual. Not yet tested in-game.")
+
+ENGINE_COLUMNS = [
+    ("id", "ID", 45, True, lambda r: r.id),
+    ("name", "Engine", 140, False, lambda r: r.name),
+    ("factories", "Factories", 60, True, lambda r: r.factories),
+    ("size", "Size", 55, True, lambda r: r.size),
+    ("damage", "Damaged", 60, True, lambda r: r.damage),
+    ("production_off", "Prod off", 55, True, lambda r: r.production_off),
+    ("pool", "Pool", 60, True, lambda r: -1 if r.pool is None else r.pool),
+    ("needed", "Needed/month", 85, True, lambda r: r.needed),
+    ("net", "Net/month", 75, True, lambda r: r.net),
+    ("hi_day", "HI/day", 60, True, lambda r: r.hi_day),
+    ("used_by", "Used by", 500, False, lambda r: r.used_by),
+]
+ENGINE_COLUMN_BY_ID = {c[0]: c for c in ENGINE_COLUMNS}
+ENGINE_TEXT = {"factories": _num, "size": _num, "damage": _num, "production_off": _num,
+               "pool": lambda v: "?" if v < 0 else _num(v), "needed": _num, "net": _rate,
+               "hi_day": lambda v: f"{v:,.1f}"}
+ENGINE_NOTE = ("Japanese engines only. Size is engines per month from factories with production on (size / 30 per day, "
+               "18 HI each); Needed/month is the engines the Japanese aircraft factories with production on need "
+               "(size x engines per aircraft, available models only). Allied aircraft do not need engines. Not yet "
+               "tested in-game.")
 
 REGION_ALL = "All regions"
 
@@ -364,6 +431,14 @@ class EditorApp:
         self.factory_report_sort_reverse = False
         self.raw_sort_col = "shortest"
         self.raw_sort_reverse = False
+        self.air_entries = []
+        self.air_rows_all = []
+        self.engine_rows_all = []
+        self.air_sort_col = "size"
+        self.air_sort_reverse = True
+        self.engine_sort_col = "size"
+        self.engine_sort_reverse = True
+        self.factory_model_ids = {}
 
         self._build_menu()
         self._build_header()
@@ -523,6 +598,7 @@ class EditorApp:
                                               self.jump_to_upgrade_ship)
 
         self._build_industry_reports()
+        self._build_air_reports()
 
         # Bound last so the handlers never run before the lists exist.
         self.notebook.bind("<<NotebookTabChanged>>", lambda e: self._reports_shown())
@@ -595,6 +671,54 @@ class EditorApp:
         self.raw_tree = self._report_tree(raw, RAW_COLUMNS, self.sort_raw_by, ("place", "kind", "side", "region"),
                                           lambda: self.jump_to_industry_place(self.raw_tree))
 
+    def _build_air_reports(self):
+        air = ttk.Frame(self.reports_notebook, padding=4)
+        self.reports_notebook.add(air, text="Air production")
+        bar = ttk.Frame(air)
+        bar.pack(side="top", fill="x")
+        ttk.Label(bar, text="Search:").pack(side="left")
+        self.air_search_var = tk.StringVar()
+        self.air_search_var.trace_add("write", lambda *a: self.refresh_air_list())
+        ttk.Entry(bar, textvariable=self.air_search_var, width=20).pack(side="left", padx=4)
+        self.air_side_var = tk.StringVar(value="All")
+        self._report_combo(bar, "Side:", self.air_side_var, ["All", "Allied", "Japanese"], self.refresh_air_list, 9)
+        self.air_only_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(bar, text="Only models in production or use", variable=self.air_only_var,
+                        command=self.refresh_air_list).pack(side="left", padx=(0, 8))
+        self.air_count = tk.StringVar()
+        ttk.Label(bar, textvariable=self.air_count).pack(side="left", padx=8)
+        ttk.Label(air, text=AIR_NOTE, wraplength=1100, justify="left").pack(side="bottom", anchor="w", pady=(4, 0))
+        buttons = ttk.Frame(air)
+        buttons.pack(side="bottom", fill="x", pady=(4, 0))
+        ttk.Label(buttons, text="For every factory building the selected model:").pack(side="left")
+        for text, production, repair in (("Production on", True, None), ("Production off", False, None),
+                                         ("Repair on", None, True), ("Repair off", None, False)):
+            ttk.Button(buttons, text=text, command=lambda t=text, p=production, r=repair: self.apply_air_switch(
+                t, p, r)).pack(side="left", padx=4)
+        low = ttk.LabelFrame(air, text="Factories building the selected model (double-click to open the place)",
+                             padding=2)
+        low.pack(side="bottom", fill="x", pady=(4, 0))
+        self.air_factory_tree = self._report_tree(
+            low, AIR_FACTORY_COLUMNS, lambda c: None, ("place", "kind", "side", "region", "production", "repair"),
+            lambda: self.jump_to_industry_place(self.air_factory_tree))
+        self.air_factory_tree.configure(height=7)
+        top = ttk.Frame(air)
+        top.pack(side="top", fill="both", expand=True, pady=(4, 0))
+        self.air_tree = self._report_tree(top, AIR_COLUMNS, self.sort_air_by,
+                                          ("name", "type", "side", "engines", "available"), lambda: None)
+        self.air_tree.bind("<<TreeviewSelect>>", lambda e: self.refresh_air_factories())
+
+        eng = ttk.Frame(self.reports_notebook, padding=4)
+        self.reports_notebook.add(eng, text="Engines")
+        bar = ttk.Frame(eng)
+        bar.pack(side="top", fill="x")
+        ttk.Label(bar, text="Side: Japan only").pack(side="left")
+        self.engine_count = tk.StringVar()
+        ttk.Label(bar, textvariable=self.engine_count).pack(side="left", padx=8)
+        ttk.Label(eng, text=ENGINE_NOTE, wraplength=1100, justify="left").pack(side="bottom", anchor="w", pady=(4, 0))
+        self.engine_tree = self._report_tree(eng, ENGINE_COLUMNS, self.sort_engines_by, ("name", "used_by"),
+                                             lambda: None)
+
     def _report_tree(self, parent, columns, sort_command, left_aligned, on_open):
         tree = ttk.Treeview(parent, columns=[c[0] for c in columns], show="headings", selectmode="browse")
         for cid, heading, width, _numeric, _get in columns:
@@ -661,7 +785,7 @@ class EditorApp:
         row += 1
         self.aircraft_info = {}
         for name, label in (("type", "Type (read-only)"), ("nation", "Nation (read-only)"),
-                            ("upgrade", "Upgrade (read-only)"), ("gun", "Gun value (read-only)"),
+                            ("upgrade", "Upgrade (read-only)"), ("engines", "Engines (read-only)"), ("gun", "Gun value (read-only)"),
                             ("endurance", "Endurance (calculated)"),
                             ("used", "Used (read-only)"), ("last_turn", "Produced last turn (read-only)"),
                             ("this_month", "Produced this month (read-only)"),
@@ -1264,6 +1388,16 @@ class EditorApp:
         self.factory_upgrade_check = ttk.Checkbutton(edit, text="Upgrade", variable=self.factory_upgrade_var)
         self.factory_upgrade_check.pack(side="left", padx=4)
         ttk.Button(edit, text="Apply factory", command=self.apply_factory).pack(side="left", padx=8)
+        model = ttk.Frame(box)
+        model.pack(side="top", fill="x", pady=(4, 0))
+        self.factory_model_var = tk.StringVar()
+        ttk.Label(model, text="Model:").pack(side="left")
+        self.factory_model_box = ttk.Combobox(model, textvariable=self.factory_model_var, state="readonly", width=34)
+        self.factory_model_box.pack(side="left", padx=(2, 8))
+        self.factory_model_button = ttk.Button(model, text="Set model", command=self.apply_factory_model)
+        self.factory_model_button.pack(side="left")
+        ttk.Label(model, text="(aircraft factories only, same side; size and switches are kept; not yet tested "
+                              "in-game)").pack(side="left", padx=8)
 
     # ---- loading -------------------------------------------------------
 
@@ -1501,7 +1635,9 @@ class EditorApp:
             self.factory_upgrade_var.set(False)
             self.factory_production_check.state(["disabled"])
             self.factory_upgrade_check.state(["disabled"])
+            self._fill_factory_model(None)
             return
+        self._fill_factory_model(factory)
         self.factory_size_var.set(str(factory.size))
         self.factory_damage_var.set(str(factory.damage))
         self.factory_production_var.set(factory.production_on)
@@ -1509,6 +1645,43 @@ class EditorApp:
         self.factory_upgrade_var.set(factory.upgrade_on)
         self.factory_production_check.state(["disabled" if factories.production_locked(factory.type) else "!disabled"])
         self.factory_upgrade_check.state(["disabled" if factories.upgrade_locked(factory.type) else "!disabled"])
+
+    def _fill_factory_model(self, factory):
+        """List the models of the factory's side in the Model box; it is disabled for other factories."""
+        self.factory_model_ids = {}
+        if factory is None or factory.kind != "aircraft":
+            self.factory_model_var.set("")
+            self.factory_model_box.configure(values=[])
+            self.factory_model_box.state(["disabled"])
+            self.factory_model_button.state(["disabled"])
+            return
+        current = self.aircraft.get(factory.type - factories.AIRCRAFT_BASE)
+        side = current.side_id if current else None
+        for a in sorted(self.aircraft.values(), key=lambda a: (a.name.lower(), a.id)):
+            if a.side_id == side:
+                self.factory_model_ids[f"{a.name} (#{a.id})"] = a.id
+        self.factory_model_box.configure(values=list(self.factory_model_ids))
+        self.factory_model_var.set(f"{factory.name} (#{factory.type - factories.AIRCRAFT_BASE})")
+        self.factory_model_box.state(["!disabled"])
+        self.factory_model_button.state(["!disabled"])
+
+    def apply_factory_model(self):
+        if self.current is None or self.factory_slot is None:
+            return
+        base = self.bases[self.current]
+        aircraft_id = self.factory_model_ids.get(self.factory_model_var.get())
+        try:
+            if aircraft_id is None:
+                raise ValueError("Choose a model from the list.")
+            factories.set_aircraft_model(base, self.factory_slot, aircraft_id)
+        except ValueError as exc:
+            messagebox.showerror("Cannot change model", str(exc))
+            return
+        self.edited.add(base.id)
+        self.dirty = True
+        self.refresh_list()
+        self.show_factories(base)
+        self._fill_factory_edit(factories.get_factory(base, self.factory_slot))
 
     def on_factory_select(self):
         sel = self.factory_tree.selection()
@@ -1624,6 +1797,7 @@ class EditorApp:
         self.aircraft_carrier_var.set(a.get_carrier())
         info = {"type": a.type, "nation": a.nation,
                 "upgrade": f"{a.upgrade_id} {a.upgrade_name} (unverified)",
+                "engines": a.engines_text,
                 "gun": str(a.gun_value),
                 "endurance": "-" if a.endurance is None else str(a.endurance),
                 "used": str(a.used), "last_turn": str(a.last_turn), "this_month": str(a.this_month),
@@ -2775,6 +2949,7 @@ class EditorApp:
         self.refresh_industry_report()
         self.refresh_factory_report()
         self.refresh_raw_list()
+        self.refresh_air_reports()
 
     @staticmethod
     def _report_values(columns, texts, row):
@@ -2891,6 +3066,81 @@ class EditorApp:
         self.raw_sort_reverse = (not self.raw_sort_reverse) if col == self.raw_sort_col else False
         self.raw_sort_col = col
         self.refresh_raw_list()
+
+    def refresh_air_reports(self):
+        """Recompute both air production tables from the save; the filters only re-select from the result."""
+        self.air_entries = airproduction.plant_entries(self.industry_places)
+        try:
+            self.air_rows_all = airproduction.air_rows(self.save, self.air_entries, self.groups.values())
+            self.engine_rows_all = airproduction.engine_rows(self.save, self.air_entries)
+        except SaveFormatError:
+            self.air_rows_all = self.engine_rows_all = []
+        self.refresh_air_list()
+        self.refresh_engine_list()
+
+    def refresh_air_list(self):
+        selected = self.air_tree.selection()
+        self.air_tree.delete(*self.air_tree.get_children())
+        needle = self.air_search_var.get().strip().lower()
+        side = self.air_side_var.get()
+        rows = [r for r in self.air_rows_all
+                if needle in r.name.lower() and (side == "All" or r.side == side) and (r.active or not self.air_only_var.get())]
+        rows.sort(key=lambda r: self._industry_sort_key(AIR_COLUMN_BY_ID, self.air_sort_col, r, r.id),
+                  reverse=self.air_sort_reverse)
+        for r in rows:
+            self.air_tree.insert("", "end", iid=str(r.id), values=self._report_values(AIR_COLUMNS, AIR_TEXT, r))
+        if selected and self.air_tree.exists(selected[0]):
+            self.air_tree.selection_set(selected[0])
+        self.air_count.set(f"{len(rows)} model{'' if len(rows) == 1 else 's'}")
+        self.refresh_air_factories()
+
+    def sort_air_by(self, col):
+        self.air_sort_reverse = (not self.air_sort_reverse) if col == self.air_sort_col else False
+        self.air_sort_col = col
+        self.refresh_air_list()
+
+    def refresh_air_factories(self):
+        self.air_factory_tree.delete(*self.air_factory_tree.get_children())
+        sel = self.air_tree.selection()
+        if not sel:
+            return
+        for e in airproduction.model_entries(self.air_entries, int(sel[0])):
+            self.air_factory_tree.insert("", "end", iid=f"{e.place.id}:{e.factory.slot}",
+                                         values=self._report_values(AIR_FACTORY_COLUMNS, {}, e))
+
+    def apply_air_switch(self, label, production, repair):
+        """Set the production and/or repair switch of every factory building the selected model."""
+        sel = self.air_tree.selection()
+        if not sel:
+            self.status.set(f"{label}: select a model first")
+            return
+        changed, unchanged, failed = airproduction.set_switches(self.air_entries, int(sel[0]), production, repair)
+        for e in changed:
+            self.edited.add(e.place.id)
+        if changed:
+            self.dirty = True
+        text = f"{label}: {len(changed)} of {len(changed) + unchanged + len(failed)} factories changed"
+        if failed:
+            text += f"; {len(failed)} refused ({failed[0][1]})"
+        self.status.set(text + (" (not yet saved)" if changed else ""))
+        self.refresh_list()
+        if self.current is not None:
+            self.show_factories(self.bases[self.current])
+        self.refresh_air_reports()
+
+    def refresh_engine_list(self):
+        self.engine_tree.delete(*self.engine_tree.get_children())
+        rows = sorted(self.engine_rows_all,
+                      key=lambda r: self._industry_sort_key(ENGINE_COLUMN_BY_ID, self.engine_sort_col, r, r.id),
+                      reverse=self.engine_sort_reverse)
+        for r in rows:
+            self.engine_tree.insert("", "end", iid=str(r.id), values=self._report_values(ENGINE_COLUMNS, ENGINE_TEXT, r))
+        self.engine_count.set(f"{len(rows)} engine{'' if len(rows) == 1 else 's'}")
+
+    def sort_engines_by(self, col):
+        self.engine_sort_reverse = (not self.engine_sort_reverse) if col == self.engine_sort_col else False
+        self.engine_sort_col = col
+        self.refresh_engine_list()
 
     def jump_to_industry_place(self, report_tree):
         sel = report_tree.selection()
