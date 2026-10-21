@@ -210,6 +210,60 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertTrue(app.load(SAVE_015))
         self.assertEqual(app.aircraft_edited, set())
 
+    def test_aircraft_pictures_and_comparison(self):
+        import witpae_editor
+        from witpae import aircraft
+        better = aircraft.BETTER
+        has_art = os.path.exists(os.path.join(os.path.dirname(SAVE_015), "..", "..", "..", "ART", "J_PlaneSide.bmp"))
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        last = app.reports_notebook.tabs()[-1]
+        self.assertEqual(app.reports_notebook.tab(last, "text"), "Aircraft comparison")
+        col_a, col_b = app.compare_cols
+        # Defaults: the first Japanese and the first Allied fighter.
+        model_a = app.aircraft[app.compare_ids[col_a["model"].get()]]
+        model_b = app.aircraft[app.compare_ids[col_b["model"].get()]]
+        self.assertEqual((model_a.side_id, model_a.type), (0, "Fighter"))
+        self.assertEqual((model_b.side_id, model_b.type), (1, "Fighter"))
+        rows = [app.compare_tree.item(i, "values") for i in app.compare_tree.get_children()]
+        self.assertEqual([r[0] for r in rows[:2]], ["Type", "Nation"])
+        self.assertTrue(any(r[1].startswith(better) or r[2].startswith(better) for r in rows))
+        # Filters narrow the model list; a model that no longer fits is cleared and the table emptied.
+        col_a["side"].set("Allied")
+        app.refresh_compare_choices(col_a)
+        values = col_a["model_box"].cget("values")
+        self.assertTrue(values and all(app.aircraft[app.compare_ids[v]].side_id == 1 for v in values))
+        self.assertEqual(col_a["model"].get(), "")
+        self.assertEqual(app.compare_tree.get_children(), ())
+        col_a["type"].set("Dive Bomber")
+        app.refresh_compare_choices(col_a)
+        values = col_a["model_box"].cget("values")
+        self.assertTrue(values and all(app.aircraft[app.compare_ids[v]].type == "Dive Bomber" for v in values))
+        # Choosing models fills the table for both columns.
+        col_a["model"].set("SBD-3 Dauntless (#487), USN")
+        col_b["model"].set("A6M2 Zero (#603), IJN")
+        app.refresh_compare_table()
+        rows = {app.compare_tree.item(i, "values")[0]: app.compare_tree.item(i, "values")
+                for i in app.compare_tree.get_children()}
+        self.assertEqual(rows["Upgrade"][1:], ("488 SBD-5 Dauntless", "604 A6M2 Sen Baku"))
+        self.assertEqual(rows["Max speed"][1:], ("250", better + "331"))
+        self.assertIn("Armament, reduced load", rows)
+        # Pictures, and the Aircraft tab's own.
+        app.aircraft_tree.selection_set("603")
+        self.root.update()
+        if has_art:
+            self.assertTrue(str(col_a["picture"].cget("image")))
+            self.assertTrue(str(col_b["picture"].cget("image")))
+            self.assertTrue(str(app.aircraft_picture.cget("image")))
+            self.assertEqual(col_b["picture"].cget("text"), "")
+        else:
+            self.assertIn("No picture", app.aircraft_picture.cget("text"))
+        self.assertEqual(app.aircraft_info["upgrade"].get(), "604 A6M2 Sen Baku (unverified)")
+        # "Compare as" sends the Aircraft tab's model to a column.
+        app.compare_aircraft(0)
+        self.assertEqual(col_a["model"].get(), "A6M2 Zero (#603), IJN")
+        self.assertEqual(col_a["side"].get(), "All")
+
     def test_ships_tab_edit_applies(self):
         import witpae_editor
         app = witpae_editor.EditorApp(self.root)
@@ -920,7 +974,7 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertTrue(app.load(SAVE_015))
         self.root.update()
         tabs = [app.reports_notebook.tab(t, "text") for t in app.reports_notebook.tabs()]
-        self.assertEqual(tabs[-2:], ["Air production", "Engines"])
+        self.assertEqual(tabs[-3:-1], ["Air production", "Engines"])
         self.assertEqual(tabs.index("Raw materials") + 1, tabs.index("Air production"))
         # Air production: the Zero is Japanese, built by one factory (place 236, slot 6).
         shown = len(app.air_tree.get_children())
