@@ -13,7 +13,7 @@ import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from witpae import (aircraft, airgroups, airproduction, bases, chart, factories, history, industry, landunits, lcuproduction, leaders, losses,
+from witpae import (aircraft, airgroups, airproduction, bases, chart, factories, history, industry, landunits, lcuproduction, leaders, losses, minefields,
                     pilotpool, planeart, regions, reports, shipproduction, shiprecords, shiprepair, ships, taskforces)
 from witpae.container import SaveFile, SaveFormatError
 from witpae.fileio import is_pbem, save_with_backup
@@ -441,6 +441,53 @@ REPAIR_NOTE = (
     "largest ship and the yard capacity. Offsets are from WiTPTracker's reader; not yet compared with the game's "
     "screens.")
 
+MINE_ALL = "All"
+MINE_VIEWS = ("By hex", "Fields")
+MINE_SUMMARY_COLUMNS = [
+    ("side", "Side", 80, False, lambda r: r.side),
+    ("fields", "Fields", 60, True, lambda r: r.fields),
+    ("hexes", "Hexes", 60, True, lambda r: r.hexes),
+    ("mines", "Mines", 70, True, lambda r: r.mines),
+    ("types", "Mines by type", 420, False, lambda r: minefields.types_text(r.by_device)),
+]
+MINE_SUMMARY_TEXT = dict.fromkeys(("fields", "hexes", "mines"), _num)
+MINE_HEX_COLUMNS = [
+    ("x", "X", 40, True, lambda r: r.x),
+    ("y", "Y", 40, True, lambda r: r.y),
+    ("side", "Side", 70, False, lambda r: r.side),
+    ("place", "Place", 170, False, lambda r: r.place),
+    ("mines", "Mines", 65, True, lambda r: r.mines),
+    ("fields", "Fields", 50, True, lambda r: r.fields),
+    ("types", "Mine types", 250, False, lambda r: r.types),
+    ("detection", "Detection (unverified)", 135, True, lambda r: r.detection),
+    ("decay", "Decay", 135, False, lambda r: r.decay),
+    ("acms", "ACMs", 50, True, lambda r: r.acms),
+    ("protected", "Protected", 70, True, lambda r: r.protected),
+]
+MINE_HEX_COLUMN_BY_ID = {c[0]: c for c in MINE_HEX_COLUMNS}
+MINE_HEX_TEXT = dict.fromkeys(("mines", "protected"), _num)
+MINE_FIELD_COLUMNS = [
+    ("id", "Record", 55, True, lambda r: r.id),
+    ("x", "X", 40, True, lambda r: r.x),
+    ("y", "Y", 40, True, lambda r: r.y),
+    ("side", "Side", 70, False, lambda r: r.side),
+    ("place", "Place", 170, False, lambda r: r.place_name or minefields.OPEN_SEA),
+    ("device", "Mine type", 150, False, lambda r: r.device_name),
+    ("mines", "Mines", 65, True, lambda r: r.mines),
+    ("detection", "Detection (unverified)", 135, True, lambda r: r.detection),
+]
+MINE_FIELD_COLUMN_BY_ID = {c[0]: c for c in MINE_FIELD_COLUMNS}
+MINE_FIELD_TEXT = {"mines": _num}
+MINE_NOTE = (
+    "Section 0x1E, 6000 records of 20 bytes: hex x and y (u16 at 0 and 2), side (u16 at 4), u16 at 6 probably the "
+    "detection level by the enemy (unverified), mine device (u16 at 8) and mines (u16 at 10). Records with no "
+    "mines, x or y of 0 or above 250, or 32768 or more mines are skipped. Place is the base or town in the hex; "
+    "'(enemy base)' marks one of the other side. Decay (manual 6.6.1.2.1): 1%/day at a friendly base with port "
+    "size 1 or more, otherwise 5-33%/day (5% in shallow water, 33% in deep water; the save has no water depth). "
+    "ACMs are the arrived ships of class type 74 of the side docked at a base or town in the hex and in no task "
+    "force; each protects 150 mines (manual 6.6.1.2.2), so Protected = the smaller of Mines and ACMs x 150. "
+    "Layout from WiTPTracker's reader; not yet compared with the game's screens.")
+
 
 
 def _shortest_text(v):
@@ -766,6 +813,13 @@ class EditorApp:
         self.repair_ship_sort_reverse = True
         self.repair_port_sort_col = "tons"
         self.repair_port_sort_reverse = True
+        self.minefield_fields_all = []
+        self.minefield_hexes_all = []
+        self.minefield_summary = []
+        self.minefield_hex_sort_col = "mines"
+        self.minefield_hex_sort_reverse = True
+        self.minefield_field_sort_col = "mines"
+        self.minefield_field_sort_reverse = True
         self.history_dir = None
         self.history_snaps = []
         self.history_problems = []
@@ -957,6 +1011,7 @@ class EditorApp:
         self._build_compare_report()
         self._build_losses_report()
         self._build_repair_report()
+        self._build_minefield_report()
 
         # Bound last so the handlers never run before the lists exist.
         self.notebook.bind("<<NotebookTabChanged>>", lambda e: self._reports_shown())
@@ -1286,6 +1341,48 @@ class EditorApp:
         hidden.pack_forget()
         shown.pack(side="top", fill="both", expand=True, pady=(4, 0))
         self.refresh_repair_list()
+
+    def _build_minefield_report(self):
+        rep = ttk.Frame(self.reports_notebook, padding=4)
+        self.reports_notebook.add(rep, text="Minefields")
+        ttk.Label(rep, text=MINE_NOTE, wraplength=1100, justify="left").pack(side="bottom", anchor="w", pady=(4, 0))
+        top = ttk.Frame(rep)
+        top.pack(side="top", fill="x")
+        self.minefield_summary_tree = self._report_tree(top, MINE_SUMMARY_COLUMNS, lambda c: None, ("side", "types"),
+                                                        lambda: None)
+        self.minefield_summary_tree.configure(height=2)
+        bar = ttk.Frame(rep)
+        bar.pack(side="top", fill="x", pady=(4, 0))
+        self.minefield_side_var = tk.StringVar(value=MINE_ALL)
+        self._report_combo(bar, "Side:", self.minefield_side_var, [MINE_ALL, "Allied", "Japanese"],
+                           self.refresh_minefield_list, 9)
+        self.minefield_view_var = tk.StringVar(value=MINE_VIEWS[0])
+        for view in MINE_VIEWS:
+            ttk.Radiobutton(bar, text=view, value=view, variable=self.minefield_view_var,
+                            command=self._show_minefield_view).pack(side="left", padx=2)
+        ttk.Label(bar, text="  Search:").pack(side="left")
+        self.minefield_search_var = tk.StringVar()
+        self.minefield_search_var.trace_add("write", lambda *a: self.refresh_minefield_list())
+        ttk.Entry(bar, textvariable=self.minefield_search_var, width=20).pack(side="left", padx=4)
+        self.minefield_count = tk.StringVar()
+        ttk.Label(bar, textvariable=self.minefield_count).pack(side="left", padx=8)
+        self.minefield_hex_frame = ttk.Frame(rep)
+        self.minefield_hex_tree = self._report_tree(self.minefield_hex_frame, MINE_HEX_COLUMNS,
+                                                    self.sort_minefield_hexes_by, ("side", "place", "types", "decay"),
+                                                    self.jump_to_minefield_place)
+        self.minefield_field_frame = ttk.Frame(rep)
+        self.minefield_field_tree = self._report_tree(self.minefield_field_frame, MINE_FIELD_COLUMNS,
+                                                      self.sort_minefield_fields_by, ("side", "place", "device"),
+                                                      self.jump_to_minefield_place)
+        self._show_minefield_view()
+
+    def _show_minefield_view(self):
+        hexes = self.minefield_view_var.get() == MINE_VIEWS[0]
+        shown, hidden = (self.minefield_hex_frame, self.minefield_field_frame) if hexes else (
+            self.minefield_field_frame, self.minefield_hex_frame)
+        hidden.pack_forget()
+        shown.pack(side="top", fill="both", expand=True, pady=(4, 0))
+        self.refresh_minefield_list()
 
     def _report_tree(self, parent, columns, sort_command, left_aligned, on_open):
         tree = ttk.Treeview(parent, columns=[c[0] for c in columns], show="headings", selectmode="browse")
@@ -3945,6 +4042,7 @@ class EditorApp:
         self.refresh_compare_table()
         self.refresh_losses_reports()
         self.refresh_repair_reports()
+        self.refresh_minefield_reports()
 
     @staticmethod
     def _report_values(columns, texts, row):
@@ -4197,6 +4295,65 @@ class EditorApp:
 
     def jump_to_repair_port(self):
         self.jump_to_industry_place(self.repair_port_tree)
+
+    def refresh_minefield_reports(self):
+        """Recompute the rows and the summary from the save; the side, view and search only re-select."""
+        try:
+            self.minefield_fields_all = minefields.list_fields(self.save)
+            self.minefield_hexes_all = minefields.hex_rows(self.save, self.minefield_fields_all)
+            self.minefield_summary = minefields.summary_rows(self.minefield_fields_all, self.minefield_hexes_all)
+        except (SaveFormatError, IndexError):
+            self.minefield_fields_all, self.minefield_hexes_all, self.minefield_summary = [], [], []
+        tree = self.minefield_summary_tree
+        tree.delete(*tree.get_children())
+        for r in self.minefield_summary:
+            tree.insert("", "end", iid=r.side, values=self._report_values(MINE_SUMMARY_COLUMNS, MINE_SUMMARY_TEXT, r))
+        self.refresh_minefield_list()
+
+    def refresh_minefield_list(self):
+        # Row ids are "<place id>:<key>" so jump_to_industry_place can read the place; "-" marks open sea.
+        needle = self.minefield_search_var.get().strip().lower()
+        side = self.minefield_side_var.get()
+        if self.minefield_view_var.get() == MINE_VIEWS[0]:
+            rows = [r for r in self.minefield_hexes_all if side in (MINE_ALL, r.side)
+                    and (needle in r.place.lower() or needle in r.types.lower())]
+            rows.sort(key=lambda r: self._industry_sort_key(MINE_HEX_COLUMN_BY_ID, self.minefield_hex_sort_col, r,
+                                                            (r.x, r.y, r.side)),
+                      reverse=self.minefield_hex_sort_reverse)
+            tree, columns, texts = self.minefield_hex_tree, MINE_HEX_COLUMNS, MINE_HEX_TEXT
+            ids = [f"{'-' if r.place_id is None else r.place_id}:{r.x},{r.y},{r.side}" for r in rows]
+            noun, plural = "hex", "hexes"
+        else:
+            rows = [r for r in self.minefield_fields_all if side in (MINE_ALL, r.side)
+                    and (needle in (r.place_name or "").lower() or needle in r.device_name.lower())]
+            rows.sort(key=lambda r: self._industry_sort_key(MINE_FIELD_COLUMN_BY_ID, self.minefield_field_sort_col,
+                                                            r, r.id), reverse=self.minefield_field_sort_reverse)
+            tree, columns, texts = self.minefield_field_tree, MINE_FIELD_COLUMNS, MINE_FIELD_TEXT
+            ids = [f"{'-' if r.place_id is None else r.place_id}:{r.id}" for r in rows]
+            noun, plural = "field", "fields"
+        tree.delete(*tree.get_children())
+        for iid, r in zip(ids, rows):
+            tree.insert("", "end", iid=iid, values=self._report_values(columns, texts, r))
+        self.minefield_count.set(f"{len(rows)} {noun if len(rows) == 1 else plural}")
+
+    def sort_minefield_hexes_by(self, col):
+        same = col == self.minefield_hex_sort_col
+        self.minefield_hex_sort_reverse = (not self.minefield_hex_sort_reverse) if same else False
+        self.minefield_hex_sort_col = col
+        self.refresh_minefield_list()
+
+    def sort_minefield_fields_by(self, col):
+        same = col == self.minefield_field_sort_col
+        self.minefield_field_sort_reverse = (not self.minefield_field_sort_reverse) if same else False
+        self.minefield_field_sort_col = col
+        self.refresh_minefield_list()
+
+    def jump_to_minefield_place(self):
+        hexes = self.minefield_view_var.get() == MINE_VIEWS[0]
+        tree = self.minefield_hex_tree if hexes else self.minefield_field_tree
+        sel = tree.selection()
+        if sel and not sel[0].startswith("-"):  # open-sea rows have no place to jump to
+            self.jump_to_industry_place(tree)
 
     def _industry_places_for(self, side_var, region_var):
         side = side_var.get()

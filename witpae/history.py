@@ -29,7 +29,7 @@ import tempfile
 import zlib
 from collections import namedtuple
 
-from . import aircraft, bases, industry, losses, reports, shiprepair
+from . import aircraft, bases, industry, losses, minefields, reports, shiprepair
 from .container import SaveFile, SaveFormatError
 from .fileio import is_pbem
 
@@ -58,7 +58,7 @@ SIDE_METRICS = {
     "loss_flak": "Aircraft lost to flak (total)", "loss_ops": "Aircraft lost in operations (total)",
     "loss_total": "Aircraft lost (total)",
     "ships_sunk": "Ships sunk", "damaged_ships": "Damaged ships", "damaged_tons": "Damaged tonnage",
-    "damaged_in_port": "Damaged ships in port",
+    "damaged_in_port": "Damaged ships in port", "mines": "Mines laid",
 }
 # Stock fields of a base entry (after the side id) and their labels.
 BASE_METRICS = {"supply": "Supply", "fuel": "Fuel", "resources": "Resources", "oil": "Oil"}
@@ -164,6 +164,9 @@ def build_snapshot(save, source_name, places=None):
     for s in shiprepair.summary_rows(shiprepair.damaged_ships(save)):
         side = sides[s.side]
         side["damaged_ships"], side["damaged_tons"], side["damaged_in_port"] = s.ships, s.tons, s.in_port
+    fields = minefields.list_fields(save)
+    for m in minefields.summary_rows(fields, minefields.hex_rows(save, fields)):
+        sides[m.side]["mines"] = m.mines
     loss_by_id = {r.id: r for r in loss_rows}
     aircraft_entries = {}
     for a in aircraft.list_aircraft(save):
