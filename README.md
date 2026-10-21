@@ -69,7 +69,18 @@ the ID. Edits use the same Apply button, row highlight and Save As as bases.
 | Nation: IJA, IJN, USN, USA, NZ verified; other labels are guesses and end in `?`; unknown codes show the number | read-only |
 | Weapons (max load and reduced load: name, count, facing F/TR/C/XT), gun value, maneuver modifiers per altitude band | verified, read-only |
 | Engines: the engine is weapon slot 9, a device id (i16 at offset 60) and a count (u8 at offset 100; the reduced-load copies at 80 and 120 are not used). Japanese models name a specific engine device (A6M2 Zero: 1 x Nakajima Ha-35; Ki-21-Ic Sally: 2 x Nakajima Ha-5), Allied models use the generic device 1852 "Engine" and show "2 engines" | read-only |
-| Upgrade (id and name of the record it points at) | unverified, read-only |
+| Picture number (u16 at 26): the tile of the model's side-view picture, see below | verified (Zero, Sally, P-38G, Hellcat show the right pictures), read-only |
+| Upgrade (u16 at 192: the model it upgrades to; its own id or 0 means none, shown as `-`) | checked on a few models (SBD-3 -> SBD-5, P-38G -> P-38H, A6M2 Zero -> A6M2 Sen Baku; P-40E has none), labelled unverified, read-only. Earlier versions read offset 26 here, which is the picture number, so they showed unrelated models (the A6M2 Zero "upgraded" to a B-25D) |
+
+The top of the detail pane shows the model's side-view picture (150 x 60), and the buttons "Compare as A" and
+"Compare as B" send the selected model to the Aircraft comparison report.
+
+Pictures are not part of the editor and not stored in saves: they are read at run time from the game's ART
+folder, `A_PlaneSide.bmp` (Allied) and `J_PlaneSide.bmp` (Japanese), uncompressed 24-bit BMP sheets of 150 x 60
+tiles, 4 per row; the tile of a model is its picture number (tile n is at x = (n % 4) x 150, y = (n // 4) x 60).
+The editor looks for the ART folder next to the folder of the loaded save (`<game>\ART` for `<game>\SAVE`), then
+next to the editor (`<game>\SaveEditor`). Without one, the picture area says "No picture" and nothing else
+changes. The code is in `witpae/planeart.py`.
 
 The field table is in `witpae/aircraft.py`.
 
@@ -195,7 +206,7 @@ Load cost and AV are computed by the game.
 
 ## Reports
 
-The Reports tab holds seven reports; only the bulk switch buttons of Air production edit the save. It
+The Reports tab holds eight reports; only the bulk switch buttons of Air production edit the save. It
 shows the game date (section 0x01: day at 42, month at 44, two-digit year at 46,
 all i16) and refreshes whenever the tab is shown, so edits made in the Bases tab
 are reflected. Double-click a row to jump to that base (Bases tab) or ship (Ships
@@ -274,6 +285,21 @@ Not included: supply used by units and fuel used by ships. There is no "not
 building" estimate. For the Allied side of the sample save the totals match
 WitPTracker's factory counts and sizes (Resources 252 factories / size 25969,
 Manpower 181 / 1174, Light Industry 138 / 17836).
+
+### Aircraft comparison
+
+The last sub-tab shows two aircraft models side by side, like WitPTracker's Aircraft Comparison. Each column (A
+and B) has a Side filter (All, Allied, Japanese), a Type filter and a model list ("name (#id), nation", since
+several models share a name); A starts as the first Japanese fighter and B as the first Allied fighter. Below
+each list is the model's side-view picture (see the Aircraft section), and under both a table with one row
+per property: Type, Nation, Available (from to to), Upgrade, Engines, Max speed, Cruise speed, Climb, Max
+altitude, Maneuver and the five altitude-band maneuver values, Durability, Armor, Max load, Max range, Normal
+radius and Extended radius in hexes (with drop tanks in brackets when the model has them), Endurance (calculated),
+Gun value, Carrier capable, Pool, and the armament of the max load and of the reduced load, one weapon per row
+(name x count, facing). In the rows where higher is better (speeds, climb, altitude, maneuver, durability,
+armor, load, ranges, endurance, gun value) the better value of the two starts with a triangle; equal values are
+not marked. Ranges are compared with the drop-tank value when there is one. Service rating is not stored in
+saves (it comes from the scenario data), so it is not shown. The code is in `witpae/aircraft.py` (`compare_rows`).
 
 ### Air production and Engines
 

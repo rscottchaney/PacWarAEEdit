@@ -5,12 +5,13 @@ Usage: python witpae_editor.py [save.pws]
 All data logic lives in the witpae package; this file only wires widgets.
 """
 
+import base64
 import os
 import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from witpae import (aircraft, airgroups, airproduction, bases, factories, industry, landunits, regions, reports,
+from witpae import (aircraft, airgroups, airproduction, bases, factories, industry, landunits, planeart, regions, reports,
                     shiprecords, ships, taskforces)
 from witpae.container import SaveFile, SaveFormatError
 from witpae.fileio import is_pbem, save_with_backup
@@ -322,6 +323,8 @@ ENGINE_NOTE = ("Japanese engines only. Size is engines per month from factories 
                "18 HI each); Needed/month is the engines the Japanese aircraft factories with production on need "
                "(size x engines per aircraft, available models only). Allied aircraft do not need engines. Not yet "
                "tested in-game.")
+COMPARE_NOTE = ("\u25b2 marks the better value of a row (higher is better). Pictures are read from the game's ART folder. "
+                "Service rating is not stored in saves.")
 
 REGION_ALL = "All regions"
 
@@ -364,6 +367,9 @@ class EditorApp:
         self.aircraft_sort_col = "id"
         self.aircraft_sort_reverse = False
         self.aircraft_vars = {}
+        self.compare_cols = []
+        self.compare_ids = {}
+        self.plane_images = {}
         self.aircraft_current = None
         self.ships = {}
         self.ships_edited = set()
@@ -599,6 +605,7 @@ class EditorApp:
 
         self._build_industry_reports()
         self._build_air_reports()
+        self._build_compare_report()
 
         # Bound last so the handlers never run before the lists exist.
         self.notebook.bind("<<NotebookTabChanged>>", lambda e: self._reports_shown())
@@ -719,6 +726,45 @@ class EditorApp:
         self.engine_tree = self._report_tree(eng, ENGINE_COLUMNS, self.sort_engines_by, ("name", "used_by"),
                                              lambda: None)
 
+    def _build_compare_report(self):
+        cmp = self.compare_frame = ttk.Frame(self.reports_notebook, padding=4)
+        self.reports_notebook.add(cmp, text="Aircraft comparison")
+        top = ttk.Frame(cmp)
+        top.pack(side="top", fill="x")
+        for k, letter in enumerate("AB"):
+            box = ttk.LabelFrame(top, text=f"Aircraft {letter}", padding=4)
+            box.pack(side="left", fill="x", expand=True, padx=(0, 4) if k == 0 else (4, 0))
+            col = {"side": tk.StringVar(value="All"), "type": tk.StringVar(value="All"), "model": tk.StringVar()}
+            bar = ttk.Frame(box)
+            bar.pack(side="top", fill="x")
+            ttk.Label(bar, text="Side:").pack(side="left")
+            side_box = ttk.Combobox(bar, textvariable=col["side"], values=["All", "Allied", "Japanese"],
+                                    state="readonly", width=9)
+            side_box.pack(side="left", padx=4)
+            ttk.Label(bar, text="Type:").pack(side="left")
+            col["type_box"] = type_box = ttk.Combobox(bar, textvariable=col["type"], values=["All"],
+                                                      state="readonly", width=14)
+            type_box.pack(side="left", padx=4)
+            col["model_box"] = ttk.Combobox(box, textvariable=col["model"], state="readonly", width=48)
+            col["model_box"].pack(side="top", fill="x", pady=4)
+            col["picture"] = self._picture_label(box)
+            col["picture"].master.pack(side="top", anchor="w")
+            for widget in (side_box, type_box):
+                widget.bind("<<ComboboxSelected>>", lambda e, c=col: self.refresh_compare_choices(c))
+            col["model_box"].bind("<<ComboboxSelected>>", lambda e: self.refresh_compare_table())
+            self.compare_cols.append(col)
+        table = ttk.Frame(cmp)
+        ttk.Label(cmp, text=COMPARE_NOTE).pack(side="bottom", anchor="w", pady=(4, 0))
+        table.pack(side="top", fill="both", expand=True, pady=(4, 0))
+        self.compare_tree = ttk.Treeview(table, columns=("prop", "a", "b"), show="headings", selectmode="none")
+        for cid, heading, width in (("prop", "Property", 180), ("a", "Aircraft A", 330), ("b", "Aircraft B", 330)):
+            self.compare_tree.heading(cid, text=heading)
+            self.compare_tree.column(cid, width=width, anchor="w")
+        scroll = ttk.Scrollbar(table, orient="vertical", command=self.compare_tree.yview)
+        self.compare_tree.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+        self.compare_tree.pack(side="left", fill="both", expand=True)
+
     def _report_tree(self, parent, columns, sort_command, left_aligned, on_open):
         tree = ttk.Treeview(parent, columns=[c[0] for c in columns], show="headings", selectmode="browse")
         for cid, heading, width, _numeric, _get in columns:
@@ -756,13 +802,15 @@ class EditorApp:
 
         right = ttk.LabelFrame(tab, text="Aircraft", padding=8)
         right.pack(side="right", fill="y", padx=(8, 0))
+        self.aircraft_picture = self._picture_label(right)
+        self.aircraft_picture.master.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
         self.aircraft_title = tk.StringVar(value="(select an aircraft)")
         ttk.Label(right, textvariable=self.aircraft_title, font=("TkDefaultFont", 11, "bold")).grid(
-            row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
+            row=1, column=0, columnspan=2, sticky="w", pady=(0, 6))
         rows = [(f.name, f.label) for f in aircraft.SCALAR_FIELDS] + [("from", "Available from (m/yy)"),
                                                                 ("to", "Available to (m/yy)"),
                                                                 ("pool", "In pool")]
-        row = 1
+        row = 2
         for name, label in rows:
             ttk.Label(right, text=label).grid(row=row, column=0, sticky="w", pady=2)
             self.aircraft_vars[name] = tk.StringVar()
@@ -783,9 +831,15 @@ class EditorApp:
         row += 1
         ttk.Button(right, text="Apply", command=self.apply_aircraft).grid(row=row, column=0, columnspan=2, pady=6)
         row += 1
+        buttons = ttk.Frame(right)
+        buttons.grid(row=row, column=0, columnspan=2)
+        for k, letter in enumerate("AB"):
+            ttk.Button(buttons, text=f"Compare as {letter}", command=lambda k=k: self.compare_aircraft(k)).pack(
+                side="left", padx=4)
+        row += 1
         self.aircraft_info = {}
         for name, label in (("type", "Type (read-only)"), ("nation", "Nation (read-only)"),
-                            ("upgrade", "Upgrade (read-only)"), ("engines", "Engines (read-only)"), ("gun", "Gun value (read-only)"),
+                            ("bitmap", "Picture number (read-only)"), ("upgrade", "Upgrade (read-only)"), ("engines", "Engines (read-only)"), ("gun", "Gun value (read-only)"),
                             ("endurance", "Endurance (calculated)"),
                             ("used", "Used (read-only)"), ("last_turn", "Produced last turn (read-only)"),
                             ("this_month", "Produced this month (read-only)"),
@@ -1492,6 +1546,8 @@ class EditorApp:
             label = f"{a.name} ({a.id}, {aircraft.format_date(month, year)})"
             self.aircraft_ids[label] = a.id
             self.aircraft_labels.setdefault(bases.SIDES.get(a.side_id, "Unknown"), []).append(label)
+        self.plane_images = {}
+        self.setup_compare()
         self.units = {u.id: u for u in ulist}
         self.units_edited.clear()
         self.unit_current = None
@@ -1784,11 +1840,13 @@ class EditorApp:
             tree.delete(*tree.get_children())
         if a is None:
             self.aircraft_title.set("(select an aircraft)")
+            self._show_plane(self.aircraft_picture, None)
             for var in list(self.aircraft_vars.values()) + list(self.aircraft_info.values()):
                 var.set("")
             self.aircraft_carrier_var.set(False)
             return
         self.aircraft_title.set(f"{a.name} (#{a.id})")
+        self._show_plane(self.aircraft_picture, a)
         for f in aircraft.FIELDS:
             self.aircraft_vars[f.name].set(str(a.get(f.name)))
         for name in ("from", "to"):
@@ -1796,7 +1854,7 @@ class EditorApp:
         self.aircraft_vars["pool"].set(str(a.pool))
         self.aircraft_carrier_var.set(a.get_carrier())
         info = {"type": a.type, "nation": a.nation,
-                "upgrade": f"{a.upgrade_id} {a.upgrade_name} (unverified)",
+                "bitmap": str(a.bitmap), "upgrade": f"{a.upgrade_text} (unverified)",
                 "engines": a.engines_text,
                 "gun": str(a.gun_value),
                 "endurance": "-" if a.endurance is None else str(a.endurance),
@@ -1807,6 +1865,90 @@ class EditorApp:
         for key, weapons in (("max", a.max_weapons), ("reduced", a.reduced_weapons)):
             for w in weapons:
                 self.aircraft_weapon_trees[key].insert("", "end", values=w)
+
+    # ---- aircraft pictures and comparison ------------------------------
+
+    @staticmethod
+    def _picture_label(parent):
+        """A label in a fixed 150 x 60 frame (the caller places the frame), so a missing picture moves nothing."""
+        frame = tk.Frame(parent, width=planeart.TILE_W, height=planeart.TILE_H)
+        frame.pack_propagate(False)
+        label = tk.Label(frame, wraplength=planeart.TILE_W, justify="left")
+        label.pack(fill="both", expand=True)
+        label.image = None
+        return label
+
+    def _art_dirs(self):
+        dirs = [os.path.join(HERE, "..", "ART")]
+        if self.path:
+            dirs.insert(0, os.path.join(os.path.dirname(os.path.abspath(self.path)), "..", "ART"))
+        return [os.path.normpath(d) for d in dirs]
+
+    def _plane_image(self, a):
+        key = (a.side_id, a.bitmap)
+        if key not in self.plane_images:
+            png = planeart.plane_png(self._art_dirs(), a.side_id, a.bitmap)
+            self.plane_images[key] = tk.PhotoImage(master=self.root, data=base64.b64encode(png).decode("ascii"))
+        return self.plane_images[key]
+
+    def _show_plane(self, label, a):
+        """Show the model's side-view picture in the label, or a short reason when there is none."""
+        image, text = None, ""
+        if a is not None:
+            try:
+                image = self._plane_image(a)
+            except (ValueError, OSError, tk.TclError) as e:
+                text = f"No picture ({e})"
+        label.configure(image=image or "", text=text)
+        label.image = image
+
+    @staticmethod
+    def _compare_label(a):
+        return f"{a.name} (#{a.id}), {a.nation}"
+
+    def setup_compare(self):
+        """Fill the comparison choices from the loaded aircraft; A starts as the first Japanese fighter, B as the Allied."""
+        by_id = sorted(self.aircraft.values(), key=lambda a: a.id)
+        self.compare_ids = {self._compare_label(a): a.id for a in by_id}
+        types = sorted({a.type for a in by_id})
+        for col, side_id in zip(self.compare_cols, (0, 1)):
+            col["side"].set("All")
+            col["type"].set("All")
+            col["type_box"].configure(values=["All"] + types)
+            first = next((a for a in by_id if a.type_id == 0 and a.side_id == side_id), None)
+            col["model"].set(self._compare_label(first) if first else "")
+            self.refresh_compare_choices(col, keep=True)
+
+    def refresh_compare_choices(self, col, keep=False):
+        """Limit the model list to the column's side and type; the chosen model stays only if it still fits."""
+        side, kind = col["side"].get(), col["type"].get()
+        labels = [self._compare_label(a) for a in sorted(self.aircraft.values(), key=lambda a: (a.name.lower(), a.id))
+                  if (side == "All" or bases.SIDES.get(a.side_id) == side) and (kind == "All" or a.type == kind)]
+        col["model_box"].configure(values=labels)
+        if col["model"].get() not in labels and not keep:
+            col["model"].set("")
+        self.refresh_compare_table()
+
+    def refresh_compare_table(self):
+        models = [self.aircraft.get(self.compare_ids.get(col["model"].get())) for col in self.compare_cols]
+        for col, a in zip(self.compare_cols, models):
+            self._show_plane(col["picture"], a)
+        self.compare_tree.delete(*self.compare_tree.get_children())
+        if None not in models:
+            for row in aircraft.compare_rows(*models):
+                self.compare_tree.insert("", "end", values=row)
+
+    def compare_aircraft(self, k):
+        """Send the model selected in the Aircraft tab to column A or B of the comparison."""
+        if self.aircraft_current is None:
+            return
+        col = self.compare_cols[k]
+        col["side"].set("All")
+        col["type"].set("All")
+        col["model"].set(self._compare_label(self.aircraft[self.aircraft_current]))
+        self.refresh_compare_choices(col, keep=True)
+        self.notebook.select(self.reports_tab)
+        self.reports_notebook.select(self.compare_frame)
 
     def apply_aircraft(self):
         if self.aircraft_current is None:
@@ -2950,6 +3092,7 @@ class EditorApp:
         self.refresh_factory_report()
         self.refresh_raw_list()
         self.refresh_air_reports()
+        self.refresh_compare_table()
 
     @staticmethod
     def _report_values(columns, texts, row):

@@ -17,7 +17,10 @@ from .factories import (
 
 RECORD_COUNT = 1000
 TYPE_OFFSET = 25
-UPGRADE_OFFSET = 26
+# u16 at 26 is the picture number (tile of the side-view sheets, see planeart.py), not an upgrade.
+BITMAP_OFFSET = 26
+# u16: the model this one upgrades to; its own id or 0 means none. Checked on a few models only.
+UPGRADE_OFFSET = 192
 NATION_OFFSET = 284
 # 0 = Japanese, 1 = Allied; matches the side of every group flying the model.
 SIDE_OFFSET = AIRCRAFT_SIDE_OFFSET
@@ -163,6 +166,9 @@ class Aircraft:
     def _i16(self, pos):
         return struct.unpack_from("<h", self._data, self._offset + pos)[0]
 
+    def _u16(self, pos):
+        return struct.unpack_from("<H", self._data, self._offset + pos)[0]
+
     def get(self, name):
         f = FIELD_BY_NAME[name]
         return struct.unpack_from("<" + f.fmt, self._data, self._offset + f.offset)[0]
@@ -265,16 +271,30 @@ class Aircraft:
         return nation_label(self.nation_id)
 
     @property
+    def bitmap(self):
+        """Picture number: the tile of this model's side-view sheet."""
+        return self._u16(BITMAP_OFFSET)
+
+    @property
     def upgrade_id(self):
-        return self._i16(UPGRADE_OFFSET)
+        return self._u16(UPGRADE_OFFSET)
+
+    @property
+    def has_upgrade(self):
+        return self.upgrade_id not in (0, self.id)
 
     @property
     def upgrade_name(self):
-        """Name of the record the upgrade field points at (meaning unverified), or ""."""
-        up = self.upgrade_id
-        if not 0 <= up < RECORD_COUNT:
+        """Name of the model it upgrades to, "-" when there is none, or "" for an unused record."""
+        if not self.has_upgrade:
+            return "-"
+        if self.upgrade_id >= RECORD_COUNT:
             return ""
-        return _plain_name(self._data, up * AIRCRAFT_RECORD_SIZE)
+        return _plain_name(self._data, self.upgrade_id * AIRCRAFT_RECORD_SIZE)
+
+    @property
+    def upgrade_text(self):
+        return f"{self.upgrade_id} {self.upgrade_name}".strip() if self.has_upgrade else "-"
 
     def _device(self, device_id):
         return device_id * DEVICE_RECORD_SIZE
@@ -353,6 +373,91 @@ class Aircraft:
         if cruise <= 0:
             return None
         return miles * 60 * 115 // (cruise * 100)
+
+
+BETTER = "\u25b2 "  # prefix of the better value in a comparison row
+
+
+def _hexes(a, name):
+    text = str(a.get(name + "_hex"))
+    tanks = a.get(name + "_tanks_hex")
+    return f"{text} ({tanks})" if tanks else text
+
+
+def _pool_text(a):
+    try:
+        return str(a.pool)
+    except struct.error:  # the pool section is short or missing in a damaged save
+        return "?"
+
+
+def _reach(a, name):
+    """Hexes of a range, or of its drop-tank variant when the model has one."""
+    return a.get(name + "_tanks_hex") or a.get(name + "_hex")
+
+
+# (label, text, value): value is what two models are compared by (higher is better), None to not mark.
+COMPARE_ROWS = [
+    ("Type", lambda a: a.type, None),
+    ("Nation", lambda a: a.nation, None),
+    ("Available", lambda a: f"{format_date(*a.get_date('from'))} to {format_date(*a.get_date('to'))}", None),
+    ("Upgrade", lambda a: a.upgrade_text, None),
+    ("Engines", lambda a: a.engines_text, None),
+    ("Max speed", lambda a: str(a.get("speed")), lambda a: a.get("speed")),
+    ("Cruise speed", lambda a: str(a.get("cruise")), lambda a: a.get("cruise")),
+    ("Climb", lambda a: str(a.get("climb")), lambda a: a.get("climb")),
+    ("Max altitude", lambda a: str(a.get("max_alt")), lambda a: a.get("max_alt")),
+    ("Maneuver", lambda a: str(a.get("maneuver")), lambda a: a.get("maneuver")),
+] + [
+    (f"Maneuver {band}", lambda a, k=k: str(a.maneuver_mods[k]), lambda a, k=k: a.maneuver_mods[k])
+    for k, band in enumerate(MANEUVER_MOD_BANDS)
+] + [
+    ("Durability", lambda a: str(a.get("durability")), lambda a: a.get("durability")),
+    ("Armor", lambda a: str(a.get("armor")), lambda a: a.get("armor")),
+    ("Max load", lambda a: str(a.get("load")), lambda a: a.get("load")),
+    ("Max range (hexes)", lambda a: _hexes(a, "max_range"), lambda a: _reach(a, "max_range")),
+    ("Normal radius (hexes)", lambda a: _hexes(a, "normal_radius"), lambda a: _reach(a, "normal_radius")),
+    ("Extended radius (hexes)", lambda a: _hexes(a, "extended_radius"), lambda a: _reach(a, "extended_radius")),
+    ("Endurance", lambda a: "-" if a.endurance is None else str(a.endurance), lambda a: a.endurance),
+    ("Gun value", lambda a: str(a.gun_value), lambda a: a.gun_value),
+    ("Carrier capable", lambda a: "Yes" if a.get_carrier() else "No", None),
+    ("Pool", lambda a: _pool_text(a), None),
+]
+
+
+def _weapon_text(w):
+    name, count, facing = w
+    return f"{name} x{count}, {facing}"
+
+
+def compare_rows(a, b):
+    """Rows (property, a's value, b's value) for two models; the better value of a numeric row starts with BETTER.
+
+    A row is marked only when both values exist and differ. The armament rows (max load, then reduced load)
+    run one weapon per row, as long as the longer of the two lists; the engine (weapon slot 9) has its own row
+    and is left out of them.
+    """
+    rows = []
+    for label, text, value in COMPARE_ROWS:
+        ta, tb = text(a), text(b)
+        if value is not None:
+            va, vb = value(a), value(b)
+            if va is not None and vb is not None and va != vb:
+                if va > vb:
+                    ta = BETTER + ta
+                else:
+                    tb = BETTER + tb
+        rows.append((label, ta, tb))
+    def armament(model, weapons):
+        return [w for w in weapons if w[0].strip() != model.engine_name.strip()]
+
+    for label, wa, wb in (("Armament, max load", armament(a, a.max_weapons), armament(b, b.max_weapons)),
+                          ("Armament, reduced load", armament(a, a.reduced_weapons),
+                           armament(b, b.reduced_weapons))):
+        for k in range(max(len(wa), len(wb), 1)):
+            rows.append((label if k == 0 else "", _weapon_text(wa[k]) if k < len(wa) else "",
+                         _weapon_text(wb[k]) if k < len(wb) else ""))
+    return rows
 
 
 def list_aircraft(save):

@@ -160,9 +160,37 @@ class AircraftTests(unittest.TestCase):
         self.assertEqual(self.by_id[2].side_id, 1)
 
     def test_upgrade(self):
-        a = self.by_id[332]
-        self.assertEqual(a.upgrade_name, aircraft._plain_name(self.sf[SECTION].data, a.upgrade_id * RECORD)
-                         if 0 <= a.upgrade_id < 1000 else "")
+        # The upgrade is the u16 at 192; its own id (or 0) means none. Offset 26 is the picture, not the upgrade.
+        expected = {487: (488, "SBD-5 Dauntless"), 332: (333, "P-38H Lightning"), 603: (604, "A6M2 Sen Baku"),
+                    342: (342, "-"), 2: (2, "-")}
+        for aid, (up_id, name) in expected.items():
+            a = self.by_id[aid]
+            self.assertEqual((a.upgrade_id, a.upgrade_name), (up_id, name), aid)
+        self.assertTrue(self.by_id[603].has_upgrade)
+        self.assertFalse(self.by_id[342].has_upgrade)
+        self.assertEqual(self.by_id[342].upgrade_text, "-")
+        self.assertEqual(self.by_id[603].upgrade_text, "604 A6M2 Sen Baku")
+
+    def test_bitmap(self):
+        for aid, bitmap in {603: 4, 746: 147, 332: 333, 437: 439, 2: 1}.items():
+            self.assertEqual(self.by_id[aid].bitmap, bitmap, aid)
+
+    def test_compare_rows_mark_the_better_value(self):
+        rows = {r[0]: r for r in aircraft.compare_rows(self.by_id[603], self.by_id[332])}
+        up = aircraft.BETTER
+        self.assertEqual(rows["Max speed"][1:], ("331", up + "400"))
+        self.assertEqual(rows["Climb"][1:], (up + "2640", "2350"))
+        self.assertEqual(rows["Max range (hexes)"][1:], ("22 (36)", up + "16 (40)"))
+        self.assertEqual(rows["Carrier capable"][1:], ("Yes", "No"))
+        self.assertEqual(rows["Maneuver >32K"][1:], ("10", "10"))  # equal values are not marked
+        same = {r[0]: r for r in aircraft.compare_rows(self.by_id[603], self.by_id[603])}
+        self.assertFalse(any(r[1].startswith(up) or r[2].startswith(up) for r in same.values()))
+        weapons = [r for r in aircraft.compare_rows(self.by_id[603], self.by_id[332]) if r[0].startswith("Armament")]
+        self.assertEqual(weapons[0], ("Armament, max load", "7.7mm Type 89 MG x2, C", "20mm Hispano Cannon x1, C"))
+        # The engine is weapon slot 9 but has its own row, so it is not listed as armament.
+        cells = [cell for r in weapons for cell in r[1:]]
+        self.assertFalse(any(cell.startswith((self.by_id[603].engine_name.strip(), "Engine x")) for cell in cells))
+        self.assertIn("Nakajima Ha-35", self.by_id[603].engine_name)
 
     def test_parse_date(self):
         self.assertEqual(aircraft.parse_date("12/41"), (12, 41))
