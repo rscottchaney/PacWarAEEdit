@@ -16,6 +16,16 @@ class GuiSmokeTests(unittest.TestCase):
         except tk.TclError:
             self.skipTest("no display")
         self.root.withdraw()
+        # Opening a save records its turn; keep that out of tests/data.
+        import tempfile
+        from unittest import mock
+        import witpae_editor
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.history_root = os.path.join(tmp.name, "history")
+        patch = mock.patch.object(witpae_editor.EditorApp, "history_root", self.history_root)
+        patch.start()
+        self.addCleanup(patch.stop)
 
     def tearDown(self):
         self.root.destroy()
@@ -1462,6 +1472,158 @@ class GuiSmokeTests(unittest.TestCase):
             self.assertFalse(app.load(os.path.dirname(SAVE_015)))
         self.assertIn("folder", err.call_args[0][1])
         self.assertIsNone(app.save)
+
+    def test_history_tab(self):
+        import witpae_editor
+        from witpae import history
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        tabs = [app.notebook.tab(t, "text") for t in app.notebook.tabs()]
+        self.assertEqual(tabs[tabs.index("Reports") + 1], "History")
+        folder = os.path.join(self.history_root, "grand-campaign")
+        self.assertEqual(os.listdir(folder), ["19411210.json.gz"])
+        self.assertEqual(app.history_dir, folder)
+        self.assertIn("10 Dec 41 recorded", app.history_status.get())
+        self.assertIn("grand-campaign", app.history_info.get())
+        self.assertIn("Turns recorded: 1", app.history_info.get())
+        self.assertEqual(str(app.history_record_btn.cget("state")), "disabled")
+        # Reopening the same file refreshes the turn.
+        self.assertTrue(app.load(SAVE_015))
+        self.assertIn("refreshed", app.history_status.get())
+        # A second turn, made from the first by editing the dict.
+        snap = history.read_snapshot(os.path.join(folder, "19411210.json.gz"))
+        snap2 = dict(snap, date=411211, turn=5,
+                     sides={s: dict(m, supply=m["supply"] + 1000) for s, m in snap["sides"].items()})
+        snap2["bases"] = {k: v for k, v in snap["bases"].items() if k != "584"}
+        history.write_snapshot(folder, snap2)
+        app.load_history_view()
+        self.root.update()
+        tree = app.history_tree
+        self.assertEqual(tree.get_children(), ("411211", "411210"))
+        self.assertEqual(tree.set("411211", "allied"), "5,591,712")
+        self.assertEqual(tree.set("411211", "allied_change"), "+1,000")
+        self.assertEqual(tree.set("411210", "allied_change"), "-")
+        self.assertEqual(tree.set("411210", "date"), "10 Dec 41")
+        self.assertEqual(list(tree["displaycolumns"]),
+                         ["date", "turn", "allied", "allied_change", "japanese", "japanese_change"])
+        app.history_side_var.set("Japanese")
+        app.refresh_history_view()
+        self.assertEqual(list(tree["displaycolumns"]), ["date", "turn", "japanese", "japanese_change"])
+        app.history_metric_var.set(history.SIDE_METRICS["ships_sunk"])
+        app.refresh_history_view()
+        self.assertEqual(tree.set("411210", "japanese"), "3")
+        # The chart has drawn its axes, lines and legend.
+        app.history_chart.configure(width=700, height=300)
+        app.notebook.select(app.history_tab)
+        self.root.update()
+        self.assertGreater(len(app.history_chart.find_all()), 10)
+        app.history_side_var.set("Both")
+        app.history_metric_var.set(history.SIDE_METRICS["supply"])
+        app.refresh_history_view()
+        self.assertEqual([s.label for s in app.history_chart.series], ["Allied", "Japanese"])
+
+        # Base view through the Bases tab's History button.
+        app.tree.selection_set("584")
+        self.root.update()
+        app.history_btn.invoke()
+        self.assertEqual(app.notebook.select(), str(app.history_tab))
+        self.assertEqual(app.history_view_var.get(), "Base")
+        self.assertIn("(584)", app.history_base_var.get())
+        self.assertEqual(list(tree["displaycolumns"]), ["date", "turn", "side", "value", "change"])
+        self.assertEqual(tree.get_children(), ("411211", "411210"))
+        self.assertEqual(tree.set("411210", "value"), "982,531")
+        self.assertEqual(tree.set("411210", "side"), "Allied")
+        self.assertEqual(tree.set("411211", "value"), "-")  # not recorded that turn: a gap
+        app.history_filter_var.set("zzzz")
+        self.assertFalse(app.history_base_box.cget("values"))
+        app.history_filter_var.set("pearl")
+        self.assertTrue(app.history_base_box.cget("values"))
+
+    def test_history_empty_state(self):
+        import witpae_editor
+        app = witpae_editor.EditorApp(self.root)
+        app.history_chart.configure(width=500, height=250)
+        app.notebook.select(app.history_tab)
+        self.root.update()
+        self.assertEqual(app.history_tree.get_children(), ())
+        chart = app.history_chart
+        texts = [chart.itemcget(i, "text") for i in chart.find_all() if chart.type(i) == "text"]
+        self.assertEqual(texts, ["No turns recorded yet"])
+
+    def test_history_keeps_other_source_and_records_on_request(self):
+        import shutil
+        import tempfile
+        import witpae_editor
+        from witpae import history
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        with tempfile.TemporaryDirectory() as tmp:
+            other = os.path.join(tmp, "edited.pws")
+            shutil.copyfile(SAVE_015, other)
+            self.assertTrue(app.load(other))
+            self.assertIn("10 Dec 41 already recorded from going2_411210.pws", app.history_status.get())
+            self.assertEqual(str(app.history_record_btn.cget("state")), "normal")
+            path = os.path.join(app.history_dir, "19411210.json.gz")
+            self.assertEqual(history.read_snapshot(path)["source"], "going2_411210.pws")
+            app.history_record_btn.invoke()
+            self.assertIn("replaced", app.history_status.get())
+            self.assertEqual(history.read_snapshot(path)["source"], "edited.pws")
+            self.assertEqual(str(app.history_record_btn.cget("state")), "disabled")
+
+    def test_history_failure_does_not_block_opening(self):
+        from unittest import mock
+        import witpae_editor
+        app = witpae_editor.EditorApp(self.root)
+        with mock.patch.object(witpae_editor.history, "record", side_effect=PermissionError("denied")), \
+                mock.patch.object(witpae_editor.messagebox, "showerror") as err:
+            self.assertTrue(app.load(SAVE_015))
+        err.assert_not_called()
+        self.assertIn("History not recorded: denied", app.history_status.get())
+        self.assertIsNotNone(app.save)
+
+    def test_history_pbem_records_nothing(self):
+        import tempfile
+        import witpae_editor
+        from witpae import bases
+        from witpae.container import SaveFile
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "pbem.pws")
+            sf = SaveFile.load(SAVE_015)
+            bases.set_title(sf, "(PBEM) game")
+            sf.save(src)
+            app = witpae_editor.EditorApp(self.root)
+            self.assertTrue(app.load(src))
+        self.assertIn("PBEM", app.history_status.get())
+        self.assertFalse(os.path.exists(self.history_root))
+
+    def test_history_import_and_delete(self):
+        import tempfile
+        from unittest import mock
+        import witpae_editor
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        with tempfile.TemporaryDirectory() as tmp:
+            bad = os.path.join(tmp, "bad.pws")
+            with open(bad, "wb") as f:
+                f.write(b"nope")
+            with mock.patch.object(witpae_editor.filedialog, "askopenfilenames",
+                                   return_value=(SAVE_015, bad)) as ask:
+                app.import_history()
+        self.assertEqual(ask.call_args[1]["initialdir"], os.path.dirname(SAVE_015))
+        self.assertTrue(app.history_status.get().startswith("1 imported, 1 skipped (bad.pws: unreadable"))
+        tree = app.history_tree
+        self.assertEqual(tree.get_children(), ("411210",))
+        app.delete_history_turn()  # nothing selected
+        self.assertEqual(tree.get_children(), ("411210",))
+        tree.selection_set("411210")
+        with mock.patch.object(witpae_editor.messagebox, "askyesno", return_value=False):
+            app.delete_history_turn()
+        self.assertEqual(tree.get_children(), ("411210",))
+        with mock.patch.object(witpae_editor.messagebox, "askyesno", return_value=True):
+            app.delete_history_turn()
+        self.assertEqual(tree.get_children(), ())
+        self.assertEqual(os.listdir(app.history_dir), [])
+        self.assertIn("deleted", app.history_status.get())
 
 
 if __name__ == "__main__":

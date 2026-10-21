@@ -509,6 +509,43 @@ they hide it).
   Java in a TF at Soerabaja, Amagisan Maru at Kagoshima). The offsets come from WiTPTracker's reader and match the sample saves;
   they have not been compared with the game's own screens yet. The code is in `witpae/shiprepair.py`.
 
+## History
+
+The History tab (after Reports) shows trends over the turns you have opened, like WiTPTracker. Nothing here writes
+to a save.
+
+- What is recorded: one snapshot per game date, both sides. Side metrics: supply, fuel, resources and oil stored
+  (summed over the places of the Industry report, so the totals match WiTPTracker), the production pools (manpower,
+  HI, naval, merchant, armament, vehicle), the daily supply, fuel and oil allotments, the aircraft pool, aircraft
+  lost this turn and in total (air, ground, flak, operations), ships sunk, damaged ships, damaged tonnage and
+  damaged ships in port. Per base: side, supply, fuel, resources and oil (only bases with some stock). Per aircraft
+  model: pool and total losses. The metric table is `SIDE_METRICS` in `witpae/history.py`.
+- Where: `<save folder>\history\<campaign>\<YYYYMMDD>.json.gz`, one gzip-compressed JSON file per date, written
+  atomically (temporary file, then rename). A save in a folder called `autosave` uses the parent folder, so
+  `SAVE\autosave\...` and `SAVE\...` share one history. The campaign is the scenario name from the save
+  ("grand campaign"), lowercased. Known limitation: two campaigns of the same scenario share a folder. The player's side is not
+  reliably stored in a save, so both sides are recorded and the tab filters.
+- Auto-record: every save you open is recorded after it loads. The snapshot is written when no file exists for that
+  date, or when the existing one came from a file with the same name (a refresh). Otherwise the existing snapshot is
+  kept, so an edited copy of a save cannot overwrite a real turn; the tab then says "<date> already recorded from
+  <file>" and the Record this save button (enabled only then) replaces it with the save as it is on disk. PBEM saves
+  are never recorded. A recording failure (permissions, disk full) shows on the tab's status line and does not stop
+  the save from opening.
+- Import saves...: pick several .pws files (the dialog starts in the current save folder); each replaces the
+  snapshot of its date in its own campaign folder. PBEM and unreadable files are skipped and reported ("2 imported,
+  1 skipped (...)").
+- Delete turn: removes the selected turn's file after asking.
+- Views: Sides (a metric from the list, both sides or one) or Base (a base from the recorded ones, with a filter
+  box, and Supply, Fuel, Resources or Oil). The Bases tab's History button opens the Base view for the selected
+  base. The chart draws one line per side (blue Allied, red Japanese; in the Base view the colour is the owner of
+  that turn); a turn without a value leaves a gap. The table lists the turns newest first with the change from the
+  previous recorded turn. Base names come from the open save ("#id" if unknown).
+- Files that cannot be read (corrupt, or another schema version) are skipped and named on the status line. Auto-record
+  replaces a corrupt file for its own date but keeps one of another schema version. The snapshot has `"version": 1`; a future change of layout will raise it, and older
+  editors then skip those files.
+
+The code is in `witpae/history.py` (snapshots and files) and `witpae/chart.py` (the line chart).
+
 ## Backups
 
 Always keep a copy of your saves before editing. Prefer saving to a new file
