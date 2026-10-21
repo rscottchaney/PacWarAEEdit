@@ -232,7 +232,7 @@ Load cost and AV are computed by the game.
 
 ## Reports
 
-The Reports tab holds nine reports; only the bulk switch buttons of Air production edit the save. It
+The Reports tab holds ten reports; only the bulk switch buttons of Air production edit the save. It
 shows the game date (section 0x01: day at 42, month at 44, two-digit year at 46,
 all i16) and refreshes whenever the tab is shown, so edits made in the Bases tab
 are reflected. Double-click a row to jump to that base (Bases tab) or ship (Ships
@@ -285,6 +285,45 @@ Two things are not known, so the report does not show or guess them: the game's 
 Accelerate / Halt setting (not located in the save yet; Points/day assumes normal construction), and which
 Building ships are paid each day when the points run short (not in the manual; only the daily shortfall or
 surplus per yard is shown). Not yet checked in-game. The code is in `witpae/shipproduction.py`.
+
+### LCU production
+
+The "LCU production" sub-tab (after Ship production) is read-only and follows the idea of WitPTracker's LCU
+Production view: what land units lack against their TOE, what arriving reinforcements will need, what that costs
+in armament, vehicle and manpower points, and how that compares with the pools and the daily production.
+
+- Controls: Side (Japanese default, or Allied), Window (7, 14, 30 default, 60, 90, 180, 365 days or All), a
+  Units / Devices view switch, a Status filter for the Units view (All, Active, Reinforcement, Not scheduled,
+  Not arrived (no date)) and a Search box. Double-click a unit to jump to it in the Land Units tab (its filters
+  are cleared if they hide it). The summary table on top has one row per point type: pool, production per day,
+  points lacking in arrived units, points needed by the reinforcements in the window, and the days of production
+  that cover both.
+- Lack of an arrived unit, per slot with a TOE device: TOE count - current count when the slot holds the TOE
+  device or is empty (never below 0); when the slot holds a different device (an older model awaiting upgrade)
+  the whole TOE count is lacking. Disabled devices repair and are not counted.
+- A unit not yet arrived with days to arrival 1..window needs its whole TOE (every slot's TOE count of its TOE
+  device). Units that are not scheduled or have no date are listed with no cost.
+- Costs, from manual 13.2.2.6 and 13.2.2.7 (checked against the manual's text): a squad costs 1
+  armament point plus manpower equal to its load cost; a weapon costs armament points equal to its load cost plus
+  the same manpower; a vehicle costs vehicle points equal to its load cost plus the same manpower. Squads are
+  device types 23 Squad and 24 Engineer; vehicles are 22 AFV and 25 Vehicle; every other type is a weapon.
+- Manual 13.7: Japanese reinforcements must be filled from production when they arrive, otherwise they arrive
+  at 25% TOE without charge. Allied units are fed from their device pools, so the report shows Allied lacks and
+  pools but daily production (Armament 525, Vehicle 526 and Manpower 520 factories with production on, 1, 1 and
+  5 points per size point per day) is only given for the Japanese.
+- Device pools: the side's i32 at 8184 + 8 x device + 4 x side of section 0x01, the same table as the HI,
+  armament and vehicle pools of Industry reports.
+
+Save offsets: the land unit's days to arrival is the i16 at 564 of the record (section 0x13), found by a
+countdown search (it drops by exactly 1 per game day across saves of 8, 9 and 11 Dec 41 for 2272 units); 0
+means arrived (or no date), and 9999, 19999 and 29999 are shown as "Not scheduled". Device records (section 0x1f,
+236 bytes) hold the name in the first 24 bytes, the device type as u8 at 26 and the load cost as i16 at 28 (the
+ae-editor field map marks the load cost unverified; the values look right: IJA Infantry Squad 17, Support 10).
+Device types (WitPTracker's names): 0 Aircraft Cannon, 1 GA Rocket, 2 PGM, 3 GP Bomb, 4 AP Bomb, 5 Drop Tank,
+6 Radar Detect, 7 Jammer, 8 Nav Radar, 9 Aircraft Radar, 10 Surface Radar, 11 AA Rocket, 12 Flak, 13 Balloon,
+14 Factory Machine, 15 ELINT, 16 Torpedo, 17 DP Gun, 18 Navy Gun, 19 Army Weapon, 20 ASW, 21 Mine, 22 AFV,
+23 Squad, 24 Engineer, 25 Vehicle, 26 Resource, 27 Engine Factory. None of this is checked in the game yet. The
+code is in `witpae/lcuproduction.py`.
 
 ### Industry reports
 
