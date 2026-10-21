@@ -6,13 +6,14 @@ All data logic lives in the witpae package; this file only wires widgets.
 """
 
 import base64
+import datetime
 import os
 import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from witpae import (aircraft, airgroups, airproduction, bases, factories, industry, landunits, pilotpool, planeart,
-                    regions, reports, shiprecords, ships, taskforces)
+                    regions, reports, shipproduction, shiprecords, ships, taskforces)
 from witpae.container import SaveFile, SaveFormatError
 from witpae.fileio import is_pbem, save_with_backup
 
@@ -161,12 +162,66 @@ UPGRADE_TEXT = {"date": lambda v: f"{v[1]}/{v[0]:02d}", "due": _due_text}
 UPGRADE_DUE = {"Now": 0, "1 month": 1, "3 months": 3, "6 months": 6, "12 months": 12, "All": None}
 
 
+PRODUCTION_COLUMNS = [
+    ("id", "ID", 55, True, lambda r: r.ship.id),
+    ("ship", "Ship", 150, False, lambda r: r.ship.name),
+    ("type", "Type", 60, False, lambda r: r.type),
+    ("class", "Class", 150, False, lambda r: _class_text(r.current)),
+    ("durability", "Durability", 70, True, lambda r: r.durability),
+    ("yard", "Yard", 65, False, lambda r: r.yard),
+    ("delay", "Delay", 60, True, lambda r: r.delay),
+    ("arrival", "Arrives", 90, True, lambda r: r.arrival.toordinal() if r.arrival else 0),
+    ("status", "Status", 140, False, lambda r: r.status),
+    ("starts_in", "Starts costing in", 100, True, lambda r: r.starts_in),
+    ("per_day", "Points/day", 70, True, lambda r: r.per_day),
+    ("to_finish", "Points to finish", 100, True, lambda r: r.to_finish),
+    ("accel", "Accelerated/day", 100, True, lambda r: -1 if r.accel_per_day is None else r.accel_per_day),
+]
+PRODUCTION_COLUMN_BY_ID = {c[0]: c for c in PRODUCTION_COLUMNS}
+PRODUCTION_SUMMARY_COLUMNS = [
+    ("yard", "Yard", 80, False, lambda r: r.yard),
+    ("size", "Points made/day", 110, True, lambda r: r.size),
+    ("hi_day", "HI/day", 70, True, lambda r: r.hi_per_day),
+    ("pool", "Pool", 70, True, lambda r: -1 if r.pool is None else r.pool),
+    ("needed", "Needed/day", 85, True, lambda r: r.needed),
+    ("net", "Net/day", 75, True, lambda r: r.net),
+    ("building", "Building", 70, True, lambda r: r.building),
+    ("can_accelerate", "Can accelerate", 100, True, lambda r: r.can_accelerate),
+    ("blueprint", "Blue print", 80, True, lambda r: r.blueprint),
+]
+PRODUCTION_ALL = "All"
+PRODUCTION_NOTE = (
+    "Manual 13.4: only the Japanese build ships; the Allies receive ships as scheduled reinforcements. With durability "
+    "D and delay L (days to arrival): L over 30 x D is a Blue print (1 day removed free per day, cannot be "
+    "accelerated); L over 10 x D up to 30 x D Can accelerate (1 day free per day, 1 more per day for D points); "
+    "L up to 10 x D is Building (D points per day remove 1 day, accelerated 3 x D points remove 2). Each "
+    "shipyard size point with production on makes 1 point per day for 3 HI (13.2.2.8). Points/day assumes normal "
+    "construction: the ship's Normal / Accelerate / Halt setting is not known in the save. Which Building ships "
+    "are paid when the pool runs short is not in the manual, so only the daily shortfall per yard is shown. "
+    "Midget submarines (SSX) use no points (they sit at 1 day to arrival in saves): they are listed with their own "
+    "status and are not counted or charged.")
+
+
 def _num(v):
     return f"{v:,}"
 
 
 def _rate(v):
     return f"{v:+,}" if v else "0"
+
+
+def _arrival_text(v):
+    if not v:
+        return "-"
+    d = datetime.date.fromordinal(v)
+    return f"{d.day} {MONTH_NAMES[d.month - 1]} {d.year}"
+
+
+PRODUCTION_TEXT = {"arrival": _arrival_text, "delay": _num, "starts_in": _num, "per_day": _num, "to_finish": _num,
+                   "accel": lambda v: "-" if v < 0 else _num(v)}
+PRODUCTION_SUMMARY_TEXT = {"size": _num, "hi_day": _num, "pool": lambda v: "?" if v < 0 else _num(v),
+                           "needed": _num, "net": _rate, "building": _num, "can_accelerate": _num,
+                           "blueprint": _num}
 
 
 def _shortest_text(v):
@@ -435,6 +490,10 @@ class EditorApp:
         self.upgrades_all = []
         self.upgrade_sort_col = "due"
         self.upgrade_sort_reverse = False
+        self.production_all = []
+        self.production_summary = []
+        self.production_sort_col = "delay"
+        self.production_sort_reverse = False
         self.industry_places = []
         self.region_ids = region_choices()
         self.factory_report_sort_col = "id"
@@ -607,6 +666,7 @@ class EditorApp:
                                               ("ship", "type", "side", "class", "target", "change", "location"),
                                               self.jump_to_upgrade_ship)
 
+        self._build_production_report()
         self._build_industry_reports()
         self._build_air_reports()
         self._build_compare_report()
@@ -614,6 +674,44 @@ class EditorApp:
         # Bound last so the handlers never run before the lists exist.
         self.notebook.bind("<<NotebookTabChanged>>", lambda e: self._reports_shown())
         self.reports_notebook.bind("<<NotebookTabChanged>>", lambda e: self._reports_shown())
+
+    def _build_production_report(self):
+        prod = ttk.Frame(self.reports_notebook, padding=4)
+        self.reports_notebook.add(prod, text="Ship production")
+        ttk.Label(prod, text="Japanese ship construction (the Allies receive ships as scheduled reinforcements)"
+                  ).pack(side="top", anchor="w")
+        ttk.Label(prod, text=PRODUCTION_NOTE, wraplength=1100, justify="left").pack(side="bottom", anchor="w",
+                                                                                    pady=(4, 0))
+        top = ttk.Frame(prod)
+        top.pack(side="top", fill="x", pady=(4, 0))
+        self.production_summary_tree = self._report_tree(top, PRODUCTION_SUMMARY_COLUMNS, lambda c: None,
+                                                         ("yard",), lambda: None)
+        self.production_summary_tree.configure(height=2)
+        bar = ttk.Frame(prod)
+        bar.pack(side="top", fill="x", pady=(4, 0))
+        ttk.Label(bar, text="Search:").pack(side="left")
+        self.production_search_var = tk.StringVar()
+        self.production_search_var.trace_add("write", lambda *a: self.refresh_production_list())
+        ttk.Entry(bar, textvariable=self.production_search_var, width=20).pack(side="left", padx=4)
+        self.production_yard_var = tk.StringVar(value=PRODUCTION_ALL)
+        self._report_combo(bar, "Yard:", self.production_yard_var, [PRODUCTION_ALL, *shipproduction.YARDS],
+                           self.refresh_production_list, 9)
+        self.production_status_var = tk.StringVar(value=PRODUCTION_ALL)
+        self._report_combo(bar, "Status:", self.production_status_var, [PRODUCTION_ALL, *shipproduction.STATUSES],
+                           self.refresh_production_list, 14)
+        self.production_type_var = tk.StringVar(value=PRODUCTION_ALL)
+        ttk.Label(bar, text="Type:").pack(side="left")
+        self.production_type_box = ttk.Combobox(bar, textvariable=self.production_type_var, values=[PRODUCTION_ALL],
+                                                state="readonly", width=8)
+        self.production_type_box.pack(side="left", padx=(4, 8))
+        self.production_type_box.bind("<<ComboboxSelected>>", lambda e: self.refresh_production_list())
+        self.production_count = tk.StringVar()
+        ttk.Label(bar, textvariable=self.production_count).pack(side="left", padx=8)
+        table = ttk.Frame(prod)
+        table.pack(side="top", fill="both", expand=True, pady=(4, 0))
+        self.production_tree = self._report_tree(table, PRODUCTION_COLUMNS, self.sort_production_by,
+                                                 ("ship", "type", "class", "yard", "status"),
+                                                 self.jump_to_production_ship)
 
     def _report_combo(self, bar, label, var, values, command, width):
         ttk.Label(bar, text=label).pack(side="left")
@@ -3218,6 +3316,7 @@ class EditorApp:
         self.spoilage_all = reports.spoilage_rows(b for b in self.bases.values() if b.kind != "Minor")
         self.refresh_spoilage_list()
         self.refresh_upgrade_list()
+        self.refresh_production_reports()
         self.refresh_industry_report()
         self.refresh_factory_report()
         self.refresh_raw_list()
@@ -3273,6 +3372,46 @@ class EditorApp:
         self.upgrade_sort_reverse = (not self.upgrade_sort_reverse) if col == self.upgrade_sort_col else False
         self.upgrade_sort_col = col
         self.refresh_upgrade_list()
+
+    def refresh_production_reports(self):
+        """Recompute the rows and the yard summary from the save; the filters only re-select from the rows."""
+        try:
+            self.production_all = shipproduction.production_rows(self.save, self.shiprecs.values(), self.ships)
+            self.production_summary = shipproduction.summary_rows(self.save, self.production_all,
+                                                                  self.industry_places)
+        except (SaveFormatError, IndexError):
+            self.production_all, self.production_summary = [], []
+        self.production_summary_tree.delete(*self.production_summary_tree.get_children())
+        for r in self.production_summary:
+            self.production_summary_tree.insert("", "end", iid=r.yard, values=self._report_values(
+                PRODUCTION_SUMMARY_COLUMNS, PRODUCTION_SUMMARY_TEXT, r))
+        types = sorted({r.type for r in self.production_all})
+        self.production_type_box.configure(values=[PRODUCTION_ALL, *types])
+        if self.production_type_var.get() not in types:
+            self.production_type_var.set(PRODUCTION_ALL)
+        self.refresh_production_list()
+
+    def refresh_production_list(self):
+        self.production_tree.delete(*self.production_tree.get_children())
+        needle = self.production_search_var.get().strip().lower()
+        yard, status, type_ = (v.get() for v in (self.production_yard_var, self.production_status_var,
+                                                 self.production_type_var))
+        rows = [r for r in self.production_all
+                if (needle in r.ship.name.lower() or needle in r.current.name.lower())
+                and yard in (PRODUCTION_ALL, r.yard) and status in (PRODUCTION_ALL, r.status)
+                and type_ in (PRODUCTION_ALL, r.type)]
+        rows.sort(key=lambda r: self._industry_sort_key(PRODUCTION_COLUMN_BY_ID, self.production_sort_col, r,
+                                                        r.ship.id),
+                  reverse=self.production_sort_reverse)
+        for r in rows:
+            self.production_tree.insert("", "end", iid=str(r.ship.id),
+                                        values=self._report_values(PRODUCTION_COLUMNS, PRODUCTION_TEXT, r))
+        self.production_count.set(f"{len(rows)} ship{'' if len(rows) == 1 else 's'}")
+
+    def sort_production_by(self, col):
+        self.production_sort_reverse = (not self.production_sort_reverse) if col == self.production_sort_col else False
+        self.production_sort_col = col
+        self.refresh_production_list()
 
     def _industry_places_for(self, side_var, region_var):
         side = side_var.get()
@@ -3445,7 +3584,13 @@ class EditorApp:
         self.tree.see(iid)
 
     def jump_to_upgrade_ship(self):
-        sel = self.upgrade_tree.selection()
+        self._jump_to_ship(self.upgrade_tree)
+
+    def jump_to_production_ship(self):
+        self._jump_to_ship(self.production_tree)
+
+    def _jump_to_ship(self, report_tree):
+        sel = report_tree.selection()
         if not sel:
             return
         iid = sel[0]
