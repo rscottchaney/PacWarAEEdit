@@ -659,6 +659,94 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertEqual(app.pools_edited, set())
         self.assertFalse(app.dirty)
 
+    def test_leaders_tab(self):
+        from unittest import mock
+        from witpae import airgroups
+        import witpae_editor
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        self.root.update()
+        tabs = [app.notebook.tab(t, "text") for t in app.notebook.tabs()]
+        self.assertEqual(tabs[tabs.index("Land Units") + 1], "Leaders")
+        self.assertEqual(len(app.ldr_tree.get_children()), 27732)
+        self.assertEqual(app.ldr_count.get(), "27732 of 27732 leaders")
+        for key, value, count in (("side", "Japanese", 9410), ("branch", "Air", None), ("type", "Task Force", None),
+                                  ("assigned", "Unassigned", None)):
+            app.ldr_filter_vars[key].set(value)
+            app.refresh_ldr_list()
+            if count is not None:
+                self.assertEqual(len(app.ldr_tree.get_children()), count)
+            app.ldr_filter_vars[key].set("All")
+        app.ldr_filter_vars["type"].set("Task Force")
+        app.refresh_ldr_list()
+        self.assertEqual(len(app.ldr_tree.get_children()), 396)
+        app.ldr_filter_vars["type"].set("All")
+        app.ldr_search_var.set("19th TS")  # matches the Commands column
+        app.refresh_ldr_list()
+        self.assertIn("27701", app.ldr_tree.get_children())
+        app.ldr_tree.selection_set("27701")
+        self.root.update()
+        self.assertEqual(app.ldr_vars["leadership"].get(), "49")
+        self.assertEqual(app.ldr_info["rank"].get(), "LTC (37)")
+        self.assertEqual(app.ldr_info["commands"].get(), "Air group: 19th TS")
+        self.assertEqual(app.ldr_tree.set("27701", "rank"), "LTC")
+        app.sort_ldr_by("leadership")
+        app.sort_ldr_by("leadership")
+        self.assertEqual(app.ldr_sort_reverse, True)
+        # Edit in the Leaders tab: the Air Groups commander box shows the same value.
+        app.group_tree.selection_set("4205")
+        self.root.update()
+        self.assertEqual(app.leader_rank.get(), "LTC (37)")
+        app.ldr_tree.selection_set("27701")
+        self.root.update()
+        app.ldr_vars["leadership"].set("77")
+        app.apply_ldr()
+        self.assertEqual(airgroups.get_leader(app.save, 27701).get("leadership"), 77)
+        self.assertEqual(app.ldr_tree.set("27701", "leadership"), "77")
+        self.assertEqual(app.ldr_tree.item("27701", "tags"), ("edited",))
+        self.assertEqual(app.leader_vars["leadership"].get(), "77")
+        self.assertIn(4205, app.groups_edited)
+        self.assertTrue(app.dirty)
+        # Edit in the Air Groups tab: the Leaders list follows.
+        app.leader_vars["naval"].set("12")
+        app.apply_leader()
+        self.assertEqual(app.ldr_rows[27701].naval, 12)
+        self.assertEqual(app.ldr_tree.set("27701", "naval"), "12")
+        self.root.update()
+        self.assertEqual(app.ldr_vars["naval"].get(), "12")
+        # Refused values change nothing.
+        app.ldr_tree.selection_set("27701")
+        self.root.update()
+        app.ldr_vars["leadership"].set("100")
+        with mock.patch.object(witpae_editor.messagebox, "showerror") as err:
+            app.apply_ldr()
+        self.assertTrue(err.called)
+        self.assertEqual(airgroups.get_leader(app.save, 27701).get("leadership"), 77)
+        # Double-click jumps to the unit in its own tab, clearing that tab's filters.
+        for iid, tab, tree_name, unit in (("27701", "groups_tab", "group_tree", "4205"),
+                                          ("1478", "shiprec_tab", "shiprec_tree", "1549"),
+                                          ("1467", "tf_tab", "tf_tree", "14070"),
+                                          ("9", "units_tab", "unit_tree", "3788")):
+            app.ldr_search_var.set("")
+            app.refresh_ldr_list()
+            app.notebook.select(app.leaders_tab)
+            app.ldr_tree.selection_set(iid)
+            self.root.update()
+            app.group_search_var.set("zzz")
+            app.jump_to_ldr_unit()
+            self.root.update()
+            self.assertEqual(app.notebook.select(), str(getattr(app, tab)), iid)
+            self.assertEqual(getattr(app, tree_name).selection(), (unit,), iid)
+        # An unassigned leader does nothing.
+        app.notebook.select(app.leaders_tab)
+        app.ldr_tree.selection_set("1")
+        self.root.update()
+        app.jump_to_ldr_unit()
+        self.assertEqual(app.notebook.select(), str(app.leaders_tab))
+        self.assertTrue(app.load(SAVE_015))
+        self.assertEqual(app.ldr_edited, set())
+        self.assertEqual(app.ldr_rows[27701].leadership, 49)
+
     def test_land_units_tab_edit_applies(self):
         from unittest import mock
         import witpae_editor
