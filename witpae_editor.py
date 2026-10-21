@@ -12,7 +12,7 @@ import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from witpae import (aircraft, airgroups, airproduction, bases, factories, industry, landunits, lcuproduction, pilotpool, planeart,
+from witpae import (aircraft, airgroups, airproduction, bases, factories, industry, landunits, lcuproduction, losses, pilotpool, planeart,
                     regions, reports, shipproduction, shiprecords, ships, taskforces)
 from witpae.container import SaveFile, SaveFormatError
 from witpae.fileio import is_pbem, save_with_backup
@@ -285,6 +285,67 @@ LCU_NOTE = (
     "charge; Allied units are fed from their device pools, so production is only shown for the Japanese. Days to "
     "arrival is the i16 at offset 564 of the land unit and the load cost the i16 at 28 of the device record: not "
     "yet checked in the game.")
+
+LOSSES_ALL = "All"
+LOSSES_VIEWS = ("Ships sunk", "Aircraft")
+LOSSES_SUMMARY_COLUMNS = [
+    ("side", "Side", 80, False, lambda r: r.side),
+    ("ships", "Ships sunk", 80, True, lambda r: r.ships),
+    ("turn_air", "Air (turn)", 75, True, lambda r: r.turn_air),
+    ("turn_ground", "Ground (turn)", 90, True, lambda r: r.turn_ground),
+    ("turn_flak", "Flak (turn)", 80, True, lambda r: r.turn_flak),
+    ("turn_ops", "Ops (turn)", 75, True, lambda r: r.turn_ops),
+    ("turn_total", "Total (turn)", 85, True, lambda r: r.turn_total),
+    ("air", "Air", 65, True, lambda r: r.air),
+    ("ground", "Ground", 70, True, lambda r: r.ground),
+    ("flak", "Flak", 65, True, lambda r: r.flak),
+    ("ops", "Ops", 65, True, lambda r: r.ops),
+    ("total", "Total", 75, True, lambda r: r.total),
+]
+_LOSS_NUMBERS = ("ships", "turn_air", "turn_ground", "turn_flak", "turn_ops", "turn_total", "air", "ground", "flak",
+                 "ops", "total")
+LOSSES_SUMMARY_TEXT = dict.fromkeys(_LOSS_NUMBERS, _num)
+LOSSES_SUNK_COLUMNS = [
+    ("id", "ID", 55, True, lambda r: r.id),
+    ("name", "Ship", 170, False, lambda r: r.name),
+    ("side", "Side", 70, False, lambda r: r.side),
+    ("nation", "Nation", 60, False, lambda r: r.nation),
+    ("type", "Type", 55, False, lambda r: r.type),
+    ("class", "Class", 150, False, lambda r: r.class_name),
+    ("date", "Date", 90, True, lambda r: r.date),
+    ("cause", "Cause", 170, False, lambda r: r.cause),
+    ("location", "Location", 190, False, lambda r: r.location),
+    ("scuttled", "Scuttled", 65, False, lambda r: r.scuttled),
+]
+LOSSES_SUNK_COLUMN_BY_ID = {c[0]: c for c in LOSSES_SUNK_COLUMNS}
+LOSSES_SUNK_TEXT = {"date": airgroups.format_day_date, "scuttled": lambda v: "Yes" if v else ""}
+LOSSES_AIRCRAFT_COLUMNS = [
+    ("id", "ID", 45, True, lambda r: r.id),
+    ("name", "Aircraft", 160, False, lambda r: r.name),
+    ("side", "Side", 65, False, lambda r: r.side),
+    ("nation", "Nation", 60, False, lambda r: r.nation),
+    ("type", "Type", 90, False, lambda r: r.type),
+    ("turn_air", "Air (turn)", 75, True, lambda r: r.turn_air),
+    ("turn_ground", "Ground (turn)", 90, True, lambda r: r.turn_ground),
+    ("turn_flak", "Flak (turn)", 80, True, lambda r: r.turn_flak),
+    ("turn_ops", "Ops (turn)", 75, True, lambda r: r.turn_ops),
+    ("turn_total", "Total (turn)", 85, True, lambda r: r.turn_total),
+    ("air", "Air", 65, True, lambda r: r.air),
+    ("ground", "Ground", 70, True, lambda r: r.ground),
+    ("flak", "Flak", 65, True, lambda r: r.flak),
+    ("ops", "Ops", 65, True, lambda r: r.ops),
+    ("total", "Total", 75, True, lambda r: r.total),
+]
+LOSSES_AIRCRAFT_COLUMN_BY_ID = {c[0]: c for c in LOSSES_AIRCRAFT_COLUMNS}
+LOSSES_AIRCRAFT_TEXT = dict.fromkeys(_LOSS_NUMBERS[1:], _num)
+LOSSES_NOTE = (
+    "Ships sunk: ship records whose days to arrival is 19999. Cause is the u16 at 348: below 2000 the device (weapon) "
+    "that sank the ship, 2000 to 2012 the game's other causes (foundered, collision, kamikaze, ...); the hex is "
+    "x u16 at 352 and y u16 at 354 (both 0 = sunk at the base), the base the u16 at 356, the date the year, month "
+    "and day bytes at 358 to 360, and a byte of 1 at 363 means scuttled. Aircraft: eight i32 per model from 196 of "
+    "the aircraft record, this turn's losses to air combat, on the ground, to flak and in operations, then the "
+    "totals; only models with a loss are listed. Offsets are from WiTPTracker's reader and match the saves seen; not "
+    "yet compared with the game's screens. Sinking claims of the other side (fog of war) are not shown.")
 
 
 
@@ -565,6 +626,13 @@ class EditorApp:
         self.lcu_unit_sort_reverse = True
         self.lcu_device_sort_col = "armament"
         self.lcu_device_sort_reverse = True
+        self.losses_sunk_all = []
+        self.losses_aircraft_all = []
+        self.losses_summary = []
+        self.losses_sunk_sort_col = "date"
+        self.losses_sunk_sort_reverse = False
+        self.losses_aircraft_sort_col = "total"
+        self.losses_aircraft_sort_reverse = True
         self.industry_places = []
         self.region_ids = region_choices()
         self.factory_report_sort_col = "id"
@@ -742,6 +810,7 @@ class EditorApp:
         self._build_industry_reports()
         self._build_air_reports()
         self._build_compare_report()
+        self._build_losses_report()
 
         # Bound last so the handlers never run before the lists exist.
         self.notebook.bind("<<NotebookTabChanged>>", lambda e: self._reports_shown())
@@ -983,6 +1052,50 @@ class EditorApp:
         self.compare_tree.configure(yscrollcommand=scroll.set)
         scroll.pack(side="right", fill="y")
         self.compare_tree.pack(side="left", fill="both", expand=True)
+
+    def _build_losses_report(self):
+        loss = ttk.Frame(self.reports_notebook, padding=4)
+        self.reports_notebook.add(loss, text="Losses")
+        ttk.Label(loss, text=LOSSES_NOTE, wraplength=1100, justify="left").pack(side="bottom", anchor="w",
+                                                                                pady=(4, 0))
+        top = ttk.Frame(loss)
+        top.pack(side="top", fill="x")
+        self.losses_summary_tree = self._report_tree(top, LOSSES_SUMMARY_COLUMNS, lambda c: None, ("side",),
+                                                     lambda: None)
+        self.losses_summary_tree.configure(height=2)
+        bar = ttk.Frame(loss)
+        bar.pack(side="top", fill="x", pady=(4, 0))
+        self.losses_side_var = tk.StringVar(value=LOSSES_ALL)
+        self._report_combo(bar, "Side:", self.losses_side_var, [LOSSES_ALL, "Allied", "Japanese"],
+                           self.refresh_losses_list, 9)
+        self.losses_view_var = tk.StringVar(value=LOSSES_VIEWS[0])
+        for view in LOSSES_VIEWS:
+            ttk.Radiobutton(bar, text=view, value=view, variable=self.losses_view_var,
+                            command=self._show_losses_view).pack(side="left", padx=2)
+        ttk.Label(bar, text="  Search:").pack(side="left")
+        self.losses_search_var = tk.StringVar()
+        self.losses_search_var.trace_add("write", lambda *a: self.refresh_losses_list())
+        ttk.Entry(bar, textvariable=self.losses_search_var, width=20).pack(side="left", padx=4)
+        self.losses_count = tk.StringVar()
+        ttk.Label(bar, textvariable=self.losses_count).pack(side="left", padx=8)
+        self.losses_sunk_frame = ttk.Frame(loss)
+        self.losses_sunk_tree = self._report_tree(self.losses_sunk_frame, LOSSES_SUNK_COLUMNS,
+                                                  self.sort_losses_sunk_by,
+                                                  ("name", "side", "nation", "type", "class", "cause", "location",
+                                                   "scuttled"), self.jump_to_losses_ship)
+        self.losses_aircraft_frame = ttk.Frame(loss)
+        self.losses_aircraft_tree = self._report_tree(self.losses_aircraft_frame, LOSSES_AIRCRAFT_COLUMNS,
+                                                      self.sort_losses_aircraft_by,
+                                                      ("name", "side", "nation", "type"), lambda: None)
+        self._show_losses_view()
+
+    def _show_losses_view(self):
+        ships = self.losses_view_var.get() == LOSSES_VIEWS[0]
+        shown, hidden = (self.losses_sunk_frame, self.losses_aircraft_frame) if ships else (
+            self.losses_aircraft_frame, self.losses_sunk_frame)
+        hidden.pack_forget()
+        shown.pack(side="top", fill="both", expand=True, pady=(4, 0))
+        self.refresh_losses_list()
 
     def _report_tree(self, parent, columns, sort_command, left_aligned, on_open):
         tree = ttk.Treeview(parent, columns=[c[0] for c in columns], show="headings", selectmode="browse")
@@ -3440,6 +3553,7 @@ class EditorApp:
         self.refresh_raw_list()
         self.refresh_air_reports()
         self.refresh_compare_table()
+        self.refresh_losses_reports()
 
     @staticmethod
     def _report_values(columns, texts, row):
@@ -3590,6 +3704,56 @@ class EditorApp:
         self.notebook.select(self.units_tab)
         self.unit_tree.selection_set(iid)
         self.unit_tree.see(iid)
+
+    def refresh_losses_reports(self):
+        """Recompute the rows and the summary from the save; the side, view and search only re-select."""
+        try:
+            self.losses_sunk_all = losses.sunk_ships(self.save)
+            self.losses_aircraft_all = losses.aircraft_losses(self.save)
+            self.losses_summary = losses.summary_rows(self.losses_sunk_all, self.losses_aircraft_all)
+        except (SaveFormatError, IndexError):
+            self.losses_sunk_all, self.losses_aircraft_all, self.losses_summary = [], [], []
+        self.losses_summary_tree.delete(*self.losses_summary_tree.get_children())
+        for r in self.losses_summary:
+            self.losses_summary_tree.insert("", "end", iid=r.side, values=self._report_values(
+                LOSSES_SUMMARY_COLUMNS, LOSSES_SUMMARY_TEXT, r))
+        self.refresh_losses_list()
+
+    def refresh_losses_list(self):
+        needle = self.losses_search_var.get().strip().lower()
+        side = self.losses_side_var.get()
+        if self.losses_view_var.get() == LOSSES_VIEWS[0]:
+            rows = [r for r in self.losses_sunk_all if side in (LOSSES_ALL, r.side)
+                    and (needle in r.name.lower() or needle in r.class_name.lower())]
+            rows.sort(key=lambda r: self._industry_sort_key(LOSSES_SUNK_COLUMN_BY_ID, self.losses_sunk_sort_col, r,
+                                                            r.id), reverse=self.losses_sunk_sort_reverse)
+            tree, columns, texts, noun = self.losses_sunk_tree, LOSSES_SUNK_COLUMNS, LOSSES_SUNK_TEXT, "ship"
+        else:
+            rows = [r for r in self.losses_aircraft_all if side in (LOSSES_ALL, r.side) and needle in r.name.lower()]
+            rows.sort(key=lambda r: self._industry_sort_key(LOSSES_AIRCRAFT_COLUMN_BY_ID,
+                                                            self.losses_aircraft_sort_col, r, r.id),
+                      reverse=self.losses_aircraft_sort_reverse)
+            tree, columns, texts, noun = (self.losses_aircraft_tree, LOSSES_AIRCRAFT_COLUMNS, LOSSES_AIRCRAFT_TEXT,
+                                          "model")
+        tree.delete(*tree.get_children())
+        for r in rows:
+            tree.insert("", "end", iid=str(r.id), values=self._report_values(columns, texts, r))
+        self.losses_count.set(f"{len(rows)} {noun}{'' if len(rows) == 1 else 's'}")
+
+    def sort_losses_sunk_by(self, col):
+        same = col == self.losses_sunk_sort_col
+        self.losses_sunk_sort_reverse = (not self.losses_sunk_sort_reverse) if same else False
+        self.losses_sunk_sort_col = col
+        self.refresh_losses_list()
+
+    def sort_losses_aircraft_by(self, col):
+        same = col == self.losses_aircraft_sort_col
+        self.losses_aircraft_sort_reverse = (not self.losses_aircraft_sort_reverse) if same else False
+        self.losses_aircraft_sort_col = col
+        self.refresh_losses_list()
+
+    def jump_to_losses_ship(self):
+        self._jump_to_ship(self.losses_sunk_tree)
 
     def _industry_places_for(self, side_var, region_var):
         side = side_var.get()

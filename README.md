@@ -232,7 +232,7 @@ Load cost and AV are computed by the game.
 
 ## Reports
 
-The Reports tab holds ten reports; only the bulk switch buttons of Air production edit the save. It
+The Reports tab holds eleven reports; only the bulk switch buttons of Air production edit the save. It
 shows the game date (section 0x01: day at 42, month at 44, two-digit year at 46,
 all i16) and refreshes whenever the tab is shown, so edits made in the Bases tab
 are reflected. Double-click a row to jump to that base (Bases tab) or ship (Ships
@@ -456,6 +456,31 @@ match the save's location table. Locations missing from the file (for example
 Truscott, #1601) are "Unassigned". Region names can repeat under two ids ("Line
 Islands" is 20 and 36), so the filter lists those with their id. The code is in
 `witpae/industry.py` (rules and sums) and `witpae/regions.py` (file reader).
+
+### Losses
+
+The "Losses" sub-tab (last) is read-only. A small table on top gives, per side, the ships sunk and the aircraft
+lost this turn and in total (air, ground, flak, operations). Below it: a Side filter (All, Allied, Japanese), a
+Ships sunk / Aircraft view switch, a Search box (ship or class name, aircraft model) and a sortable table. Double-click
+a sunk ship to open it in the Ships tab (its filters are cleared if they hide it); aircraft rows do nothing.
+
+- Ships sunk: ship records (section 0x08) whose days to arrival (i32 at 36) is 19999. Columns are ID, Ship, Side,
+  Nation, Type, Class, Date, Cause, Location and Scuttled. The date is the year (u8 at 358, two digits), month (u8
+  at 359) and day (u8 at 360), sorted by YYMMDD. The cause is the u16 at 348: below 2000 it is a device id and shows
+  the device name (for example "18in Type 91 Torpedo", "800 kg AP Bomb"); 2000 to 2012 are Destroyed while
+  building, Cancelled, Written off, Internal explosion, Grounding, Foundered, Marine casualty, Abandoned, Accident,
+  Operational casualty, Hit obstruction, Collision and Kamikaze; anything else shows "Unknown (#n)". The location
+  is the hex (x u16 at 352, y u16 at 354) and the base (u16 at 356): when x and y are both 0 the ship sank at that
+  base and only the base name is shown, otherwise "x,y near <base>". Scuttled is the u8 at 363 being 1. The u16
+  at 350 is unknown and not shown. The date shows the full year ("7 Dec 1941").
+- Aircraft: aircraft records (section 0x20) hold eight i32 from offset 196: this turn's losses to air combat,
+  on the ground, to flak and in operations, then the same four totals from 212. Models with all eight at 0 are
+  not listed. The side is the aircraft's side byte (u8 at 228).
+- The sample save (the 10 Dec 41 test save) has 14 sunk ships (Tennessee and Prince of Wales on 7 Dec 41, the
+  Indianapolis on 8 Dec 41, three Japanese midget submarines) and 41 aircraft models with losses.
+- The offsets come from WiTPTracker's reader and match the game data in the sample saves, but they have not been
+  compared with the game's own screens yet. The ship bytes at 337 and 396 hold the other side's sinking claims
+  (fog of war); they are not shown. The code is in `witpae/losses.py`.
 
 ## Backups
 

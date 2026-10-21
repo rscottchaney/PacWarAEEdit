@@ -217,8 +217,8 @@ class GuiSmokeTests(unittest.TestCase):
         has_art = os.path.exists(os.path.join(os.path.dirname(SAVE_015), "..", "..", "..", "ART", "J_PlaneSide.bmp"))
         app = witpae_editor.EditorApp(self.root)
         self.assertTrue(app.load(SAVE_015))
-        last = app.reports_notebook.tabs()[-1]
-        self.assertEqual(app.reports_notebook.tab(last, "text"), "Aircraft comparison")
+        tabs = [app.reports_notebook.tab(t, "text") for t in app.reports_notebook.tabs()]
+        self.assertEqual(tabs[-2:], ["Aircraft comparison", "Losses"])
         col_a, col_b = app.compare_cols
         # Defaults: the first Japanese and the first Allied fighter.
         model_a = app.aircraft[app.compare_ids[col_a["model"].get()]]
@@ -1031,7 +1031,7 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertTrue(app.load(SAVE_015))
         self.root.update()
         tabs = [app.reports_notebook.tab(t, "text") for t in app.reports_notebook.tabs()]
-        self.assertEqual(tabs[-3:-1], ["Air production", "Engines"])
+        self.assertEqual(tabs[-4:-2], ["Air production", "Engines"])
         self.assertEqual(tabs.index("Raw materials") + 1, tabs.index("Air production"))
         # Air production: the Zero is Japanese, built by one factory (place 236, slot 6).
         shown = len(app.air_tree.get_children())
@@ -1307,6 +1307,61 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertEqual(app.notebook.select(), str(app.units_tab))
         self.assertEqual(app.unit_tree.selection(), (unit_id,))
         self.assertEqual(app.unit_search_var.get(), "")
+
+    def test_losses_report(self):
+        import witpae_editor
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        app.notebook.select(app.reports_tab)
+        self.root.update()
+        summary, tree = app.losses_summary_tree, app.losses_sunk_tree
+        self.assertEqual(summary.set("Allied", "ships"), "11")
+        self.assertEqual(summary.set("Japanese", "ships"), "3")
+        self.assertEqual(len(tree.get_children()), 14)
+        self.assertEqual(app.losses_count.get(), "14 ships")
+        self.assertEqual(tree.set("3152", "date"), "7 Dec 1941")
+        self.assertEqual(tree.set("3168", "location"), "52,82 near Mersing")
+        self.assertEqual(tree.set("3152", "scuttled"), "")
+        # Side filter and search.
+        app.losses_side_var.set("Japanese")
+        app.refresh_losses_list()
+        self.assertEqual(sorted(tree.get_children()), ["10037", "10042", "10045"])
+        app.losses_side_var.set("All")
+        app.losses_search_var.set("tennessee")
+        self.assertEqual(tree.get_children(), ("3152",))
+        app.losses_search_var.set("")
+        # Sorting by date: the default (date column) is ascending, a second click reverses it.
+        dates = [tree.set(i, "date") for i in tree.get_children()]
+        self.assertEqual((dates[0], dates[-1]), ("7 Dec 1941", "8 Dec 1941"))
+        app.sort_losses_sunk_by("date")
+        dates = [tree.set(i, "date") for i in tree.get_children()]
+        self.assertEqual((dates[0], dates[-1]), ("8 Dec 1941", "7 Dec 1941"))
+        # Aircraft view.
+        app.losses_view_var.set("Aircraft")
+        app._show_losses_view()
+        self.root.update()
+        air = app.losses_aircraft_tree
+        self.assertEqual(app.losses_aircraft_frame.winfo_manager(), "pack")
+        self.assertEqual(app.losses_sunk_frame.winfo_manager(), "")
+        self.assertEqual(air.set("284", "ground"), "9")
+        self.assertEqual(air.set("342", "turn_total"), "21")
+        self.assertEqual(app.losses_count.get().split()[1], "models")
+        app.losses_side_var.set("Japanese")
+        app.refresh_losses_list()
+        self.assertTrue(all(air.set(i, "side") == "Japanese" for i in air.get_children()))
+        app.sort_losses_aircraft_by("name")
+        names = [air.set(i, "name").lower() for i in air.get_children()]
+        self.assertEqual(names, sorted(names))
+        # Double-click on a sunk ship opens it in the Ships tab, clearing the filters.
+        app.losses_view_var.set("Ships sunk")
+        app.losses_side_var.set("All")
+        app._show_losses_view()
+        app.shiprec_search_var.set("zzz")
+        tree.selection_set("3152")
+        app.jump_to_losses_ship()
+        self.root.update()
+        self.assertEqual(app.notebook.select(), str(app.shiprec_tab))
+        self.assertEqual(app.shiprec_tree.selection(), ("3152",))
 
     def test_reports_without_game_date(self):
         import witpae_editor
