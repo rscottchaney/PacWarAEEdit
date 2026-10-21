@@ -13,7 +13,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from witpae import (aircraft, airgroups, airproduction, bases, factories, industry, landunits, lcuproduction, losses, pilotpool, planeart,
-                    regions, reports, shipproduction, shiprecords, ships, taskforces)
+                    regions, reports, shipproduction, shiprecords, shiprepair, ships, taskforces)
 from witpae.container import SaveFile, SaveFormatError
 from witpae.fileio import is_pbem, save_with_backup
 
@@ -347,6 +347,79 @@ LOSSES_NOTE = (
     "totals; only models with a loss are listed. Offsets are from WiTPTracker's reader and match the saves seen; not "
     "yet compared with the game's screens. Sinking claims of the other side (fog of war) are not shown.")
 
+REPAIR_ALL = "All"
+REPAIR_VIEWS = ("Ships", "Ports")
+REPAIR_SUMMARY_COLUMNS = [
+    ("side", "Side", 80, False, lambda r: r.side),
+    ("ships", "Damaged ships", 100, True, lambda r: r.ships),
+    ("at_sea", "At sea", 70, True, lambda r: r.at_sea),
+    ("in_port", "In port", 70, True, lambda r: r.in_port),
+    ("shipyard", "Shipyard mode", 100, True, lambda r: r.shipyard),
+    ("tons", "Damaged tons", 100, True, lambda r: r.tons),
+]
+REPAIR_SUMMARY_TEXT = dict.fromkeys(("ships", "at_sea", "in_port", "shipyard", "tons"), _num)
+REPAIR_SHIP_COLUMNS = [
+    ("id", "ID", 55, True, lambda r: r.id),
+    ("name", "Ship", 160, False, lambda r: r.name),
+    ("side", "Side", 70, False, lambda r: r.side),
+    ("nation", "Nation", 55, False, lambda r: r.nation),
+    ("type", "Type", 50, False, lambda r: r.type),
+    ("class", "Class", 130, False, lambda r: r.class_name),
+    ("tons", "Tons", 65, True, lambda r: r.tons),
+    ("location", "Location", 190, False, lambda r: r.location),
+    ("fires", "Fires", 45, True, lambda r: r.fires),
+    ("system", "Sys", 40, True, lambda r: r.system),
+    ("flotation", "Flt", 40, True, lambda r: r.flotation),
+    ("major_flotation", "Maj Flt", 55, True, lambda r: r.major_flotation),
+    ("engine", "Eng", 40, True, lambda r: r.engine),
+    ("major_engine", "Maj Eng", 55, True, lambda r: r.major_engine),
+    ("weapons", "Weapons", 60, True, lambda r: r.weapons),
+    ("weapon_text", "Damaged weapons", 190, False, lambda r: r.weapon_text),
+    ("priority", "Priority", 65, False, lambda r: r.priority),
+    ("mode", "Mode", 85, False, lambda r: r.mode),
+    ("delay", "Delay", 50, True, lambda r: r.delay),
+    ("min_port", "Min port", 60, True, lambda r: r.min_port),
+    ("min_yard", "Min yard", 65, True, lambda r: r.min_yard),
+]
+REPAIR_SHIP_COLUMN_BY_ID = {c[0]: c for c in REPAIR_SHIP_COLUMNS}
+REPAIR_SHIP_TEXT = {"tons": _num, "min_port": lambda v: "-" if v >= shiprepair.NO_PORT else str(v),
+                    "min_yard": _num}
+REPAIR_PORT_COLUMNS = [
+    ("id", "ID", 55, True, lambda r: r.id),
+    ("name", "Port", 160, False, lambda r: r.name),
+    ("side", "Side", 70, False, lambda r: r.side),
+    ("port_size", "Port size", 65, True, lambda r: r.port_size),
+    ("port_max", "Port max", 65, True, lambda r: r.port_max),
+    ("port_damage", "Port damage", 80, True, lambda r: r.port_damage),
+    ("largest", "Largest ship", 85, True, lambda r: r.largest),
+    ("total", "Total docked", 90, True, lambda r: r.total),
+    ("yard_size", "Yard size", 65, True, lambda r: r.yard_size),
+    ("yard_damage", "Yard damage", 85, True, lambda r: r.yard_damage),
+    ("yard_capacity", "Yard tons", 80, True, lambda r: r.yard_capacity),
+    ("repair_points", "Repair pts/day", 95, True, lambda r: r.repair_points),
+    ("ships", "Damaged ships", 95, True, lambda r: r.ships),
+    ("tons", "Damaged tons", 90, True, lambda r: r.tons),
+    ("shipyard_tons", "Shipyard-mode tons", 120, True, lambda r: r.shipyard_tons),
+    ("largest_tons", "Largest damaged", 105, True, lambda r: r.largest_tons),
+    ("oversize", "Too big", 60, True, lambda r: r.oversize),
+]
+REPAIR_PORT_COLUMN_BY_ID = {c[0]: c for c in REPAIR_PORT_COLUMNS}
+REPAIR_PORT_TEXT = dict.fromkeys(("largest", "total", "yard_capacity", "repair_points", "tons", "shipyard_tons",
+                                  "largest_tons"), _num)
+REPAIR_PORT_TEXT["oversize"] = lambda v: str(v) if v else ""
+REPAIR_NOTE = (
+    "Arrived ships with any fires, system, flotation, major flotation, engine or major engine damage (u8 at 331 to "
+    "336) or damaged weapon mounts (u8 at 270 + slot; the slot's device is the u16 at 70 + 2 x slot). Priority is "
+    "the u8 at 338 (Low, Normal, High, Critical), mode the u8 at 339 (Readiness, Pierside, Repair ship, Shipyard) "
+    "and delay the u16 at 342. Tons is the class displacement. Location: the base of a docked ship; a TF is in "
+    "port when its hex is the hex of a base of its own side, otherwise at sea. Ports: size, max and damage from the location record, "
+    "the repair yard is the factory of type 524; repair points a day = yard size x 10 and yard capacity = yard "
+    "size x 1000 tons (manual 14.2.3.1); largest ship and total docked tonnage by port size from the manual's "
+    "table (14.2). Min port is the smallest size whose largest ship reaches the tonnage ('-' = none), min yard the "
+    "tonnage in thousands rounded up. Too big counts the damaged ships there larger than both the port's "
+    "largest ship and the yard capacity. Offsets are from WiTPTracker's reader; not yet compared with the game's "
+    "screens.")
+
 
 
 def _shortest_text(v):
@@ -633,6 +706,13 @@ class EditorApp:
         self.losses_sunk_sort_reverse = False
         self.losses_aircraft_sort_col = "total"
         self.losses_aircraft_sort_reverse = True
+        self.repair_ships_all = []
+        self.repair_ports_all = []
+        self.repair_summary = []
+        self.repair_ship_sort_col = "tons"
+        self.repair_ship_sort_reverse = True
+        self.repair_port_sort_col = "tons"
+        self.repair_port_sort_reverse = True
         self.industry_places = []
         self.region_ids = region_choices()
         self.factory_report_sort_col = "id"
@@ -811,6 +891,7 @@ class EditorApp:
         self._build_air_reports()
         self._build_compare_report()
         self._build_losses_report()
+        self._build_repair_report()
 
         # Bound last so the handlers never run before the lists exist.
         self.notebook.bind("<<NotebookTabChanged>>", lambda e: self._reports_shown())
@@ -1096,6 +1177,50 @@ class EditorApp:
         hidden.pack_forget()
         shown.pack(side="top", fill="both", expand=True, pady=(4, 0))
         self.refresh_losses_list()
+
+    def _build_repair_report(self):
+        rep = ttk.Frame(self.reports_notebook, padding=4)
+        self.reports_notebook.add(rep, text="Ship repair")
+        ttk.Label(rep, text=REPAIR_NOTE, wraplength=1100, justify="left").pack(side="bottom", anchor="w",
+                                                                               pady=(4, 0))
+        top = ttk.Frame(rep)
+        top.pack(side="top", fill="x")
+        self.repair_summary_tree = self._report_tree(top, REPAIR_SUMMARY_COLUMNS, lambda c: None, ("side",),
+                                                     lambda: None)
+        self.repair_summary_tree.configure(height=2)
+        bar = ttk.Frame(rep)
+        bar.pack(side="top", fill="x", pady=(4, 0))
+        self.repair_side_var = tk.StringVar(value=REPAIR_ALL)
+        self._report_combo(bar, "Side:", self.repair_side_var, [REPAIR_ALL, "Allied", "Japanese"],
+                           self.refresh_repair_list, 9)
+        self.repair_view_var = tk.StringVar(value=REPAIR_VIEWS[0])
+        for view in REPAIR_VIEWS:
+            ttk.Radiobutton(bar, text=view, value=view, variable=self.repair_view_var,
+                            command=self._show_repair_view).pack(side="left", padx=2)
+        ttk.Label(bar, text="  Search:").pack(side="left")
+        self.repair_search_var = tk.StringVar()
+        self.repair_search_var.trace_add("write", lambda *a: self.refresh_repair_list())
+        ttk.Entry(bar, textvariable=self.repair_search_var, width=20).pack(side="left", padx=4)
+        self.repair_count = tk.StringVar()
+        ttk.Label(bar, textvariable=self.repair_count).pack(side="left", padx=8)
+        self.repair_ship_frame = ttk.Frame(rep)
+        self.repair_ship_tree = self._report_tree(self.repair_ship_frame, REPAIR_SHIP_COLUMNS,
+                                                  self.sort_repair_ships_by,
+                                                  ("name", "side", "nation", "type", "class", "location",
+                                                   "weapon_text", "priority", "mode"), self.jump_to_repair_ship)
+        self.repair_port_frame = ttk.Frame(rep)
+        self.repair_port_tree = self._report_tree(self.repair_port_frame, REPAIR_PORT_COLUMNS,
+                                                  self.sort_repair_ports_by, ("name", "side"),
+                                                  self.jump_to_repair_port)
+        self._show_repair_view()
+
+    def _show_repair_view(self):
+        ships = self.repair_view_var.get() == REPAIR_VIEWS[0]
+        shown, hidden = (self.repair_ship_frame, self.repair_port_frame) if ships else (
+            self.repair_port_frame, self.repair_ship_frame)
+        hidden.pack_forget()
+        shown.pack(side="top", fill="both", expand=True, pady=(4, 0))
+        self.refresh_repair_list()
 
     def _report_tree(self, parent, columns, sort_command, left_aligned, on_open):
         tree = ttk.Treeview(parent, columns=[c[0] for c in columns], show="headings", selectmode="browse")
@@ -3554,6 +3679,7 @@ class EditorApp:
         self.refresh_air_reports()
         self.refresh_compare_table()
         self.refresh_losses_reports()
+        self.refresh_repair_reports()
 
     @staticmethod
     def _report_values(columns, texts, row):
@@ -3754,6 +3880,58 @@ class EditorApp:
 
     def jump_to_losses_ship(self):
         self._jump_to_ship(self.losses_sunk_tree)
+
+    def refresh_repair_reports(self):
+        """Recompute the rows and the summary from the save; the side, view and search only re-select."""
+        try:
+            self.repair_ships_all = shiprepair.damaged_ships(self.save)
+            self.repair_ports_all = shiprepair.repair_ports(self.save, self.repair_ships_all)
+            self.repair_summary = shiprepair.summary_rows(self.repair_ships_all)
+        except (SaveFormatError, IndexError):
+            self.repair_ships_all, self.repair_ports_all, self.repair_summary = [], [], []
+        self.repair_summary_tree.delete(*self.repair_summary_tree.get_children())
+        for r in self.repair_summary:
+            self.repair_summary_tree.insert("", "end", iid=r.side, values=self._report_values(
+                REPAIR_SUMMARY_COLUMNS, REPAIR_SUMMARY_TEXT, r))
+        self.refresh_repair_list()
+
+    def refresh_repair_list(self):
+        needle = self.repair_search_var.get().strip().lower()
+        side = self.repair_side_var.get()
+        if self.repair_view_var.get() == REPAIR_VIEWS[0]:
+            rows = [r for r in self.repair_ships_all if side in (REPAIR_ALL, r.side)
+                    and (needle in r.name.lower() or needle in r.class_name.lower()
+                         or needle in r.location.lower())]
+            rows.sort(key=lambda r: self._industry_sort_key(REPAIR_SHIP_COLUMN_BY_ID, self.repair_ship_sort_col, r,
+                                                            r.id), reverse=self.repair_ship_sort_reverse)
+            tree, columns, texts, noun = self.repair_ship_tree, REPAIR_SHIP_COLUMNS, REPAIR_SHIP_TEXT, "ship"
+        else:
+            rows = [r for r in self.repair_ports_all if side in (REPAIR_ALL, r.side) and needle in r.name.lower()]
+            rows.sort(key=lambda r: self._industry_sort_key(REPAIR_PORT_COLUMN_BY_ID, self.repair_port_sort_col, r,
+                                                            r.id), reverse=self.repair_port_sort_reverse)
+            tree, columns, texts, noun = self.repair_port_tree, REPAIR_PORT_COLUMNS, REPAIR_PORT_TEXT, "port"
+        tree.delete(*tree.get_children())
+        for r in rows:
+            tree.insert("", "end", iid=str(r.id), values=self._report_values(columns, texts, r))
+        self.repair_count.set(f"{len(rows)} {noun}{'' if len(rows) == 1 else 's'}")
+
+    def sort_repair_ships_by(self, col):
+        same = col == self.repair_ship_sort_col
+        self.repair_ship_sort_reverse = (not self.repair_ship_sort_reverse) if same else False
+        self.repair_ship_sort_col = col
+        self.refresh_repair_list()
+
+    def sort_repair_ports_by(self, col):
+        same = col == self.repair_port_sort_col
+        self.repair_port_sort_reverse = (not self.repair_port_sort_reverse) if same else False
+        self.repair_port_sort_col = col
+        self.refresh_repair_list()
+
+    def jump_to_repair_ship(self):
+        self._jump_to_ship(self.repair_ship_tree)
+
+    def jump_to_repair_port(self):
+        self.jump_to_industry_place(self.repair_port_tree)
 
     def _industry_places_for(self, side_var, region_var):
         side = side_var.get()
