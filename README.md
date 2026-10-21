@@ -232,7 +232,7 @@ Load cost and AV are computed by the game.
 
 ## Reports
 
-The Reports tab holds eleven reports; only the bulk switch buttons of Air production edit the save. It
+The Reports tab holds twelve reports; only the bulk switch buttons of Air production edit the save. It
 shows the game date (section 0x01: day at 42, month at 44, two-digit year at 46,
 all i16) and refreshes whenever the tab is shown, so edits made in the Bases tab
 are reflected. Double-click a row to jump to that base (Bases tab) or ship (Ships
@@ -459,7 +459,7 @@ Islands" is 20 and 36), so the filter lists those with their id. The code is in
 
 ### Losses
 
-The "Losses" sub-tab (last) is read-only. A small table on top gives, per side, the ships sunk and the aircraft
+The "Losses" sub-tab is read-only. A small table on top gives, per side, the ships sunk and the aircraft
 lost this turn and in total (air, ground, flak, operations). Below it: a Side filter (All, Allied, Japanese), a
 Ships sunk / Aircraft view switch, a Search box (ship or class name, aircraft model) and a sortable table. Double-click
 a sunk ship to open it in the Ships tab (its filters are cleared if they hide it); aircraft rows do nothing.
@@ -481,6 +481,33 @@ a sunk ship to open it in the Ships tab (its filters are cleared if they hide it
 - The offsets come from WiTPTracker's reader and match the game data in the sample saves, but they have not been
   compared with the game's own screens yet. The ship bytes at 337 and 396 hold the other side's sinking claims
   (fog of war); they are not shown. The code is in `witpae/losses.py`.
+
+### Ship repair
+
+The "Ship repair" sub-tab (last) is read-only. A small table on top gives, per side, the damaged ships, how many
+are at sea and in port, how many are in Shipyard repair mode and their total tonnage. Below it: a Side filter (All,
+Allied, Japanese), a Ships / Ports view switch, a Search box (ship, class or location; port name) and a sortable
+table. Double-click a ship to open it in the Ships tab, a port to open it in the Bases tab (filters are cleared if
+they hide it).
+
+- Ships: arrived ships (days to arrival 0) with any of the six damage values (fires, system, flotation, major
+  flotation, engine, major engine; u8 at 331 to 336) above 0, or damaged weapon mounts. The u8 at 270 + k is the
+  number of damaged mounts in weapon slot k (device u16 at 70 + 2k); the text reads like "2x 25mm Type 96 AA Gun".
+  Priority is the u8 at 338 (Low, Normal, High, Critical), mode the u8 at 339 (Readiness, Pierside, Repair ship,
+  Shipyard) and delay (days) the u16 at 342; other codes show "Unknown (n)". Tons is the class displacement (u16 at
+  28 of the ship class). Min port is the smallest port size whose largest ship docked reaches the tonnage ("-" over
+  84,000 t) and Min yard the tonnage in thousands, rounded up.
+- Location: the base name of a docked ship; "TF n at <base>" for a task force whose hex is the hex of a base of its
+  own side (an enemy base does not count); otherwise
+  "TF n at sea x,y". Ships in port are grouped by that base for the Ports view.
+- Ports: one row for each port holding a damaged ship, with port size, max and damage, the largest ship and total
+  tonnage a port of that size can dock (manual 14.2 table), the repair yard (the factory of type 524: size and
+  damage), the repair points a day (yard size x 10, manual 14.2.3.1) and the yard capacity (yard size x 1,000 t), the
+  damaged ships there, their tonnage, the tonnage in Shipyard mode, the largest damaged ship, and "Too big": the
+  number of damaged ships larger than both the port's largest ship and the yard capacity.
+- The sample save has 105 damaged ships (69 Allied, 36 Japanese; for example Ushio and Tatsuta in task forces at sea,
+  Java in a TF at Soerabaja, Amagisan Maru at Kagoshima). The offsets come from WiTPTracker's reader and match the sample saves;
+  they have not been compared with the game's own screens yet. The code is in `witpae/shiprepair.py`.
 
 ## Backups
 

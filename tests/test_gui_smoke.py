@@ -218,7 +218,7 @@ class GuiSmokeTests(unittest.TestCase):
         app = witpae_editor.EditorApp(self.root)
         self.assertTrue(app.load(SAVE_015))
         tabs = [app.reports_notebook.tab(t, "text") for t in app.reports_notebook.tabs()]
-        self.assertEqual(tabs[-2:], ["Aircraft comparison", "Losses"])
+        self.assertEqual(tabs[-3:], ["Aircraft comparison", "Losses", "Ship repair"])
         col_a, col_b = app.compare_cols
         # Defaults: the first Japanese and the first Allied fighter.
         model_a = app.aircraft[app.compare_ids[col_a["model"].get()]]
@@ -1031,7 +1031,7 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertTrue(app.load(SAVE_015))
         self.root.update()
         tabs = [app.reports_notebook.tab(t, "text") for t in app.reports_notebook.tabs()]
-        self.assertEqual(tabs[-4:-2], ["Air production", "Engines"])
+        self.assertEqual(tabs[-5:-3], ["Air production", "Engines"])
         self.assertEqual(tabs.index("Raw materials") + 1, tabs.index("Air production"))
         # Air production: the Zero is Japanese, built by one factory (place 236, slot 6).
         shown = len(app.air_tree.get_children())
@@ -1362,6 +1362,79 @@ class GuiSmokeTests(unittest.TestCase):
         self.root.update()
         self.assertEqual(app.notebook.select(), str(app.shiprec_tab))
         self.assertEqual(app.shiprec_tree.selection(), ("3152",))
+
+    def test_ship_repair_report(self):
+        import witpae_editor
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        app.notebook.select(app.reports_tab)
+        self.root.update()
+        summary, tree = app.repair_summary_tree, app.repair_ship_tree
+        self.assertEqual(summary.set("Allied", "ships"), "69")
+        self.assertEqual(summary.set("Japanese", "ships"), "36")
+        self.assertEqual(summary.set("Allied", "tons"), "554,621")
+        self.assertEqual(len(tree.get_children()), 105)
+        self.assertEqual(app.repair_count.get(), "105 ships")
+        self.assertEqual(tree.set("240", "location"), "TF 14141 at sea 143,56")
+        self.assertEqual(tree.set("125", "weapon_text"), "2x 25mm Type 96 AA Gun")
+        self.assertEqual(tree.set("1228", "tons"), "6,825")
+        self.assertEqual(tree.set("1228", "min_port"), "2")
+        # Default sort: tons, largest first; a second click on the column reverses it.
+        tons = [int(tree.set(i, "tons").replace(",", "")) for i in tree.get_children()]
+        self.assertEqual(tons, sorted(tons, reverse=True))
+        app.sort_repair_ships_by("tons")
+        tons = [int(tree.set(i, "tons").replace(",", "")) for i in tree.get_children()]
+        self.assertEqual(tons, sorted(tons))
+        # Side filter and search.
+        app.repair_side_var.set("Japanese")
+        app.refresh_repair_list()
+        self.assertEqual(len(tree.get_children()), 36)
+        self.assertTrue(all(tree.set(i, "side") == "Japanese" for i in tree.get_children()))
+        app.repair_side_var.set("All")
+        app.repair_search_var.set("soerabaja")
+        self.assertEqual(len(tree.get_children()), 5)
+        self.assertIn("3231", tree.get_children())
+        self.assertEqual(app.repair_count.get(), "5 ships")
+        app.repair_search_var.set("")
+        # Ports view.
+        app.repair_view_var.set("Ports")
+        app._show_repair_view()
+        self.root.update()
+        ports = app.repair_port_tree
+        self.assertEqual(app.repair_port_frame.winfo_manager(), "pack")
+        self.assertEqual(app.repair_ship_frame.winfo_manager(), "")
+        self.assertEqual(ports.set("1160", "ships"), "5")
+        self.assertEqual(ports.set("1160", "tons"), "13,113")
+        self.assertEqual(ports.set("229", "repair_points"), "100")
+        self.assertEqual(ports.set("1160", "oversize"), "")
+        self.assertEqual(app.repair_count.get(), f"{len(ports.get_children())} ports")
+        app.repair_search_var.set("soerabaja")
+        self.assertEqual(ports.get_children(), ("1160",))
+        self.assertEqual(app.repair_count.get(), "1 port")
+        app.repair_search_var.set("")
+        app.repair_side_var.set("Japanese")
+        app.refresh_repair_list()
+        self.assertTrue(all(ports.set(i, "side") == "Japanese" for i in ports.get_children()))
+        app.sort_repair_ports_by("name")
+        names = [ports.set(i, "name").lower() for i in ports.get_children()]
+        self.assertEqual(names, sorted(names))
+        # Double-click on a port opens it in the Bases tab; on a ship, in the Ships tab.
+        app.repair_side_var.set("All")
+        app.refresh_repair_list()
+        app.search_var.set("zzz")
+        ports.selection_set("1160")
+        app.jump_to_repair_port()
+        self.root.update()
+        self.assertEqual(app.notebook.select(), str(app.bases_tab))
+        self.assertEqual(app.tree.selection(), ("1160",))
+        app.repair_view_var.set("Ships")
+        app._show_repair_view()
+        app.shiprec_search_var.set("zzz")
+        tree.selection_set("240")
+        app.jump_to_repair_ship()
+        self.root.update()
+        self.assertEqual(app.notebook.select(), str(app.shiprec_tab))
+        self.assertEqual(app.shiprec_tree.selection(), ("240",))
 
     def test_reports_without_game_date(self):
         import witpae_editor
