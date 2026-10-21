@@ -14,7 +14,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from witpae import (aircraft, airgroups, airproduction, bases, chart, factories, history, industry, landunits, lcuproduction, leaders, losses, minefields,
-                    pilotpool, planeart, regions, reports, shipproduction, shiprecords, shiprepair, ships, taskforces)
+                    pilotpool, planeart, regions, reports, shipproduction, shiprecords, shiprepair, ships, taskforces, victory)
 from witpae.container import SaveFile, SaveFormatError
 from witpae.fileio import is_pbem, save_with_backup
 
@@ -488,6 +488,47 @@ MINE_NOTE = (
     "force; each protects 150 mines (manual 6.6.1.2.2), so Protected = the smaller of Mines and ACMs x 150. "
     "Layout from WiTPTracker's reader; not yet compared with the game's screens.")
 
+VP_ALL = "All"
+VP_SUMMARY_COLUMNS = [
+    ("side", "Side", 80, False, lambda r: r.side),
+    ("score", "Score", 70, True, lambda r: r.score),
+    ("bases", "Bases", 60, True, lambda r: r.bases),
+    ("base_points", "Base points", 85, True, lambda r: r.base_points),
+    ("aircraft", "Aircraft destroyed", 120, True, lambda r: r.aircraft),
+    ("aircraft_points", "Aircraft points", 100, True, lambda r: r.aircraft_points),
+    ("ground_points", "Ground points", 95, True, lambda r: r.ground_points),
+    ("ships_sunk", "Enemy ships sunk", 115, True, lambda r: r.ships_sunk),
+    ("other", "Other", 70, True, lambda r: r.other),
+    ("political_points", "Political points", 105, True, lambda r: r.political_points),
+]
+VP_SUMMARY_TEXT = {c[0]: _num for c in VP_SUMMARY_COLUMNS if c[3]}
+VP_BASE_COLUMNS = [
+    ("name", "Base", 170, False, lambda r: r.name),
+    ("side", "Owner", 70, False, lambda r: r.side),
+    ("region", "Region", 150, False, lambda r: r.region),
+    ("value_japan", "Value J", 60, True, lambda r: r.value_japan),
+    ("value_allies", "Value A", 60, True, lambda r: r.value_allies),
+    ("port", "Port", 45, True, lambda r: r.port),
+    ("airfield", "Airfield", 60, True, lambda r: r.airfield),
+    ("supply_pct", "Supply %", 70, True, lambda r: r.supply_pct),
+    ("full", "Full", 65, True, lambda r: r.full),
+    ("scored", "Scored", 65, True, lambda r: r.scored),
+    ("to_japan", "To Japan", 70, True, lambda r: r.to_japan),
+    ("to_allies", "To Allies", 70, True, lambda r: r.to_allies),
+]
+VP_BASE_COLUMN_BY_ID = {c[0]: c for c in VP_BASE_COLUMNS}
+VP_BASE_TEXT = dict.fromkeys(("full", "scored", "to_japan", "to_allies"), _num)
+VP_NOTE = (
+    "Score is the stored victory points (scenario section 0x01, i32 at 116 Japanese and 120 Allied); the columns after "
+    "it are an estimate from manual chapter 17. A base or town is worth the owner's basic VP x (port size + 2 x "
+    "airfield size) (Value J and A are the basic VP; Full, To Japan and To Allies are for that owner) and scores 25% "
+    "of that plus 75% x the supplied share (supply / supply required). Aircraft points are 1 VP per enemy aircraft "
+    "lost, 2 for a heavy bomber (4 or more engines). Ground points are the other side's ground losses (i32 at 64876 "
+    "Japanese, 64880 Allied; twelfths of a VP) // 12. Other = Score less base, aircraft and ground points; it covers "
+    "ships sunk, industry damage and rules not modelled, and can be negative. Political points are the i32 at 65788 "
+    "(Japanese) and 65792 (Allied). Victory levels per manual 17.1: ratio 1.75 decisive, 1.25 marginal. Offsets "
+    "from WiTPTracker's reader; not yet compared with the game's Intel screen.")
+
 
 
 def _shortest_text(v):
@@ -820,6 +861,10 @@ class EditorApp:
         self.minefield_hex_sort_reverse = True
         self.minefield_field_sort_col = "mines"
         self.minefield_field_sort_reverse = True
+        self.vp_summary = []
+        self.vp_bases_all = []
+        self.vp_sort_col = "scored"
+        self.vp_sort_reverse = True
         self.history_dir = None
         self.history_snaps = []
         self.history_problems = []
@@ -1012,6 +1057,7 @@ class EditorApp:
         self._build_losses_report()
         self._build_repair_report()
         self._build_minefield_report()
+        self._build_victory_report()
 
         # Bound last so the handlers never run before the lists exist.
         self.notebook.bind("<<NotebookTabChanged>>", lambda e: self._reports_shown())
@@ -1383,6 +1429,31 @@ class EditorApp:
         hidden.pack_forget()
         shown.pack(side="top", fill="both", expand=True, pady=(4, 0))
         self.refresh_minefield_list()
+
+    def _build_victory_report(self):
+        rep = ttk.Frame(self.reports_notebook, padding=4)
+        self.reports_notebook.add(rep, text="Victory points")
+        ttk.Label(rep, text=VP_NOTE, wraplength=1100, justify="left").pack(side="bottom", anchor="w", pady=(4, 0))
+        top = ttk.Frame(rep)
+        top.pack(side="top", fill="x")
+        self.vp_summary_tree = self._report_tree(top, VP_SUMMARY_COLUMNS, lambda c: None, ("side",), lambda: None)
+        self.vp_summary_tree.configure(height=2)
+        self.vp_status = tk.StringVar()
+        ttk.Label(rep, textvariable=self.vp_status, justify="left").pack(side="top", anchor="w", pady=(4, 0))
+        bar = ttk.Frame(rep)
+        bar.pack(side="top", fill="x", pady=(4, 0))
+        self.vp_side_var = tk.StringVar(value=VP_ALL)
+        self._report_combo(bar, "Side:", self.vp_side_var, [VP_ALL, "Allied", "Japanese"], self.refresh_vp_list, 9)
+        ttk.Label(bar, text="  Search:").pack(side="left")
+        self.vp_search_var = tk.StringVar()
+        self.vp_search_var.trace_add("write", lambda *a: self.refresh_vp_list())
+        ttk.Entry(bar, textvariable=self.vp_search_var, width=20).pack(side="left", padx=4)
+        self.vp_count = tk.StringVar()
+        ttk.Label(bar, textvariable=self.vp_count).pack(side="left", padx=8)
+        frame = ttk.Frame(rep)
+        frame.pack(side="top", fill="both", expand=True, pady=(4, 0))
+        self.vp_tree = self._report_tree(frame, VP_BASE_COLUMNS, self.sort_vp_by, ("name", "side", "region"),
+                                         self.jump_to_vp_base)
 
     def _report_tree(self, parent, columns, sort_command, left_aligned, on_open):
         tree = ttk.Treeview(parent, columns=[c[0] for c in columns], show="headings", selectmode="browse")
@@ -4043,6 +4114,7 @@ class EditorApp:
         self.refresh_losses_reports()
         self.refresh_repair_reports()
         self.refresh_minefield_reports()
+        self.refresh_vp_reports()
 
     @staticmethod
     def _report_values(columns, texts, row):
@@ -4354,6 +4426,45 @@ class EditorApp:
         sel = tree.selection()
         if sel and not sel[0].startswith("-"):  # open-sea rows have no place to jump to
             self.jump_to_industry_place(tree)
+
+    def refresh_vp_reports(self):
+        """Recompute the scores and the base rows from the save; the side and search only re-select."""
+        try:
+            self.vp_summary = victory.scores(self.save)
+            self.vp_bases_all = victory.base_rows(self.save)
+        except (SaveFormatError, IndexError):
+            self.vp_summary, self.vp_bases_all = [], []
+        try:
+            level, automatic = victory.status_lines(self.save, self.vp_summary or None)
+            self.vp_status.set(f"{level}. {automatic}.")
+        except (SaveFormatError, IndexError):
+            self.vp_status.set("")
+        tree = self.vp_summary_tree
+        tree.delete(*tree.get_children())
+        for r in self.vp_summary:
+            tree.insert("", "end", iid=r.side, values=self._report_values(VP_SUMMARY_COLUMNS, VP_SUMMARY_TEXT, r))
+        self.refresh_vp_list()
+
+    def refresh_vp_list(self):
+        needle = self.vp_search_var.get().strip().lower()
+        side = self.vp_side_var.get()
+        rows = [r for r in self.vp_bases_all if side in (VP_ALL, r.side)
+                and (needle in r.name.lower() or needle in r.region.lower())]
+        rows.sort(key=lambda r: self._industry_sort_key(VP_BASE_COLUMN_BY_ID, self.vp_sort_col, r, r.id),
+                  reverse=self.vp_sort_reverse)
+        tree = self.vp_tree
+        tree.delete(*tree.get_children())
+        for r in rows:
+            tree.insert("", "end", iid=str(r.id), values=self._report_values(VP_BASE_COLUMNS, VP_BASE_TEXT, r))
+        self.vp_count.set(f"{len(rows)} base{'' if len(rows) == 1 else 's'}")
+
+    def sort_vp_by(self, col):
+        self.vp_sort_reverse = (not self.vp_sort_reverse) if col == self.vp_sort_col else False
+        self.vp_sort_col = col
+        self.refresh_vp_list()
+
+    def jump_to_vp_base(self):
+        self.jump_to_industry_place(self.vp_tree)
 
     def _industry_places_for(self, side_var, region_var):
         side = side_var.get()

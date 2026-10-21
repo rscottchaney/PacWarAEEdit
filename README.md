@@ -266,7 +266,7 @@ edits go through `airgroups.Leader`.
 
 ## Reports
 
-The Reports tab holds thirteen reports; only the bulk switch buttons of Air production edit the save. It
+The Reports tab holds fourteen reports; only the bulk switch buttons of Air production edit the save. It
 shows the game date (section 0x01: day at 42, month at 44, two-digit year at 46,
 all i16) and refreshes whenever the tab is shown, so edits made in the Bases tab
 are reflected. Double-click a row to jump to that base (Bases tab) or ship (Ships
@@ -575,6 +575,35 @@ open sea do nothing.
   reader and matches the sample saves; it has not been compared with the game's own screens yet. The code is in
   `witpae/minefields.py`.
 
+### Victory points
+
+The "Victory points" sub-tab (after Minefields) is read-only. A small table on top gives, per side, the score, the
+bases and base points, the enemy aircraft destroyed and their points, the ground points, the enemy ships sunk, Other
+and the political points. A line below it gives the victory level, the score ratio and the automatic victory rule
+for the game year. Below that: a Side filter (All, Allied, Japanese), a Search box (base name, region) and a sortable
+table of the bases and towns that are worth victory points. Double-click a row to open the base in the Bases tab
+(filters are cleared if they hide it).
+
+- Score: section 0x01, i32 at 116 (Japanese) and 120 (Allied), shown as stored. Political points: i32 at 65788
+  (Japanese) and 65792 (Allied). Ground losses: i32 at 64876 (Japanese) and 64880 (Allied), in twelfths of a victory
+  point (manual 17.0: Allied 1 VP per 3 items, Chinese and Philippine 1 per 12, Soviet 1 per 6, Japanese 1 per 6);
+  the other side scores the stored value // 12. The sample save has 2165 Japanese and 11303 Allied points.
+- Bases: a base or town is worth the owner's basic VP (location record, "value to Japan" i16 at 782 and "value to
+  Allies" i16 at 784) x (port size + 2 x airfield size). It scores that in full only when fully supplied, otherwise
+  25% plus 75% of the supplied share (supply / supply required, at most 1; no requirement counts as fully supplied),
+  rounded; this matches the manual's Rabaul example (69 at 30% supply scores 33). Columns: Base, Owner, Region,
+  Value J and A (the basic VP), Port, Airfield, Supply %, Full (to the owner), Scored (to the owner, supply
+  adjusted), To Japan and To Allies (the full value if that side held it). Only places with a value are listed.
+- Aircraft: each enemy aircraft destroyed scores 1 VP and each heavy bomber (4 or more engines, u8 at 100 of the
+  aircraft record) 2; the report sums the other side's aircraft losses (the Losses report). Only the number of enemy
+  ships sunk is shown, there is no ship formula.
+- Other = Score less base, aircraft and ground points. It covers ships sunk, industry damage and rules not modelled
+  and can be negative, so the breakdown is an estimate; the score itself is not.
+- Victory level (manual 17.1): a score ratio of 1.75 or more is a decisive victory, 1.25 or more a marginal one,
+  otherwise a draw. Automatic victory (17.2) needs a ratio of 4:1 in 1943, 3:1 in 1944 and 2:1 from 1945.
+- The offsets come from WiTPTracker's reader and the manual; they have not been compared with the game's own Intel
+  screen yet. The code is in `witpae/victory.py`.
+
 ## History
 
 The History tab (after Reports) shows trends over the turns you have opened, like WiTPTracker. Nothing here writes
@@ -584,7 +613,7 @@ to a save.
   (summed over the places of the Industry report, so the totals match WiTPTracker), the production pools (manpower,
   HI, naval, merchant, armament, vehicle), the daily supply, fuel and oil allotments, the aircraft pool, aircraft
   lost this turn and in total (air, ground, flak, operations), ships sunk, damaged ships, damaged tonnage and
-  damaged ships in port, mines laid. Per base: side, supply, fuel, resources and oil (only bases with some stock). Per aircraft
+  damaged ships in port, mines laid, victory points. Per base: side, supply, fuel, resources and oil (only bases with some stock). Per aircraft
   model: pool and total losses. The metric table is `SIDE_METRICS` in `witpae/history.py`.
 - Where: `<save folder>\history\<campaign>\<YYYYMMDD>.json.gz`, one gzip-compressed JSON file per date, written
   atomically (temporary file, then rename). A save in a folder called `autosave` uses the parent folder, so
