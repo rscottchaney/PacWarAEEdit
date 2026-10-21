@@ -12,7 +12,7 @@ import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from witpae import (aircraft, airgroups, airproduction, bases, factories, industry, landunits, pilotpool, planeart,
+from witpae import (aircraft, airgroups, airproduction, bases, factories, industry, landunits, lcuproduction, pilotpool, planeart,
                     regions, reports, shipproduction, shiprecords, ships, taskforces)
 from witpae.container import SaveFile, SaveFormatError
 from witpae.fileio import is_pbem, save_with_backup
@@ -222,6 +222,70 @@ PRODUCTION_TEXT = {"arrival": _arrival_text, "delay": _num, "starts_in": _num, "
 PRODUCTION_SUMMARY_TEXT = {"size": _num, "hi_day": _num, "pool": lambda v: "?" if v < 0 else _num(v),
                            "needed": _num, "net": _rate, "building": _num, "can_accelerate": _num,
                            "blueprint": _num}
+
+
+LCU_ALL = "All"
+LCU_WINDOWS = {"7 days": 7, "14 days": 14, "30 days": 30, "60 days": 60, "90 days": 90, "180 days": 180,
+               "365 days": 365, "All": None}
+LCU_VIEWS = ("Units", "Devices")
+LCU_SUMMARY_COLUMNS = [
+    ("label", "Points", 90, False, lambda r: r.label),
+    ("pool", "Pool", 85, True, lambda r: -1 if r.pool is None else r.pool),
+    ("per_day", "Production/day", 100, True, lambda r: -1 if r.per_day is None else r.per_day),
+    ("arrived", "Lacking (arrived)", 115, True, lambda r: r.arrived),
+    ("reinforcement", "Reinforcements", 105, True, lambda r: r.reinforcement),
+    ("days", "Days of production", 120, True, lambda r: -1 if r.days is None else r.days),
+]
+LCU_SUMMARY_TEXT = {"pool": lambda v: "?" if v < 0 else _num(v), "per_day": lambda v: "-" if v < 0 else _num(v),
+                    "arrived": _num, "reinforcement": _num,
+                    "days": lambda v: "-" if v < 0 else f"{v:,.1f}"}
+LCU_UNIT_COLUMNS = [
+    ("id", "ID", 55, True, lambda r: r.unit.id),
+    ("name", "Unit", 200, False, lambda r: r.unit.display_name),
+    ("type", "Type", 50, False, lambda r: r.unit.type),
+    ("hq", "HQ", 120, False, lambda r: r.unit.hq_name),
+    ("status", "Status", 130, False, lambda r: r.status),
+    ("days", "Days to arrival", 95, True, lambda r: r.days),
+    ("toe", "TOE devices", 80, True, lambda r: r.toe),
+    ("current", "Present", 70, True, lambda r: r.current),
+    ("strength", "Strength", 70, True, lambda r: r.current / r.toe if r.toe else 0),
+    ("armament", "Armament", 75, True, lambda r: r.armament),
+    ("vehicle", "Vehicle", 70, True, lambda r: r.vehicle),
+    ("manpower", "Manpower", 80, True, lambda r: r.manpower),
+]
+LCU_UNIT_COLUMN_BY_ID = {c[0]: c for c in LCU_UNIT_COLUMNS}
+LCU_UNIT_TEXT = {"days": lambda v: _num(v) if 0 < v < 9999 else "-", "toe": _num, "current": _num,
+                 "strength": lambda v: f"{v:.0%}", "armament": _num, "vehicle": _num, "manpower": _num}
+LCU_DEVICE_COLUMNS = [
+    ("id", "ID", 55, True, lambda r: r.id),
+    ("name", "Device", 190, False, lambda r: r.name),
+    ("type", "Type", 100, False, lambda r: r.type_name),
+    ("kind", "Costs", 75, False, lambda r: r.kind),
+    ("load", "Load cost", 70, True, lambda r: r.load),
+    ("pool", "Pool", 75, True, lambda r: -1 if r.pool is None else r.pool),
+    ("toe", "TOE (arrived)", 90, True, lambda r: r.toe),
+    ("current", "Present", 70, True, lambda r: r.current),
+    ("lacking", "Lacking", 70, True, lambda r: r.lacking),
+    ("reinforcement", "Reinforcements", 100, True, lambda r: r.reinforcement),
+    ("armament", "Armament", 75, True, lambda r: r.armament),
+    ("vehicle", "Vehicle", 70, True, lambda r: r.vehicle),
+    ("manpower", "Manpower", 80, True, lambda r: r.manpower),
+]
+LCU_DEVICE_COLUMN_BY_ID = {c[0]: c for c in LCU_DEVICE_COLUMNS}
+LCU_DEVICE_TEXT = {"load": _num, "pool": lambda v: "?" if v < 0 else _num(v), "toe": _num, "current": _num,
+                   "lacking": _num, "reinforcement": _num, "armament": _num, "vehicle": _num, "manpower": _num}
+LCU_NOTE = (
+    "Lacking = TOE count - current count for a slot holding the TOE device (or empty), never below 0; a slot holding "
+    "a different device (an older model awaiting upgrade) lacks its whole TOE count; disabled devices repair and "
+    "are not counted. Reinforcements due in 1..window days (Not scheduled = 9999 / 19999 / 29999) need their whole "
+    "TOE. Costs (manual 13.2.2.6, 13.2.2.7): a squad (Squad, Engineer) costs 1 armament point plus manpower equal to "
+    "its load cost; a weapon costs armament points equal to its load cost plus the same manpower; a vehicle (AFV, "
+    "Vehicle) costs vehicle points equal to its load cost plus the same manpower. Manual 13.7: Japanese "
+    "reinforcements must be filled from production when they arrive, otherwise they arrive at 25% TOE without "
+    "charge; Allied units are fed from their device pools, so production is only shown for the Japanese. Days to "
+    "arrival is the i16 at offset 564 of the land unit and the load cost the i16 at 28 of the device record: not "
+    "yet checked in the game.")
+
 
 
 def _shortest_text(v):
@@ -494,6 +558,13 @@ class EditorApp:
         self.production_summary = []
         self.production_sort_col = "delay"
         self.production_sort_reverse = False
+        self.lcu_unit_all = []
+        self.lcu_device_all = []
+        self.lcu_summary = []
+        self.lcu_unit_sort_col = "armament"
+        self.lcu_unit_sort_reverse = True
+        self.lcu_device_sort_col = "armament"
+        self.lcu_device_sort_reverse = True
         self.industry_places = []
         self.region_ids = region_choices()
         self.factory_report_sort_col = "id"
@@ -667,6 +738,7 @@ class EditorApp:
                                               self.jump_to_upgrade_ship)
 
         self._build_production_report()
+        self._build_lcu_report()
         self._build_industry_reports()
         self._build_air_reports()
         self._build_compare_report()
@@ -713,11 +785,56 @@ class EditorApp:
                                                  ("ship", "type", "class", "yard", "status"),
                                                  self.jump_to_production_ship)
 
+    def _build_lcu_report(self):
+        lcu = ttk.Frame(self.reports_notebook, padding=4)
+        self.reports_notebook.add(lcu, text="LCU production")
+        ttk.Label(lcu, text=LCU_NOTE, wraplength=1100, justify="left").pack(side="bottom", anchor="w", pady=(4, 0))
+        top = ttk.Frame(lcu)
+        top.pack(side="top", fill="x")
+        self.lcu_summary_tree = self._report_tree(top, LCU_SUMMARY_COLUMNS, lambda c: None, ("label",), lambda: None)
+        self.lcu_summary_tree.configure(height=3)
+        bar = ttk.Frame(lcu)
+        bar.pack(side="top", fill="x", pady=(4, 0))
+        self.lcu_side_var = tk.StringVar(value="Japanese")
+        self._report_combo(bar, "Side:", self.lcu_side_var, ["Japanese", "Allied"], self.refresh_lcu_reports, 9)
+        self.lcu_window_var = tk.StringVar(value="30 days")
+        self._report_combo(bar, "Window:", self.lcu_window_var, list(LCU_WINDOWS), self.refresh_lcu_reports, 9)
+        self.lcu_view_var = tk.StringVar(value=LCU_VIEWS[0])
+        for view in LCU_VIEWS:
+            ttk.Radiobutton(bar, text=view, value=view, variable=self.lcu_view_var,
+                            command=self._show_lcu_view).pack(side="left", padx=2)
+        self.lcu_status_var = tk.StringVar(value=LCU_ALL)
+        self.lcu_status_box = self._report_combo(bar, "  Status:", self.lcu_status_var,
+                                                 [LCU_ALL, *lcuproduction.STATUSES], self.refresh_lcu_list, 20)
+        ttk.Label(bar, text="Search:").pack(side="left")
+        self.lcu_search_var = tk.StringVar()
+        self.lcu_search_var.trace_add("write", lambda *a: self.refresh_lcu_list())
+        ttk.Entry(bar, textvariable=self.lcu_search_var, width=20).pack(side="left", padx=4)
+        self.lcu_count = tk.StringVar()
+        ttk.Label(bar, textvariable=self.lcu_count).pack(side="left", padx=8)
+        self.lcu_unit_frame = ttk.Frame(lcu)
+        self.lcu_unit_tree = self._report_tree(self.lcu_unit_frame, LCU_UNIT_COLUMNS, self.sort_lcu_units_by,
+                                               ("name", "type", "hq", "status"), self.jump_to_lcu_unit)
+        self.lcu_device_frame = ttk.Frame(lcu)
+        self.lcu_device_tree = self._report_tree(self.lcu_device_frame, LCU_DEVICE_COLUMNS,
+                                                 self.sort_lcu_devices_by, ("name", "type", "kind"), lambda: None)
+        self._show_lcu_view()
+
+    def _show_lcu_view(self):
+        units = self.lcu_view_var.get() == LCU_VIEWS[0]
+        shown, hidden = (self.lcu_unit_frame, self.lcu_device_frame) if units else (self.lcu_device_frame,
+                                                                                    self.lcu_unit_frame)
+        hidden.pack_forget()
+        shown.pack(side="top", fill="both", expand=True, pady=(4, 0))
+        self.lcu_status_box.configure(state="readonly" if units else "disabled")
+        self.refresh_lcu_list()
+
     def _report_combo(self, bar, label, var, values, command, width):
         ttk.Label(bar, text=label).pack(side="left")
         box = ttk.Combobox(bar, textvariable=var, values=list(values), state="readonly", width=width)
         box.pack(side="left", padx=(4, 8))
         box.bind("<<ComboboxSelected>>", lambda e: command())
+        return box
 
     def _build_industry_reports(self):
         sides = ["All", "Allied", "Japanese"]
@@ -1459,7 +1576,7 @@ class EditorApp:
         self.leader_button.grid(row=k // per_row + 1, column=2 * (k % per_row), columnspan=2, sticky="w", pady=1)
 
     def _build_units_tab(self):
-        tab = ttk.Frame(self.notebook, padding=4)
+        tab = self.units_tab = ttk.Frame(self.notebook, padding=4)
         self.notebook.add(tab, text="Land Units")
         right = ttk.LabelFrame(tab, text="Land unit", padding=8)
         right.pack(side="right", fill="y", padx=(8, 0))
@@ -3317,6 +3434,7 @@ class EditorApp:
         self.refresh_spoilage_list()
         self.refresh_upgrade_list()
         self.refresh_production_reports()
+        self.refresh_lcu_reports()
         self.refresh_industry_report()
         self.refresh_factory_report()
         self.refresh_raw_list()
@@ -3412,6 +3530,66 @@ class EditorApp:
         self.production_sort_reverse = (not self.production_sort_reverse) if col == self.production_sort_col else False
         self.production_sort_col = col
         self.refresh_production_list()
+
+    def refresh_lcu_reports(self):
+        """Recompute the rows and the summary from the save; the view, status and search only re-select."""
+        side, window = self.lcu_side_var.get(), LCU_WINDOWS[self.lcu_window_var.get()]
+        units = list(self.units.values())
+        try:
+            self.lcu_unit_all = lcuproduction.unit_rows(self.save, side, window, units)
+            self.lcu_device_all = lcuproduction.device_rows(self.save, side, window, units)
+            self.lcu_summary = lcuproduction.summary_rows(self.save, self.lcu_unit_all, self.industry_places, side)
+        except (SaveFormatError, IndexError):
+            self.lcu_unit_all, self.lcu_device_all, self.lcu_summary = [], [], []
+        self.lcu_summary_tree.delete(*self.lcu_summary_tree.get_children())
+        for r in self.lcu_summary:
+            self.lcu_summary_tree.insert("", "end", iid=r.kind, values=self._report_values(
+                LCU_SUMMARY_COLUMNS, LCU_SUMMARY_TEXT, r))
+        self.refresh_lcu_list()
+
+    def refresh_lcu_list(self):
+        needle = self.lcu_search_var.get().strip().lower()
+        if self.lcu_view_var.get() == LCU_VIEWS[0]:
+            status = self.lcu_status_var.get()
+            rows = [r for r in self.lcu_unit_all if needle in r.unit.display_name.lower()
+                    and status in (LCU_ALL, r.status)]
+            rows.sort(key=lambda r: self._industry_sort_key(LCU_UNIT_COLUMN_BY_ID, self.lcu_unit_sort_col, r,
+                                                            r.unit.id), reverse=self.lcu_unit_sort_reverse)
+            tree, columns, texts, noun = self.lcu_unit_tree, LCU_UNIT_COLUMNS, LCU_UNIT_TEXT, "unit"
+            ids = [str(r.unit.id) for r in rows]
+        else:
+            rows = [r for r in self.lcu_device_all if needle in r.name.lower()]
+            rows.sort(key=lambda r: self._industry_sort_key(LCU_DEVICE_COLUMN_BY_ID, self.lcu_device_sort_col, r,
+                                                            r.id), reverse=self.lcu_device_sort_reverse)
+            tree, columns, texts, noun = self.lcu_device_tree, LCU_DEVICE_COLUMNS, LCU_DEVICE_TEXT, "device"
+            ids = [str(r.id) for r in rows]
+        tree.delete(*tree.get_children())
+        for iid, r in zip(ids, rows):
+            tree.insert("", "end", iid=iid, values=self._report_values(columns, texts, r))
+        self.lcu_count.set(f"{len(rows)} {noun}{'' if len(rows) == 1 else 's'}")
+
+    def sort_lcu_units_by(self, col):
+        self.lcu_unit_sort_reverse = (not self.lcu_unit_sort_reverse) if col == self.lcu_unit_sort_col else False
+        self.lcu_unit_sort_col = col
+        self.refresh_lcu_list()
+
+    def sort_lcu_devices_by(self, col):
+        self.lcu_device_sort_reverse = (not self.lcu_device_sort_reverse) if col == self.lcu_device_sort_col else False
+        self.lcu_device_sort_col = col
+        self.refresh_lcu_list()
+
+    def jump_to_lcu_unit(self):
+        sel = self.lcu_unit_tree.selection()
+        if not sel:
+            return
+        iid = sel[0]
+        if not self.unit_tree.exists(iid):
+            self.unit_search_var.set("")
+            self.unit_side_var.set("All")
+            self.refresh_unit_list()
+        self.notebook.select(self.units_tab)
+        self.unit_tree.selection_set(iid)
+        self.unit_tree.see(iid)
 
     def _industry_places_for(self, side_var, region_var):
         side = side_var.get()

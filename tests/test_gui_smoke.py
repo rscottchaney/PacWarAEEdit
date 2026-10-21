@@ -1220,6 +1220,94 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertEqual(app.notebook.select(), str(app.shiprec_tab))
         self.assertEqual(app.shiprec_tree.selection(), ("7",))
 
+    def test_lcu_production_report(self):
+        import witpae_editor
+        from witpae import lcuproduction
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        app.notebook.select(app.reports_tab)
+        self.root.update()
+        tabs = [app.reports_notebook.tab(t, "text") for t in app.reports_notebook.tabs()]
+        self.assertEqual(tabs.index("LCU production"), tabs.index("Ship production") + 1)
+        summary = app.lcu_summary_tree
+        self.assertEqual(summary.set("armament", "pool"), "18,387")
+        self.assertEqual(summary.set("armament", "per_day"), "620")
+        self.assertEqual(summary.set("armament", "arrived"), "44,612")
+        self.assertEqual(summary.set("armament", "reinforcement"), "1,834")
+        self.assertEqual(summary.set("manpower", "reinforcement"), "10,331")
+        tree = app.lcu_unit_tree
+        # Units view: Japanese by default, the 14 reinforcements of the 30 day window are listed.
+        app.lcu_status_var.set(lcuproduction.REINFORCEMENT)
+        app.refresh_lcu_list()
+        self.assertEqual(len(tree.get_children()), 14)
+        self.assertEqual(app.lcu_count.get(), "14 units")
+        app.lcu_window_var.set("All")
+        app.refresh_lcu_reports()
+        self.assertGreater(len(tree.get_children()), 14)
+        self.assertEqual(summary.set("armament", "arrived"), "44,612")
+        app.lcu_window_var.set("7 days")
+        app.refresh_lcu_reports()
+        self.assertLess(len(tree.get_children()), 14)
+        app.lcu_window_var.set("30 days")
+        app.lcu_status_var.set(lcuproduction.NOT_SCHEDULED)
+        app.refresh_lcu_reports()
+        iid = tree.get_children()[0]
+        self.assertEqual(tree.set(iid, "days"), "-")
+        # Sorting.
+        app.lcu_status_var.set("All")
+        app.refresh_lcu_list()
+        app.sort_lcu_units_by("armament")
+        values = [int(tree.set(i, "armament").replace(",", "")) for i in tree.get_children()]
+        self.assertEqual(values, sorted(values))
+        app.sort_lcu_units_by("armament")
+        values = [int(tree.set(i, "armament").replace(",", "")) for i in tree.get_children()]
+        self.assertEqual(values, sorted(values, reverse=True))
+        # Search.
+        app.lcu_search_var.set("zzzz")
+        self.assertEqual(tree.get_children(), ())
+        app.lcu_search_var.set("")
+        # Devices view.
+        app.lcu_view_var.set("Devices")
+        app._show_lcu_view()
+        self.root.update()
+        dev = app.lcu_device_tree
+        self.assertEqual(app.lcu_device_frame.winfo_manager(), "pack")
+        self.assertEqual(app.lcu_unit_frame.winfo_manager(), "")
+        self.assertEqual(app.lcu_count.get().split()[1], "devices")
+        self.assertIn("707", dev.get_children())
+        self.assertEqual(dev.set("707", "name"), "IJA Infantry Squad")
+        self.assertEqual(dev.set("707", "load"), "17")
+        self.assertEqual(dev.set("707", "pool"), "6")
+        self.assertEqual(dev.set("707", "type"), "Squad")
+        app.lcu_search_var.set("infantry squad")
+        self.assertIn("707", dev.get_children())
+        app.lcu_search_var.set("")
+        app.sort_lcu_devices_by("name")
+        names = [dev.set(i, "name").lower() for i in dev.get_children()]
+        self.assertEqual(names, sorted(names))
+        # Allied side: no production figures.
+        app.lcu_view_var.set("Units")
+        app._show_lcu_view()
+        app.lcu_side_var.set("Allied")
+        app.refresh_lcu_reports()
+        self.assertEqual(summary.set("armament", "per_day"), "-")
+        self.assertEqual(summary.set("armament", "days"), "-")
+        self.assertNotEqual(summary.set("armament", "pool"), "18,387")
+        app.lcu_side_var.set("Japanese")
+        app.refresh_lcu_reports()
+        # Double-click target: the Land Units tab, with its filters cleared.
+        app.lcu_status_var.set(lcuproduction.ACTIVE)
+        app.refresh_lcu_list()
+        unit_id = tree.get_children()[0]
+        app.unit_search_var.set("zzz")
+        app.unit_side_var.set("Allied")
+        tree.selection_set(unit_id)
+        app.jump_to_lcu_unit()
+        self.root.update()
+        self.assertEqual(app.notebook.select(), str(app.units_tab))
+        self.assertEqual(app.unit_tree.selection(), (unit_id,))
+        self.assertEqual(app.unit_search_var.get(), "")
+
     def test_reports_without_game_date(self):
         import witpae_editor
         from witpae import reports
