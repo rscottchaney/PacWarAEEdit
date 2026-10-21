@@ -592,6 +592,63 @@ class GuiSmokeTests(unittest.TestCase):
         app.apply_schedule()
         self.assertEqual(app.groups[2].size_schedule()[0], (4203, 12))
 
+    def test_pilot_pool_grid(self):
+        from unittest import mock
+        from witpae import pilotpool
+        import witpae_editor
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        self.root.update()
+        tabs = [app.groups_notebook.tab(t, "text") for t in app.groups_notebook.tabs()]
+        self.assertEqual(tabs, ["Groups", "Pilot pool"])
+        shown = app.pool_tree.get_children()
+        self.assertIn("1", shown)
+        self.assertNotIn("10", shown)  # French pool is empty
+        self.assertEqual(app.pool_tree.set("4", "pool"), "6770")
+        self.assertEqual(app.pool_tree.set("4", "t1"), "606 (0)")
+        self.assertEqual(app.pool_tree.set("4", "training"), str(sum(app.pools[4].counts)))
+        app.pool_empty_var.set(True)
+        app.refresh_pool_list()
+        self.assertEqual(len(app.pool_tree.get_children()), 18)
+        app.pool_empty_var.set(False)
+        app.pool_side_var.set("Japanese")
+        app.refresh_pool_list()
+        japanese = app.pool_tree.get_children()
+        self.assertIn("1", japanese)
+        self.assertTrue(set(japanese) <= {"1", "2"})
+        app.pool_side_var.set("Allied")
+        app.refresh_pool_list()
+        self.assertNotIn("1", app.pool_tree.get_children())
+        self.assertIn("4", app.pool_tree.get_children())
+        app.pool_tree.selection_set("4")
+        self.root.update()
+        self.assertEqual((app.pool_vars["pool"].get(), app.pool_vars["rate"].get(), app.pool_vars["count1"].get(),
+                          app.pool_vars["exp11"].get()), ("6770", "600", "558", "33"))
+        app.pool_vars["pool"].set("7000")
+        app.pool_vars["exp3"].set("12")
+        with mock.patch.object(witpae_editor.messagebox, "showerror") as err:
+            app.apply_pool()
+        err.assert_not_called()
+        self.assertEqual((app.pools[4].get("pool"), app.pools[4].get("exp3")), (7000, 12))
+        self.assertIn(4, app.pools_edited)
+        self.assertTrue(app.dirty)
+        self.assertEqual(app.pool_tree.item("4", "tags"), ("edited",))
+        self.assertEqual(app.pool_tree.set("4", "pool"), "7000")
+        self.assertIn("USN", app.status.get())
+        # Bad input is refused and writes nothing.
+        before = bytes(app.save[pilotpool.SECTION].data)
+        for name, text in (("rate", "-1"), ("exp0", "100"), ("count2", "x"), ("pool", "32768")):
+            self.root.update()
+            app.show_pool(app.pools[4])
+            app.pool_vars[name].set(text)
+            with mock.patch.object(witpae_editor.messagebox, "showerror") as err:
+                app.apply_pool()
+            err.assert_called_once()
+            self.assertEqual(bytes(app.save[pilotpool.SECTION].data), before, name)
+        self.assertTrue(app.load(SAVE_015))
+        self.assertEqual(app.pools_edited, set())
+        self.assertFalse(app.dirty)
+
     def test_land_units_tab_edit_applies(self):
         from unittest import mock
         import witpae_editor

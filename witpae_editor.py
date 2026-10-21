@@ -11,8 +11,8 @@ import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from witpae import (aircraft, airgroups, airproduction, bases, factories, industry, landunits, planeart, regions, reports,
-                    shiprecords, ships, taskforces)
+from witpae import (aircraft, airgroups, airproduction, bases, factories, industry, landunits, pilotpool, planeart,
+                    regions, reports, shiprecords, ships, taskforces)
 from witpae.container import SaveFile, SaveFormatError
 from witpae.fileio import is_pbem, save_with_backup
 
@@ -412,6 +412,10 @@ class EditorApp:
         self.pilot_vars = {}
         self.leader_vars = {}
         self.leader_current = None
+        self.pools = {}
+        self.pools_edited = set()
+        self.pool_current = None
+        self.pool_vars = {}
         self.place_ids = {}
         self.place_labels = {}
         self.device_ids = {}
@@ -1126,6 +1130,15 @@ class EditorApp:
     def _build_groups_tab(self):
         tab = ttk.Frame(self.notebook, padding=4)
         self.notebook.add(tab, text="Air Groups")
+        # The pilot pool is nation-wide, not per group, so it gets its own page beside the group editor.
+        self.groups_notebook = ttk.Notebook(tab)
+        self.groups_notebook.pack(fill="both", expand=True)
+        groups_page = ttk.Frame(self.groups_notebook, padding=4)
+        self.groups_notebook.add(groups_page, text="Groups")
+        pool_page = ttk.Frame(self.groups_notebook, padding=4)
+        self.groups_notebook.add(pool_page, text="Pilot pool")
+        self._build_pilot_pool(pool_page)
+        tab = groups_page
         right = ttk.LabelFrame(tab, text="Air group", padding=8)
         right.pack(side="right", fill="y", padx=(8, 0))
         left = ttk.Frame(tab)
@@ -1208,6 +1221,57 @@ class EditorApp:
         row += 2
         ttk.Label(right, text="The game probably recalculates\naverage experience from the pilots.",
                   foreground="gray40").grid(row=row, column=0, columnspan=2, sticky="w", pady=(6, 0))
+
+    def _build_pilot_pool(self, parent):
+        bar = ttk.Frame(parent)
+        bar.pack(side="top", fill="x")
+        ttk.Label(bar, text="Side:").pack(side="left")
+        self.pool_side_var = tk.StringVar(value="All")
+        side_box = ttk.Combobox(bar, textvariable=self.pool_side_var, values=["All", "Allied", "Japanese"],
+                                state="readonly", width=9)
+        side_box.pack(side="left", padx=4)
+        side_box.bind("<<ComboboxSelected>>", lambda e: self.refresh_pool_list())
+        self.pool_empty_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(bar, text="Show empty nations", variable=self.pool_empty_var,
+                        command=self.refresh_pool_list).pack(side="left", padx=8)
+        ttk.Label(bar, text="Offsets from WitPTracker, not yet checked in-game.", foreground="gray40").pack(
+            side="left", padx=8)
+
+        cols = [("nation", "Nation", 70), ("pool", "Pool", 60), ("experience", "Exp", 40), ("rate", "Rate/month", 80),
+                ("training", "In training", 80)] + [(f"t{k + 1}", f"T{k + 1}", 70) for k in range(pilotpool.INTAKES)]
+        self.pool_tree = ttk.Treeview(parent, columns=[c[0] for c in cols], show="headings",
+                                      selectmode="browse", height=10)
+        for cid, heading, width in cols:
+            self.pool_tree.heading(cid, text=heading)
+            self.pool_tree.column(cid, width=width, anchor="w" if cid == "nation" else "e")
+        self.pool_tree.tag_configure("edited", background="#fff2b3")
+        self.pool_tree.pack(side="top", fill="both", expand=True, pady=(6, 0))
+        self.pool_tree.bind("<<TreeviewSelect>>", lambda e: self.on_pool_select())
+
+        box = ttk.LabelFrame(parent, text="Nation", padding=4)
+        box.pack(side="top", fill="x", pady=(6, 0))
+        self.pool_title = tk.StringVar(value="(select a nation)")
+        ttk.Label(box, textvariable=self.pool_title, font=("TkDefaultFont", 11, "bold")).grid(
+            row=0, column=0, columnspan=12, sticky="w", pady=(0, 4))
+        for k, name in enumerate(("pool", "experience", "rate")):
+            ttk.Label(box, text=pilotpool.field_label(name)).grid(row=1, column=3 * k, sticky="w", padx=(0, 2), pady=1)
+            self.pool_vars[name] = tk.StringVar()
+            ttk.Entry(box, textvariable=self.pool_vars[name], width=6).grid(
+                row=1, column=3 * k + 1, sticky="w", padx=(0, 12), pady=1)
+        ttk.Label(box, text="Training intakes: count and experience (T1 is the newest)").grid(
+            row=2, column=0, columnspan=12, sticky="w", pady=(6, 0))
+        per_row = 4
+        for k in range(pilotpool.INTAKES):
+            row, col = divmod(k, per_row)
+            ttk.Label(box, text=f"T{k + 1}").grid(row=row + 3, column=3 * col, sticky="w", padx=(0, 2), pady=1)
+            inner = ttk.Frame(box)
+            inner.grid(row=row + 3, column=3 * col + 1, columnspan=2, sticky="w", padx=(0, 12), pady=1)
+            for name in (f"count{k}", f"exp{k}"):
+                self.pool_vars[name] = tk.StringVar()
+                ttk.Entry(inner, textvariable=self.pool_vars[name], width=6 if name.startswith("count") else 4).pack(
+                    side="left", padx=(0, 4))
+        self.pool_button = ttk.Button(box, text="Apply pilot pool", command=self.apply_pool, state="disabled")
+        self.pool_button.grid(row=3 + pilotpool.INTAKES // per_row, column=0, columnspan=3, sticky="w", pady=(4, 0))
 
     def _build_planes(self, parent, row):
         """Ready / maintenance / damaged / reserve split of the group's planes; the total stays fixed."""
@@ -1525,6 +1589,12 @@ class EditorApp:
         self.group_current = None
         self.pilot_current = None
         self.leader_current = None
+        try:
+            self.pools = {p.nation_id: p for p in pilotpool.list_pools(save)}
+        except SaveFormatError:
+            self.pools = {}  # the other tabs still work without the pool section
+        self.pools_edited.clear()
+        self.pool_current = None
         # Built once per load: decrypting every place name is slow.
         self.place_ids = {}
         self.place_labels = {}
@@ -1568,6 +1638,8 @@ class EditorApp:
         self.show_tf(None)
         self.refresh_group_list()
         self.show_group(None)
+        self.refresh_pool_list()
+        self.show_pool(None)
         self.refresh_unit_list()
         self.show_unit(None)
         self.industry_places = industry.list_industry_places(save, regions.default_regions())
@@ -2893,6 +2965,64 @@ class EditorApp:
             self.dirty = True
         self.refresh_group_list()
         self.show_leader(leader)
+
+    # ---- pilot pool ----------------------------------------------------
+
+    @staticmethod
+    def _pool_row(pool):
+        intakes = [f"{c} ({e})" for c, e in zip(pool.counts, pool.experiences)]
+        return [pool.label, pool.get("pool"), pool.get("experience"), pool.get("rate"), pool.in_training] + intakes
+
+    def refresh_pool_list(self):
+        selected = self.pool_current
+        self.pool_tree.delete(*self.pool_tree.get_children())
+        side = self.pool_side_var.get()
+        for pool in self.pools.values():
+            if side != "All" and pool.side != side:
+                continue
+            if pool.is_empty and not self.pool_empty_var.get() and pool.nation_id not in self.pools_edited:
+                continue
+            tags = ("edited",) if pool.nation_id in self.pools_edited else ()
+            self.pool_tree.insert("", "end", iid=str(pool.nation_id), values=self._pool_row(pool), tags=tags)
+        if selected is not None and self.pool_tree.exists(str(selected)):
+            self.pool_tree.selection_set(str(selected))
+
+    def on_pool_select(self):
+        sel = self.pool_tree.selection()
+        self.show_pool(self.pools[int(sel[0])] if sel else None)
+
+    def show_pool(self, pool):
+        self.pool_current = pool.nation_id if pool else None
+        self.pool_title.set(f"{pool.label} ({pool.side}, nation {pool.nation_id})" if pool else "(select a nation)")
+        self.pool_button.state(["!disabled" if pool else "disabled"])
+        for name, var in self.pool_vars.items():
+            var.set(str(pool.get(name)) if pool else "")
+
+    def apply_pool(self):
+        if self.pool_current is None:
+            return
+        pool = self.pools[self.pool_current]
+        values = {}
+        for name, var in self.pool_vars.items():
+            text = var.get().strip()
+            try:
+                number = int(text)
+            except ValueError:
+                messagebox.showerror("Invalid value", f"{pilotpool.field_label(name)} must be a whole number (got {text!r}).")
+                return
+            try:
+                values[name] = pool.validate(name, number)
+            except ValueError as exc:
+                messagebox.showerror("Invalid value", str(exc))
+                return
+        before = {n: pool.get(n) for n in values}
+        pool.set_many(values)
+        if before != values:
+            self.pools_edited.add(pool.nation_id)
+            self.dirty = True
+            self.status.set(f"Pilot pool of {pool.label} changed (not yet saved)")
+        self.refresh_pool_list()
+        self.show_pool(pool)
 
     # ---- land units ----------------------------------------------------
 
