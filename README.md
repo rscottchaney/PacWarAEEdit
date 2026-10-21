@@ -232,7 +232,7 @@ Load cost and AV are computed by the game.
 
 ## Reports
 
-The Reports tab holds eight reports; only the bulk switch buttons of Air production edit the save. It
+The Reports tab holds nine reports; only the bulk switch buttons of Air production edit the save. It
 shows the game date (section 0x01: day at 42, month at 44, two-digit year at 46,
 all i16) and refreshes whenever the tab is shown, so edits made in the Bases tab
 are reflected. Double-click a row to jump to that base (Bases tab) or ship (Ships
@@ -245,6 +245,46 @@ tab); the target tab's search and side filter are cleared if they hide the row.
 | Yard? column (target class i16 at 260) | the shipyard size shown for the upgrade target | unverified |
 
 The code is in `witpae/reports.py`; the upgrade link and yard fields are in `witpae/ships.py`.
+
+### Ship production
+
+Japan only. The "Ship production" sub-tab (after Ship upgrades) is read-only and follows the game manual
+(13.4, 13.4.1, 13.2.2.8):
+
+- "Only the Japanese build ships; Allied reinforcements arrive on schedule." The report therefore lists the
+  Japanese ship records (nation IJA or IJN) whose days to arrival (u32 at 36) is above 0.
+- For a ship with durability D (its class's durability, u8 at 39) and delay L (days to arrival):
+  - L over 30 x D is a "Blue print": 1 day of delay is removed free each day; it cannot be accelerated.
+  - L over 10 x D up to 30 x D "Can accelerate": 1 day is removed free each day; accelerating removes 1 more
+    day per day for D shipyard points.
+  - L up to 10 x D is "Building": normal construction needs D shipyard points per day to remove 1 day;
+    accelerated construction removes 2 days per day for 3 x D points.
+- Midget submarines (class type 28, SSX) are not built with shipyard points. 86 of them sit in the sample save: 83
+  at exactly 1 day to arrival in three consecutive saves (wpae003, the test save, autosave 014), where they
+  never progress, and 3 at 19999; WitpStaff's readme says midget subs appear in saves like ships in production
+  but use no build points. They get the status "Midget sub (no points)", are still listed, cost 0 points
+  and are left out of the Building / Can accelerate / Blue print counts and of the points needed.
+- Which points a ship needs depends on its class type. Naval shipyard points are used by types 1 CVB, 2 CV,
+  3 CVL, 5 BB, 6 BC, 7 CB, 8 CA, 9 CL, 10 CLAA, 12 DD, 13, 14, 15, 16, 17 PF, 19 PC, 21 SC, 22 PT, 23 MTB,
+  24 MGB, 25 ML, 26 SS, 27 SST, 28 SSX, 30 CM, 31 CMc, 32 DM, 33 DMS, 38 AVD, 39 AVP and 51 APD (the list
+  is WitPTracker's); every other type, including 4 CVE, uses merchant shipyard points.
+- Each Naval Shipyard (factory type 522) or Merchant Shipyard (523) size point with production on makes 1
+  point per day for 3 HI (13.2.2.8). Only Japanese places count. The pools are the Japanese naval and
+  merchant pools (section 0x01, see Industry reports).
+
+Columns of the ship table: ID, Ship, Type, Class, Durability, Yard (Naval or Merchant), Delay, Arrives (game
+date plus the delay, `-` when the game date cannot be read), Status, Starts costing in (days until L falls to
+10 x D, 0 when Building), Points/day (D when Building, else 0), Points to finish (D x the smaller of L and
+10 x D, at the normal rate) and Accelerated/day (3 x D when Building, D when Can accelerate, `-` for a Blue
+print or a midget sub). Search (ship or class name), Yard, Status and Type filters; click a heading to sort; double-click
+opens the ship in the Ships tab. The table above it gives, per yard, the points made per day (yard size
+with production on), HI/day (3 per point), the pool, the points per day needed by the Building ships, the
+net per day (made minus needed, ignoring the pool) and the number of ships in each status.
+
+Two things are not known, so the report does not show or guess them: the game's per-ship Normal /
+Accelerate / Halt setting (not located in the save yet; Points/day assumes normal construction), and which
+Building ships are paid each day when the points run short (not in the manual; only the daily shortfall or
+surplus per yard is shown). Not yet checked in-game. The code is in `witpae/shipproduction.py`.
 
 ### Industry reports
 

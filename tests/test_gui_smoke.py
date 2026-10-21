@@ -1158,6 +1158,68 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertIn("A6M2 Zero (#603)", labels)
         self.assertNotIn("A-29A Hudson (#2)", labels)
 
+    def test_ship_production_report(self):
+        import witpae_editor
+        from witpae import shipproduction
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        app.notebook.select(app.reports_tab)
+        self.root.update()
+        tree = app.production_tree
+        self.assertEqual(len(tree.get_children()), 2041)
+        self.assertEqual(app.production_count.get(), "2041 ships")
+        self.assertEqual(app.production_summary_tree.set("Naval", "size"), "1,384")
+        self.assertEqual(app.production_summary_tree.set("Naval", "needed"), "1,385")
+        self.assertEqual(app.production_summary_tree.set("Naval", "net"), "-1")
+        self.assertEqual(app.production_summary_tree.set("Merchant", "net"), "+371")
+        self.assertEqual(app.production_summary_tree.set("Merchant", "pool"), "1,113")
+        self.assertEqual(tree.set("7", "status"), "Building")
+        self.assertEqual(tree.set("7", "arrival"), "3 May 1942")
+        self.assertEqual(tree.set("7", "accel"), "252")
+        self.assertEqual(tree.set("30", "yard"), "Merchant")
+        self.assertEqual(tree.set("30", "accel"), "-")
+        # Filters.
+        app.production_yard_var.set("Naval")
+        app.production_status_var.set("Building")
+        app.refresh_production_list()
+        self.assertEqual(len(tree.get_children()), 24)
+        app.production_status_var.set(shipproduction.MIDGET)
+        app.refresh_production_list()
+        self.assertEqual(len(tree.get_children()), 86)
+        app.production_status_var.set("Building")
+        app.production_yard_var.set("Merchant")
+        app.production_status_var.set("Can accelerate")
+        app.refresh_production_list()
+        self.assertEqual(len(tree.get_children()), 77)
+        app.production_yard_var.set("All")
+        app.production_status_var.set("All")
+        self.assertIn("CVE", app.production_type_box.cget("values"))
+        app.production_type_var.set("CVE")
+        app.refresh_production_list()
+        self.assertIn("30", tree.get_children())
+        self.assertNotIn("7", tree.get_children())
+        app.production_type_var.set("All")
+        app.production_search_var.set("junyo")
+        self.assertIn("7", tree.get_children())  # matches the class name too
+        self.assertNotIn("30", tree.get_children())
+        app.production_search_var.set("")
+        # Sorting.
+        delays = [int(tree.set(i, "delay").replace(",", "")) for i in tree.get_children()]
+        self.assertEqual(delays, sorted(delays))  # shortest delay first by default
+        app.sort_production_by("delay")
+        delays = [int(tree.set(i, "delay").replace(",", "")) for i in tree.get_children()]
+        self.assertEqual(delays, sorted(delays, reverse=True))
+        app.sort_production_by("durability")
+        values = [int(tree.set(i, "durability")) for i in tree.get_children()]
+        self.assertEqual(values, sorted(values))
+        # Double-click target: the Ships tab, with its filters cleared.
+        app.shiprec_search_var.set("zzz")
+        tree.selection_set("7")
+        app.jump_to_production_ship()
+        self.root.update()
+        self.assertEqual(app.notebook.select(), str(app.shiprec_tab))
+        self.assertEqual(app.shiprec_tree.selection(), ("7",))
+
     def test_reports_without_game_date(self):
         import witpae_editor
         from witpae import reports
@@ -1168,6 +1230,10 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertEqual(app.game_date_var.get(), "Game date: unknown")
         self.assertEqual(app.upgrade_tree.get_children(), ())
         self.assertEqual(len(app.spoilage_tree.get_children()), 7)
+        # Ship production needs no date: arrival is blank and the unreadable pools show as "?".
+        self.assertEqual(len(app.production_tree.get_children()), 2041)
+        self.assertEqual(app.production_tree.set("7", "arrival"), "-")
+        self.assertEqual(app.production_summary_tree.set("Naval", "pool"), "?")
         # The pools sit in the same truncated section, so the air tables are empty rather than failing.
         self.assertEqual(app.air_tree.get_children(), ())
         self.assertEqual(app.engine_tree.get_children(), ())
