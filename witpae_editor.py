@@ -8,12 +8,13 @@ All data logic lives in the witpae package; this file only wires widgets.
 import base64
 import datetime
 import os
+import struct
 import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from witpae import (aircraft, airgroups, airproduction, bases, factories, industry, landunits, lcuproduction, losses, pilotpool, planeart,
-                    regions, reports, shipproduction, shiprecords, shiprepair, ships, taskforces)
+from witpae import (aircraft, airgroups, airproduction, bases, chart, factories, history, industry, landunits, lcuproduction, losses,
+                    pilotpool, planeart, regions, reports, shipproduction, shiprecords, shiprepair, ships, taskforces)
 from witpae.container import SaveFile, SaveFormatError
 from witpae.fileio import is_pbem, save_with_backup
 
@@ -595,6 +596,29 @@ def region_choices():
 
 MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
+HISTORY_SIDE_COLORS = {"Allied": "#2f6fd0", "Japanese": "#d03a2f"}
+HISTORY_VIEWS = ("Sides", "Base")
+HISTORY_BOTH = "Both"
+HISTORY_NONE_TEXT = "-"
+# One table for both views; the view picks the columns it shows.
+HISTORY_COLUMNS = [
+    ("date", "Date", 90, False, None), ("turn", "Turn", 50, True, None), ("side", "Side", 80, False, None),
+    ("allied", "Allied", 110, True, None), ("allied_change", "Allied change", 110, True, None),
+    ("japanese", "Japanese", 110, True, None), ("japanese_change", "Japanese change", 120, True, None),
+    ("value", "Value", 110, True, None), ("change", "Change", 110, True, None),
+]
+HISTORY_SIDES_COLUMNS = ("date", "turn", "allied", "allied_change", "japanese", "japanese_change")
+HISTORY_BASE_COLUMNS = ("date", "turn", "side", "value", "change")
+
+
+def _history_number(value):
+    return HISTORY_NONE_TEXT if value is None else f"{value:,}"
+
+
+def _history_change(value):
+    return HISTORY_NONE_TEXT if value is None else f"{value:+,}"
+
+
 
 class EditorApp:
     def __init__(self, root):
@@ -713,6 +737,11 @@ class EditorApp:
         self.repair_ship_sort_reverse = True
         self.repair_port_sort_col = "tons"
         self.repair_port_sort_reverse = True
+        self.history_dir = None
+        self.history_snaps = []
+        self.history_problems = []
+        self.history_kept = None  # the RecordResult of the open save when its date was kept from another file
+        self.history_choices = {}
         self.industry_places = []
         self.region_ids = region_choices()
         self.factory_report_sort_col = "id"
@@ -772,6 +801,7 @@ class EditorApp:
         self._build_groups_tab()
         self._build_units_tab()
         self._build_reports_tab()
+        self._build_history_tab()
 
         left = ttk.Frame(body)
         left.pack(side="left", fill="both", expand=True)
@@ -832,8 +862,12 @@ class EditorApp:
             check = ttk.Checkbutton(build_box, text=label, variable=var)
             check.pack(anchor="w")
             self.building_checks[name] = check
-        self.apply_btn = ttk.Button(right, text="Apply", command=self.apply)
-        self.apply_btn.grid(row=build_row + 1, column=0, columnspan=2, pady=(10, 0))
+        buttons = ttk.Frame(right)
+        buttons.grid(row=build_row + 1, column=0, columnspan=2, pady=(10, 0))
+        self.apply_btn = ttk.Button(buttons, text="Apply", command=self.apply)
+        self.apply_btn.pack(side="left", padx=2)
+        self.history_btn = ttk.Button(buttons, text="History", command=self.show_base_history)
+        self.history_btn.pack(side="left", padx=2)
 
     def _build_reports_tab(self):
         tab = self.reports_tab = ttk.Frame(self.notebook, padding=4)
@@ -2097,6 +2131,7 @@ class EditorApp:
         self.show_unit(None)
         self.industry_places = industry.list_industry_places(save, regions.default_regions())
         self.refresh_reports()
+        self.record_history()
         return True
 
     def confirm_discard(self):
@@ -4121,6 +4156,213 @@ class EditorApp:
         self.notebook.select(self.shiprec_tab)
         self.shiprec_tree.selection_set(iid)
         self.shiprec_tree.see(iid)
+
+    # ---- history -------------------------------------------------------
+
+    history_root = None  # replaces <save folder>/history; the tests set it so they never write next to the saves
+
+    def _build_history_tab(self):
+        tab = self.history_tab = ttk.Frame(self.notebook, padding=4)
+        self.notebook.add(tab, text="History")
+        self.history_info = tk.StringVar(value="Open a save to see its history")
+        ttk.Label(tab, textvariable=self.history_info).pack(side="top", anchor="w")
+        self.history_status = tk.StringVar()
+        ttk.Label(tab, textvariable=self.history_status, wraplength=1100, justify="left").pack(side="top", anchor="w")
+        bar = ttk.Frame(tab)
+        bar.pack(side="top", fill="x", pady=(4, 0))
+        ttk.Button(bar, text="Import saves...", command=self.import_history).pack(side="left", padx=2)
+        self.history_record_btn = ttk.Button(bar, text="Record this save", command=self.record_this_save,
+                                             state="disabled")
+        self.history_record_btn.pack(side="left", padx=2)
+        self.history_delete_btn = ttk.Button(bar, text="Delete turn", command=self.delete_history_turn)
+        self.history_delete_btn.pack(side="left", padx=2)
+        view_bar = ttk.Frame(tab)
+        view_bar.pack(side="top", fill="x", pady=(4, 0))
+        self.history_view_var = tk.StringVar(value=HISTORY_VIEWS[0])
+        for view in HISTORY_VIEWS:
+            ttk.Radiobutton(view_bar, text=view, value=view, variable=self.history_view_var,
+                            command=self._show_history_view).pack(side="left", padx=2)
+        self.history_sides_bar = ttk.Frame(view_bar)
+        self.history_metric_var = tk.StringVar(value=history.SIDE_METRICS["supply"])
+        self._report_combo(self.history_sides_bar, "Metric:", self.history_metric_var,
+                           history.SIDE_METRICS.values(), self.refresh_history_view, 34)
+        self.history_side_var = tk.StringVar(value=HISTORY_BOTH)
+        self._report_combo(self.history_sides_bar, "Side:", self.history_side_var,
+                           [HISTORY_BOTH, "Allied", "Japanese"], self.refresh_history_view, 9)
+        self.history_base_bar = ttk.Frame(view_bar)
+        ttk.Label(self.history_base_bar, text="Base filter:").pack(side="left")
+        self.history_filter_var = tk.StringVar()
+        self.history_filter_var.trace_add("write", lambda *a: self.show_history_base_choices())
+        ttk.Entry(self.history_base_bar, textvariable=self.history_filter_var, width=16).pack(side="left", padx=4)
+        self.history_base_var = tk.StringVar()
+        self.history_base_box = self._report_combo(self.history_base_bar, "Base:", self.history_base_var, [],
+                                                   self.refresh_history_view, 28)
+        self.history_base_metric_var = tk.StringVar(value=history.BASE_METRICS["supply"])
+        self._report_combo(self.history_base_bar, "Metric:", self.history_base_metric_var,
+                           history.BASE_METRICS.values(), self.refresh_history_view, 11)
+        self.history_chart = chart.LineChart(tab)
+        self.history_chart.pack(side="top", fill="both", expand=True, pady=(4, 0))
+        table = ttk.Frame(tab)
+        table.pack(side="top", fill="both", expand=True, pady=(4, 0))
+        self.history_tree = self._report_tree(table, HISTORY_COLUMNS, lambda c: None, ("date", "side"), lambda: None)
+        self.history_tree.configure(height=8)
+        self._show_history_view()
+
+    def _show_history_view(self):
+        sides = self.history_view_var.get() == HISTORY_VIEWS[0]
+        shown, hidden = (self.history_sides_bar, self.history_base_bar) if sides else (
+            self.history_base_bar, self.history_sides_bar)
+        hidden.pack_forget()
+        shown.pack(side="left", padx=(12, 0))
+        self.refresh_history_view()
+
+    def show_history_base_choices(self):
+        """Fill the base picker with the recorded bases whose label contains the filter text."""
+        needle = self.history_filter_var.get().strip().lower()
+        self.history_base_box.configure(values=[l for l in self.history_choices if needle in l.lower()])
+
+    def _set_history_choices(self, extra=None):
+        names = {b.id: b.name for b in self.bases.values()}
+        items = history.base_choices(self.history_snaps, names)
+        if extra is not None and extra not in [i for _l, i in items]:
+            items.append((f"{names[extra]} ({extra})" if extra in names else f"#{extra}", extra))
+        self.history_choices = dict(items)
+        self.show_history_base_choices()
+
+    def load_history_view(self):
+        """Read the history folder of the open save and redraw."""
+        if self.save is None:
+            return
+        self.history_dir = history.campaign_dir(self.save, self.path, self.history_root)
+        self.history_snaps, self.history_problems = history.load_history(self.history_dir)
+        self._set_history_choices()
+        if self.history_base_var.get() not in self.history_choices:
+            self.history_base_var.set(next(iter(self.history_choices), ""))
+        self.history_info.set(f"Campaign: {history.slug(history.scenario_name(self.save))}    "
+                              f"Folder: {self.history_dir}    Turns recorded: {len(self.history_snaps)}")
+        self.refresh_history_view()
+
+    def _history_status(self, text):
+        problems = "".join(f"  Skipped {name}: {why}." for name, why in self.history_problems)
+        self.history_status.set(text + problems)
+
+    def record_history(self, replace=False):
+        """Record the open save (see witpae.history.record); failures go to the History tab's status line."""
+        if self.save is None:
+            return
+        self.history_kept = None
+        try:
+            if replace:
+                # The file as it is on disk, not the edited copy in memory.
+                result = history.record(SaveFile.load(self.path), self.path, True, self.history_root)
+            else:
+                result = history.record(self.save, self.path, False, self.history_root,
+                                        getattr(self, "industry_places", None))
+        except (OSError, SaveFormatError, KeyError, ValueError, struct.error) as exc:
+            self.load_history_view()
+            self._history_status(f"History not recorded: {exc}")
+            self.history_record_btn.configure(state="disabled")
+            return
+        self.load_history_view()
+        label = chart.date_label(result.date) if result.date is not None else ""
+        if result.status == history.SKIPPED_PBEM:
+            text = "PBEM game: nothing recorded."
+        elif result.status == history.KEPT:
+            self.history_kept = result
+            text = f"{label} already recorded from {result.source}."
+        else:
+            text = f"{label} {result.status}."
+        self._history_status(text)
+        self.history_record_btn.configure(state="normal" if self.history_kept else "disabled")
+
+    def record_this_save(self):
+        if self.history_kept is not None:
+            self.record_history(replace=True)
+
+    def import_history(self):
+        start = os.path.dirname(self.path) if self.path else (DEFAULT_DIR if os.path.isdir(DEFAULT_DIR) else HERE)
+        paths = filedialog.askopenfilenames(title="Import saves into the history", initialdir=start,
+                                            filetypes=[("WitP:AE saves", "*.pws"), ("All files", "*.*")])
+        if not paths:
+            return
+
+        def progress(name):
+            self.history_status.set(f"Importing {name}...")
+            self.root.update_idletasks()
+
+        result = history.import_saves(paths, self.history_root, progress)
+        text = f"{len(result.imported)} imported, {len(result.skipped)} skipped"
+        if result.skipped:
+            text += " (" + "; ".join(f"{name}: {why}" for name, why in result.skipped) + ")"
+        self.load_history_view()
+        self._history_status(text)
+
+    def delete_history_turn(self):
+        sel = self.history_tree.selection()
+        if not sel or self.history_dir is None:
+            return
+        date = int(sel[0])
+        if not messagebox.askyesno("Delete turn", f"Delete the recorded turn of {chart.date_label(date)}?"):
+            return
+        try:
+            history.delete_snapshot(self.history_dir, date)
+        except OSError as exc:
+            self._history_status(f"Could not delete: {exc}")
+            return
+        self.load_history_view()
+        self._history_status(f"{chart.date_label(date)} deleted.")
+
+    def show_base_history(self):
+        """The Bases tab's History button: the History tab in Base view with the selected base."""
+        if self.current is None:
+            return
+        self._set_history_choices(self.current)
+        self.history_base_var.set(next(l for l, i in self.history_choices.items() if i == self.current))
+        self.history_filter_var.set("")
+        self.history_view_var.set(HISTORY_VIEWS[1])
+        self.notebook.select(self.history_tab)
+        self._show_history_view()
+
+    def refresh_history_view(self):
+        """Redraw the chart and the table from the loaded snapshots."""
+        tree = self.history_tree
+        tree.delete(*tree.get_children())
+        snaps = self.history_snaps
+        if self.history_view_var.get() == HISTORY_VIEWS[0]:
+            key = next(k for k, label in history.SIDE_METRICS.items() if label == self.history_metric_var.get())
+            rows = history.side_series(snaps, key)
+            changes = history.changes([r[2] for r in rows]), history.changes([r[3] for r in rows])
+            wanted = self.history_side_var.get()
+            series = [chart.Series(side, HISTORY_SIDE_COLORS[side], [(r[0], r[i]) for r in rows])
+                      for side, i in (("Allied", 2), ("Japanese", 3)) if wanted in (HISTORY_BOTH, side)]
+            shown = [c for c in HISTORY_SIDES_COLUMNS
+                     if wanted == HISTORY_BOTH or c in ("date", "turn") or c.startswith(wanted.lower())]
+            for n, r in reversed(list(enumerate(rows))):
+                tree.insert("", "end", iid=str(r[0]), values=self._history_values({
+                    "date": chart.date_label(r[0]), "turn": r[1], "allied": _history_number(r[2]),
+                    "allied_change": _history_change(changes[0][n]), "japanese": _history_number(r[3]),
+                    "japanese_change": _history_change(changes[1][n])}))
+            message = "No turns recorded yet" if not snaps else "No data for this metric"
+        else:
+            loc_id = self.history_choices.get(self.history_base_var.get())
+            key = next(k for k, label in history.BASE_METRICS.items() if label == self.history_base_metric_var.get())
+            rows = history.base_series(snaps, loc_id, key) if loc_id is not None else []
+            changes = history.changes([r[3] for r in rows])
+            series = [chart.Series(side, HISTORY_SIDE_COLORS[side],
+                                   [(r[0], r[3] if r[2] == side_id else None) for r in rows])
+                      for side_id, side in sorted(bases.SIDES.items(), key=lambda t: t[1])]
+            shown = HISTORY_BASE_COLUMNS
+            for n, r in reversed(list(enumerate(rows))):
+                tree.insert("", "end", iid=str(r[0]), values=self._history_values({
+                    "date": chart.date_label(r[0]), "turn": r[1], "side": bases.SIDES.get(r[2], HISTORY_NONE_TEXT),
+                    "value": _history_number(r[3]), "change": _history_change(changes[n])}))
+            message = "No turns recorded yet" if not snaps else "No data for this base"
+        tree.configure(displaycolumns=list(shown))
+        self.history_chart.set_data(series, message)
+
+    @staticmethod
+    def _history_values(by_column):
+        return [by_column.get(c[0], "") for c in HISTORY_COLUMNS]
 
     def apply_title(self):
         if self.save is None:
