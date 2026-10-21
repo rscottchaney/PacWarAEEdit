@@ -183,6 +183,32 @@ Each pilot skill is stored twice (bytes 65..76 and 78..89). The game's pilot
 list shows the second copy, so edits write both. The byte at 122 is left
 alone because its purpose is unknown. The commander box is disabled for groups without a commander.
 
+### Pilot pool
+
+The Air Groups tab has a second page, Pilot pool, with one row per nation
+(section 0x01, nations 1..18). Nations with no pool, no monthly rate and no pilots in training are hidden
+(their experience still shows a default such as 35) unless "Show empty nations" is ticked; the Side filter treats IJA and IJN as Japanese
+and every other nation as Allied. Select a row, change the entries and press
+Apply pilot pool; edited rows are highlighted. Invalid input shows an error and
+writes nothing.
+
+| Column | Stored as |
+|---|---|
+| Pool (pilots available) | i16 at 65132 + 2 x (nation - 1) |
+| Exp (pool experience) | i16 at 65168 + 16 x nation |
+| Rate/month | i16 at 65482 + 16 x nation |
+| T1..T12 (training intakes, shown as `count (experience)`) | block at 97918 + 72 x (nation - 1): 12 x i16 counts (bytes 0..23), 12 x u8 experience (bytes 48..59); the other bytes are never written |
+| In training | sum of the 12 counts, read-only |
+
+Counts and the pool are limited to 0..32767 and experience to 0..99. Experience
+rises with the intake index, so T1 (index 0) is presumably the newest intake.
+
+These offsets were taken from WitPTracker's code and the values look right on
+three saves, but they are NOT yet checked against the game: compare with the
+game's Pilot Pool / Experience screen before relying on edits. Nations 3, 6, 15,
+16 and 17 have no confirmed name and are shown by number (nation 3 is skipped by
+WitPTracker and is normally empty).
+
 ## Land Units
 
 The Land Units tab lists land units (record types INF, ART, ENG, CD, HQ and the
