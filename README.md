@@ -680,6 +680,36 @@ to a save.
 
 The code is in `witpae/history.py` (snapshots and files) and `witpae/chart.py` (the line chart).
 
+## Intel
+
+The Intel tab (after History) shows the game's daily text reports, like WiTPTracker's Intel page. It is read-only:
+the report files are never written, and their text is only ever shown.
+
+- Where: the game writes `asigint_YYMMDD.txt` / `jsigint_YYMMDD.txt` (SIGINT for the Allied / Japanese player) and
+  `aoperationsreport_YYMMDD.txt` / `joperationsreport_YYMMDD.txt` next to the saves, plus undated copies of the
+  latest turn. A save inside a folder called `autosave` uses the parent folder, as the History tab does. The date
+  comes from the first line ("SIG INT REPORT FOR Dec 10, 41"), with the date in the file name as a fallback; an
+  undated file is read only when no dated file has the same header date. The files are loaded when a save opens and
+  by the Reload button; a missing folder or no files gives an empty tab with a message.
+- Top bar: Reports of (Allied or Japanese; the side that has files, Allied if both), Turns (Latest, Last 3, Last 7
+  or All newest report dates) and a count of the lines shown.
+- SigInt: a Type filter, a text search and a Lines / By place switch. Lines shows Date, Type, Place, Hex, Unit and
+  Detail. The types are Radio, Heavy radio, Unit located, Loaded on ship (detail is the ship, place the
+  destination), Moving, Planning attack (place is the target), Troop count (detail "1,517 men"), Aircraft count and
+  Ship count (wording guessed from the troop line; no sample showed them) and Other. A line no rule recognises is
+  kept as Other with its full text. By place gathers the lines per place (or bare hex): radio and heavy radio
+  reports, unit sightings, the last turn seen, the number of reports and the units named, to spot buildups.
+- Operations: a Category filter, a text search, and Date, Category, Place, Hex and Text. The categories are
+  Sighting, Submarine, Pilot, Air, Arrival, Upgrade, Base, Capture, Ship, Task force and Other, chosen by keyword
+  rules where the first match wins (the table `OPS_RULES` in `witpae/intel.py` lists them). The hex is the
+  "x,y" or "(x,y)" in the line; the place is the name after "near", "at", "off" and similar words.
+- Places: a line with a hex is matched to the open save's base or town at that hex (a base wins over a town in the
+  same hex); a line with only a name is matched by exact name, ignoring case. Double-clicking such a row opens the
+  place in the Bases tab. Other rows (a land unit, a minor place, a hex at sea) have nothing to open.
+- Every column heading sorts the table; clicking it again reverses the order.
+
+The code is in `witpae/intel.py`.
+
 ## Backups
 
 Always keep a copy of your saves before editing. Prefer saving to a new file

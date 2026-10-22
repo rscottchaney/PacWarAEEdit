@@ -13,7 +13,7 @@ import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from witpae import (aircraft, airgroups, airproduction, alerts, bases, chart, factories, history, industry, landunits, lcuproduction, leaders, losses, minefields,
+from witpae import (aircraft, airgroups, airproduction, alerts, bases, chart, factories, history, industry, intel, landunits, lcuproduction, leaders, losses, minefields,
                     pilotpool, planeart, regions, reports, shipproduction, shiprecords, shiprepair, ships, taskforces, victory)
 from witpae.container import SaveFile, SaveFormatError
 from witpae.fileio import is_pbem, save_with_backup
@@ -737,6 +737,47 @@ HISTORY_SIDES_COLUMNS = ("date", "turn", "allied", "allied_change", "japanese", 
 HISTORY_BASE_COLUMNS = ("date", "turn", "side", "value", "change")
 HISTORY_AIRCRAFT_COLUMNS = ("date", "turn", "value", "change")
 
+INTEL_ALL = "All"
+INTEL_VIEWS = ("Lines", "By place")
+INTEL_NOTE = (
+    "Read from the game's asigint_*.txt / jsigint_*.txt and a/joperationsreport_*.txt files in the save's folder "
+    "(the parent folder for a save in autosave); an undated copy is used only for a turn that has no dated file. "
+    "Lines no rule recognises are kept as Other. Double-click a row that names a place to open it. Nothing here "
+    "writes to those files.")
+
+
+def _intel_hex(value):
+    return "" if value[0] < 0 else f"{value[0]},{value[1]}"
+
+
+INTEL_TEXT = {"date": chart.date_label, "last": chart.date_label, "hex": _intel_hex}
+INTEL_LINE_COLUMNS = [
+    ("date", "Date", 80, True, lambda r: r.line.date),
+    ("kind", "Type", 100, False, lambda r: r.line.kind),
+    ("place", "Place", 140, False, lambda r: r.place),
+    ("hex", "Hex", 70, True, lambda r: (-1, -1) if r.line.x is None else (r.line.x, r.line.y)),
+    ("unit", "Unit", 240, False, lambda r: r.line.unit),
+    ("detail", "Detail", 330, False, lambda r: r.line.detail),
+]
+INTEL_PLACE_COLUMNS = [
+    ("place", "Place", 160, False, lambda r: r.place),
+    ("hex", "Hex", 70, True, lambda r: (-1, -1) if r.x is None else (r.x, r.y)),
+    ("radio", "Radio", 60, True, lambda r: r.counts.get("Radio", 0)),
+    ("heavy", "Heavy radio", 80, True, lambda r: r.counts.get("Heavy radio", 0)),
+    ("units", "Units", 60, True, lambda r: r.counts.get("Unit located", 0)),
+    ("last", "Last seen", 80, True, lambda r: r.last),
+    ("reports", "Reports", 60, True, lambda r: r.total),
+    ("named", "Units named", 480, False, lambda r: r.units),
+]
+INTEL_OPS_COLUMNS = [
+    ("date", "Date", 80, True, lambda r: r.line.date),
+    ("kind", "Category", 90, False, lambda r: r.line.kind),
+    ("place", "Place", 140, False, lambda r: r.place),
+    ("hex", "Hex", 70, True, lambda r: (-1, -1) if r.line.x is None else (r.line.x, r.line.y)),
+    ("text", "Text", 700, False, lambda r: r.line.text),
+]
+INTEL_TABLES = {"lines": INTEL_LINE_COLUMNS, "places": INTEL_PLACE_COLUMNS, "ops": INTEL_OPS_COLUMNS}
+
 
 def _history_number(value):
     return HISTORY_NONE_TEXT if value is None else f"{value:,}"
@@ -894,6 +935,13 @@ class EditorApp:
         self.history_kept = None  # the RecordResult of the open save when its date was kept from another file
         self.history_choices = {}
         self.history_aircraft_choices = {}
+        self.intel_folder = None
+        self.intel_all = {"sigint": [], "ops": []}  # every IntelLine of the folder; the filters only re-select
+        self.intel_index = None  # the open save's intel.PlaceIndex
+        self.intel_message = ""
+        self.intel_shown = {"sigint": 0, "ops": 0}
+        self.intel_sort = {name: [None, False] for name in INTEL_TABLES}  # column, reverse
+        self.intel_place_by_iid = {name: {} for name in INTEL_TABLES}
         self.industry_places = []
         self.region_ids = region_choices()
         self.factory_report_sort_col = "id"
@@ -955,6 +1003,7 @@ class EditorApp:
         self._build_leaders_tab()
         self._build_reports_tab()
         self._build_history_tab()
+        self._build_intel_tab()
 
         left = ttk.Frame(body)
         left.pack(side="left", fill="both", expand=True)
@@ -2458,6 +2507,7 @@ class EditorApp:
         self.industry_places = industry.list_industry_places(save, regions.default_regions())
         self.refresh_reports()
         self.record_history()
+        self.load_intel_view()
         return True
 
     def confirm_discard(self):
@@ -5055,6 +5105,164 @@ class EditorApp:
     @staticmethod
     def _history_values(by_column):
         return [by_column.get(c[0], "") for c in HISTORY_COLUMNS]
+
+    # ---- intel ---------------------------------------------------------
+
+    def _build_intel_tab(self):
+        tab = self.intel_tab = ttk.Frame(self.notebook, padding=4)
+        self.notebook.add(tab, text="Intel")
+        bar = ttk.Frame(tab)
+        bar.pack(side="top", fill="x")
+        self.intel_side_var = tk.StringVar(value=intel.SIDE_NAMES[0])
+        self._report_combo(bar, "Reports of:", self.intel_side_var, intel.SIDE_NAMES, self.refresh_intel, 9)
+        self.intel_turns_var = tk.StringVar(value=next(iter(intel.TURN_CHOICES)))
+        self._report_combo(bar, "Turns:", self.intel_turns_var, intel.TURN_CHOICES, self.refresh_intel, 8)
+        ttk.Button(bar, text="Reload", command=self.load_intel_view).pack(side="left", padx=2)
+        self.intel_count = tk.StringVar(value="Open a save to read its intel reports")
+        ttk.Label(bar, textvariable=self.intel_count).pack(side="left", padx=8)
+        ttk.Label(tab, text=INTEL_NOTE, wraplength=1100, justify="left").pack(side="bottom", anchor="w", pady=(4, 0))
+        self.intel_notebook = ttk.Notebook(tab)
+        self.intel_notebook.pack(side="top", fill="both", expand=True, pady=(4, 0))
+
+        sig = ttk.Frame(self.intel_notebook, padding=4)
+        self.intel_notebook.add(sig, text="SigInt")
+        sbar = ttk.Frame(sig)
+        sbar.pack(side="top", fill="x")
+        self.intel_kind_var = tk.StringVar(value=INTEL_ALL)
+        self._report_combo(sbar, "Type:", self.intel_kind_var, [INTEL_ALL, *intel.SIGINT_KINDS],
+                           self.refresh_intel_sigint, 14)
+        ttk.Label(sbar, text="Search:").pack(side="left")
+        self.intel_search_var = tk.StringVar()
+        self.intel_search_var.trace_add("write", lambda *a: self.refresh_intel_sigint())
+        ttk.Entry(sbar, textvariable=self.intel_search_var, width=20).pack(side="left", padx=(4, 8))
+        self.intel_view_var = tk.StringVar(value=INTEL_VIEWS[0])
+        for view in INTEL_VIEWS:
+            ttk.Radiobutton(sbar, text=view, value=view, variable=self.intel_view_var,
+                            command=self._show_intel_view).pack(side="left", padx=2)
+        self.intel_lines_frame = ttk.Frame(sig)
+        self.intel_lines_tree = self._report_tree(
+            self.intel_lines_frame, INTEL_LINE_COLUMNS, lambda c: self.sort_intel_by("lines", c),
+            ("kind", "place", "unit", "detail"), lambda: self.open_intel("lines"))
+        self.intel_places_frame = ttk.Frame(sig)
+        self.intel_places_tree = self._report_tree(
+            self.intel_places_frame, INTEL_PLACE_COLUMNS, lambda c: self.sort_intel_by("places", c),
+            ("place", "named"), lambda: self.open_intel("places"))
+
+        ops = ttk.Frame(self.intel_notebook, padding=4)
+        self.intel_notebook.add(ops, text="Operations")
+        obar = ttk.Frame(ops)
+        obar.pack(side="top", fill="x")
+        self.intel_category_var = tk.StringVar(value=INTEL_ALL)
+        self._report_combo(obar, "Category:", self.intel_category_var, [INTEL_ALL, *intel.OPS_KINDS],
+                           self.refresh_intel_ops, 11)
+        ttk.Label(obar, text="Search:").pack(side="left")
+        self.intel_ops_search_var = tk.StringVar()
+        self.intel_ops_search_var.trace_add("write", lambda *a: self.refresh_intel_ops())
+        ttk.Entry(obar, textvariable=self.intel_ops_search_var, width=20).pack(side="left", padx=4)
+        oframe = ttk.Frame(ops)
+        oframe.pack(side="top", fill="both", expand=True, pady=(4, 0))
+        self.intel_ops_tree = self._report_tree(oframe, INTEL_OPS_COLUMNS, lambda c: self.sort_intel_by("ops", c),
+                                                ("kind", "place", "text"), lambda: self.open_intel("ops"))
+        self._show_intel_view()
+
+    def _show_intel_view(self):
+        lines = self.intel_view_var.get() == INTEL_VIEWS[0]
+        shown, hidden = (self.intel_lines_frame, self.intel_places_frame) if lines else (
+            self.intel_places_frame, self.intel_lines_frame)
+        hidden.pack_forget()
+        shown.pack(side="top", fill="both", expand=True, pady=(4, 0))
+        self.refresh_intel_sigint()
+
+    def load_intel_view(self):
+        """Read the report files next to the open save and redraw."""
+        if self.save is None:
+            return
+        self.intel_folder = intel.intel_folder(self.path)
+        self.intel_message = ""
+        try:
+            self.intel_all = intel.load_reports(self.intel_folder)
+        except OSError as exc:
+            self.intel_all = {"sigint": [], "ops": []}
+            self.intel_message = f"Could not read the intel reports: {exc}"
+        try:
+            self.intel_index = intel.PlaceIndex(self.save)
+        except (SaveFormatError, IndexError, KeyError, struct.error):
+            self.intel_index = None
+        sides = {line.side for lines in self.intel_all.values() for line in lines}
+        if sides and self.intel_side_var.get() not in sides:
+            self.intel_side_var.set(next(side for side in intel.SIDE_NAMES if side in sides))
+        if not sides and not self.intel_message:
+            self.intel_message = f"No intel reports found in {self.intel_folder}"
+        self.refresh_intel()
+
+    def _intel_lines(self, key, search_var, kind_var):
+        """The loaded lines of one report that pass the side, turns, type and search choices."""
+        side = self.intel_side_var.get()
+        lines = intel.recent([l for l in self.intel_all[key] if l.side == side],
+                             intel.TURN_CHOICES[self.intel_turns_var.get()])
+        kind = kind_var.get()
+        needle = search_var.get().strip().lower()
+        return [l for l in lines if kind in (INTEL_ALL, l.kind) and needle in l.text.lower()]
+
+    def refresh_intel(self):
+        self.refresh_intel_sigint()
+        self.refresh_intel_ops()
+
+    def _fill_intel_tree(self, name, tree, rows, place_ids):
+        columns = INTEL_TABLES[name]
+        sort_col, reverse = self.intel_sort[name]
+        order = list(range(len(rows)))
+        if sort_col is not None:
+            _cid, _h, _w, numeric, get = next(c for c in columns if c[0] == sort_col)
+            order.sort(key=lambda k: (get(rows[k]) if numeric else str(get(rows[k])).lower(), k), reverse=reverse)
+        tree.delete(*tree.get_children())
+        self.intel_place_by_iid[name] = {str(k): place_ids[k] for k in order}
+        for k in order:
+            tree.insert("", "end", iid=str(k), values=self._report_values(columns, INTEL_TEXT, rows[k]))
+
+    def refresh_intel_sigint(self):
+        lines = self._intel_lines("sigint", self.intel_search_var, self.intel_kind_var)
+        if self.intel_view_var.get() == INTEL_VIEWS[0]:
+            rows = intel.resolve_lines(lines, self.intel_index)
+            self._fill_intel_tree("lines", self.intel_lines_tree, rows, [r.place_id for r in rows])
+        else:
+            rows = intel.by_place(lines, self.intel_index)
+            self._fill_intel_tree("places", self.intel_places_tree, rows, [r.place_id for r in rows])
+        self.intel_shown["sigint"] = len(lines)
+        self._set_intel_count()
+
+    def refresh_intel_ops(self):
+        lines = self._intel_lines("ops", self.intel_ops_search_var, self.intel_category_var)
+        rows = intel.resolve_lines(lines, self.intel_index)
+        self._fill_intel_tree("ops", self.intel_ops_tree, rows, [r.place_id for r in rows])
+        self.intel_shown["ops"] = len(lines)
+        self._set_intel_count()
+
+    def _set_intel_count(self):
+        if self.save is None:
+            return
+        side = self.intel_side_var.get()
+        total = {key: sum(1 for l in lines if l.side == side) for key, lines in self.intel_all.items()}
+        self.intel_count.set(self.intel_message or (
+            f"SigInt: {self.intel_shown['sigint']} of {total['sigint']} lines    "
+            f"Operations: {self.intel_shown['ops']} of {total['ops']} lines"))
+
+    def sort_intel_by(self, name, col):
+        state = self.intel_sort[name]
+        state[1] = (not state[1]) if col == state[0] else False
+        state[0] = col
+        if name == "ops":
+            self.refresh_intel_ops()
+        else:
+            self.refresh_intel_sigint()
+
+    def open_intel(self, name):
+        """Double-click: open the place the row names, when it is a base or town of the open save."""
+        tree = {"lines": self.intel_lines_tree, "places": self.intel_places_tree, "ops": self.intel_ops_tree}[name]
+        sel = tree.selection()
+        place_id = self.intel_place_by_iid[name].get(sel[0]) if sel else None
+        if place_id is not None:
+            self.jump_to_industry_place(tree, str(place_id))
 
     def apply_title(self):
         if self.save is None:

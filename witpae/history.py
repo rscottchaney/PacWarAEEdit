@@ -99,11 +99,17 @@ def scenario_name(save):
     return data.split(b"\0", 1)[0].decode("latin-1").strip()
 
 
-def campaign_dir(save, save_path, root=None):
-    """The folder of this save's campaign; root replaces <save folder>/history (used by tests)."""
+def save_folder(save_path):
+    """The game's save folder: the save's own folder, or its parent for a save inside "autosave"."""
     folder = os.path.dirname(os.path.abspath(save_path))
     if os.path.basename(folder).lower() == AUTOSAVE_DIR:
         folder = os.path.dirname(folder)
+    return folder
+
+
+def campaign_dir(save, save_path, root=None):
+    """The folder of this save's campaign; root replaces <save folder>/history (used by tests)."""
+    folder = save_folder(save_path)
     return os.path.join(root if root is not None else os.path.join(folder, HISTORY_DIR), slug(scenario_name(save)))
 
 
