@@ -13,7 +13,7 @@ import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from witpae import (aircraft, airgroups, airproduction, bases, chart, factories, history, industry, landunits, lcuproduction, leaders, losses, minefields,
+from witpae import (aircraft, airgroups, airproduction, alerts, bases, chart, factories, history, industry, landunits, lcuproduction, leaders, losses, minefields,
                     pilotpool, planeart, regions, reports, shipproduction, shiprecords, shiprepair, ships, taskforces, victory)
 from witpae.container import SaveFile, SaveFormatError
 from witpae.fileio import is_pbem, save_with_backup
@@ -529,6 +529,24 @@ VP_NOTE = (
     "(Japanese) and 65792 (Allied). Victory levels per manual 17.1: ratio 1.75 decisive, 1.25 marginal. Offsets "
     "from WiTPTracker's reader; not yet compared with the game's Intel screen.")
 
+ALERT_ALL = "All"
+ALERT_COLUMNS = [
+    ("category", "Category", 100, False, lambda r: r.category),
+    ("side", "Side", 70, False, lambda r: r.side),
+    ("subject", "Subject", 200, False, lambda r: r.subject),
+    ("detail", "Detail", 700, False, lambda r: r.detail),
+]
+ALERT_COLUMN_BY_ID = {c[0]: c for c in ALERT_COLUMNS}
+ALERT_NOTE = (
+    "Gathers the problems the other reports show. Low supply: a base or town with supply below the chosen share of "
+    "its requirement (worst: most victory points lost). Spoilage: supply or fuel over the limit (manual 15.7). "
+    "Repair: a damaged ship in port that is above both the port's largest ship and its yard capacity, or a port "
+    "whose Shipyard-mode queue is bigger than its yard. Minefields: one line per side with the mines in its own "
+    "ports that no docked ACM protects (opens the Minefields report). Pilots: a nation's pool below the chosen "
+    "number. Aircraft: a model in production whose groups are missing more planes than the pool plus 30 days of "
+    "production. Engines: Japanese engines built in fewer numbers than the factories use. The two thresholds are "
+    "not saved. Double-click a row to open the base, ship, pilot pool, aircraft, engine or minefields.")
+
 
 
 def _shortest_text(v):
@@ -865,6 +883,11 @@ class EditorApp:
         self.vp_bases_all = []
         self.vp_sort_col = "scored"
         self.vp_sort_reverse = True
+        self.alerts_all = []
+        self.alerts_skipped = []
+        self.alerts_by_iid = {}
+        self.alert_sort_col = None  # None keeps the order alerts.collect gives
+        self.alert_sort_reverse = False
         self.history_dir = None
         self.history_snaps = []
         self.history_problems = []
@@ -1007,6 +1030,7 @@ class EditorApp:
         self.reports_notebook = ttk.Notebook(tab)
         self.reports_notebook.pack(side="top", fill="both", expand=True, pady=(4, 0))
 
+        self._build_alerts_report()
         spoil = ttk.Frame(self.reports_notebook, padding=4)
         self.reports_notebook.add(spoil, text="Spoilage")
         bar = ttk.Frame(spoil)
@@ -1251,6 +1275,7 @@ class EditorApp:
         self.air_tree.bind("<<TreeviewSelect>>", lambda e: self.refresh_air_factories())
 
         eng = ttk.Frame(self.reports_notebook, padding=4)
+        self.engine_frame = eng
         self.reports_notebook.add(eng, text="Engines")
         bar = ttk.Frame(eng)
         bar.pack(side="top", fill="x")
@@ -1389,7 +1414,7 @@ class EditorApp:
         self.refresh_repair_list()
 
     def _build_minefield_report(self):
-        rep = ttk.Frame(self.reports_notebook, padding=4)
+        rep = self.minefield_frame = ttk.Frame(self.reports_notebook, padding=4)
         self.reports_notebook.add(rep, text="Minefields")
         ttk.Label(rep, text=MINE_NOTE, wraplength=1100, justify="left").pack(side="bottom", anchor="w", pady=(4, 0))
         top = ttk.Frame(rep)
@@ -1430,6 +1455,34 @@ class EditorApp:
         shown.pack(side="top", fill="both", expand=True, pady=(4, 0))
         self.refresh_minefield_list()
 
+    def _build_alerts_report(self):
+        rep = self.alerts_frame = ttk.Frame(self.reports_notebook, padding=4)
+        self.reports_notebook.add(rep, text="Alerts")
+        bar = ttk.Frame(rep)
+        bar.pack(side="top", fill="x")
+        self.alert_side_var = tk.StringVar(value=ALERT_ALL)
+        self._report_combo(bar, "Side:", self.alert_side_var, [ALERT_ALL, "Allied", "Japanese"],
+                           self.refresh_alert_list, 9)
+        self.alert_category_var = tk.StringVar(value=ALERT_ALL)
+        self._report_combo(bar, "Category:", self.alert_category_var, [ALERT_ALL, *alerts.CATEGORIES],
+                           self.refresh_alert_list, 11)
+        ttk.Label(bar, text="Search:").pack(side="left")
+        self.alert_search_var = tk.StringVar()
+        self.alert_search_var.trace_add("write", lambda *a: self.refresh_alert_list())
+        ttk.Entry(bar, textvariable=self.alert_search_var, width=20).pack(side="left", padx=(4, 8))
+        self.alert_supply_var = tk.StringVar(value=str(alerts.DEFAULTS["supply_pct"]))
+        self.alert_pool_var = tk.StringVar(value=str(alerts.DEFAULTS["pilot_pool"]))
+        for text, var, top in (("Supply below %", self.alert_supply_var, 100),
+                               ("Pilot pool below", self.alert_pool_var, 32767)):
+            ttk.Label(bar, text=text).pack(side="left")
+            ttk.Spinbox(bar, from_=0, to=top, textvariable=var, width=6).pack(side="left", padx=(4, 8))
+            var.trace_add("write", lambda *a: self.refresh_alerts())
+        self.alert_count = tk.StringVar()
+        ttk.Label(bar, textvariable=self.alert_count).pack(side="left", padx=8)
+        ttk.Label(rep, text=ALERT_NOTE, wraplength=1100, justify="left").pack(side="bottom", anchor="w", pady=(4, 0))
+        self.alert_tree = self._report_tree(rep, ALERT_COLUMNS, self.sort_alerts_by,
+                                            ("category", "side", "subject", "detail"), self.open_alert)
+
     def _build_victory_report(self):
         rep = ttk.Frame(self.reports_notebook, padding=4)
         self.reports_notebook.add(rep, text="Victory points")
@@ -1468,7 +1521,7 @@ class EditorApp:
         return tree
 
     def _build_aircraft_tab(self):
-        tab = ttk.Frame(self.notebook, padding=4)
+        tab = self.aircraft_tab = ttk.Frame(self.notebook, padding=4)
         self.notebook.add(tab, text="Aircraft")
         left = ttk.Frame(tab)
         left.pack(side="left", fill="both", expand=True)
@@ -1822,7 +1875,7 @@ class EditorApp:
         self.groups_notebook.pack(fill="both", expand=True)
         groups_page = self.groups_page = ttk.Frame(self.groups_notebook, padding=4)
         self.groups_notebook.add(groups_page, text="Groups")
-        pool_page = ttk.Frame(self.groups_notebook, padding=4)
+        pool_page = self.pool_page = ttk.Frame(self.groups_notebook, padding=4)
         self.groups_notebook.add(pool_page, text="Pilot pool")
         self._build_pilot_pool(pool_page)
         tab = groups_page
@@ -4115,6 +4168,7 @@ class EditorApp:
         self.refresh_repair_reports()
         self.refresh_minefield_reports()
         self.refresh_vp_reports()
+        self.refresh_alerts()
 
     @staticmethod
     def _report_values(columns, texts, row):
@@ -4466,6 +4520,92 @@ class EditorApp:
     def jump_to_vp_base(self):
         self.jump_to_industry_place(self.vp_tree)
 
+    def _alert_thresholds(self):
+        """(supply %, pilot pool) from the spinboxes; text that is not a number falls back to the defaults."""
+        out = []
+        for var, key in ((self.alert_supply_var, "supply_pct"), (self.alert_pool_var, "pilot_pool")):
+            try:
+                out.append(int(var.get().strip()))
+            except ValueError:
+                out.append(alerts.DEFAULTS[key])
+        return out
+
+    def refresh_alerts(self):
+        """Recompute the alerts from the save; the filters, search and sort only re-select from the result."""
+        if self.save is None:
+            return
+        supply_pct, pilot_pool = self._alert_thresholds()
+        self.alerts_all, self.alerts_skipped = alerts.collect(
+            self.save, supply_pct, pilot_pool, self.industry_places, list(self.groups.values()))
+        self.refresh_alert_list()
+
+    def refresh_alert_list(self):
+        needle = self.alert_search_var.get().strip().lower()
+        side = self.alert_side_var.get()
+        category = self.alert_category_var.get()
+        rows = [(k, a) for k, a in enumerate(self.alerts_all)
+                if side in (ALERT_ALL, a.side) and category in (ALERT_ALL, a.category)
+                and (needle in a.subject.lower() or needle in a.detail.lower())]
+        if self.alert_sort_col is not None:
+            get = ALERT_COLUMN_BY_ID[self.alert_sort_col][4]
+            rows.sort(key=lambda t: (str(get(t[1])).lower(), t[0]), reverse=self.alert_sort_reverse)
+        tree = self.alert_tree
+        tree.delete(*tree.get_children())
+        self.alerts_by_iid = {}
+        for k, a in rows:
+            self.alerts_by_iid[str(k)] = a
+            tree.insert("", "end", iid=str(k), values=self._report_values(ALERT_COLUMNS, {}, a))
+        text = f"{len(rows)} alert{'' if len(rows) == 1 else 's'}"
+        if self.alerts_skipped:
+            text += f" (skipped: {', '.join(self.alerts_skipped)})"
+        self.alert_count.set(text)
+
+    def sort_alerts_by(self, col):
+        self.alert_sort_reverse = (not self.alert_sort_reverse) if col == self.alert_sort_col else False
+        self.alert_sort_col = col
+        self.refresh_alert_list()
+
+    def open_alert(self):
+        """Double-click: open the alert's base, ship, pilot pool, aircraft, engine or minefields where it is edited or listed."""
+        sel = self.alert_tree.selection()
+        alert = self.alerts_by_iid.get(sel[0]) if sel else None
+        if alert is None:
+            return
+        target = str(alert.target_id)
+        if alert.kind == "base":
+            self.jump_to_industry_place(self.alert_tree, target)
+        elif alert.kind == "ship":
+            self._jump_to_ship(self.alert_tree, target)
+        elif alert.kind == "pilots":
+            if alert.target_id not in self.pools:
+                return
+            self.pool_side_var.set("All")
+            self.refresh_pool_list()
+            self.notebook.select(self.groups_tab)
+            self.groups_notebook.select(self.pool_page)
+            self.pool_tree.selection_set(target)
+            self.pool_tree.see(target)
+        elif alert.kind == "aircraft":
+            if alert.target_id not in self.aircraft:
+                return
+            if not self.aircraft_tree.exists(target):
+                self.aircraft_search_var.set("")
+                self.refresh_aircraft_list()
+            self.notebook.select(self.aircraft_tab)
+            self.aircraft_tree.selection_set(target)
+            self.aircraft_tree.see(target)
+        elif alert.kind == "minefields":
+            self.reports_notebook.select(self.minefield_frame)
+            self.minefield_side_var.set(alert.target_id)
+            self.minefield_view_var.set(MINE_VIEWS[0])
+            self._show_minefield_view()
+        elif alert.kind == "engine":
+            # An engine is a device, not an aircraft; the Engines report is the nearest place that lists it.
+            self.reports_notebook.select(self.engine_frame)
+            if self.engine_tree.exists(target):
+                self.engine_tree.selection_set(target)
+                self.engine_tree.see(target)
+
     def _industry_places_for(self, side_var, region_var):
         side = side_var.get()
         return industry.filter_places(self.industry_places, None if side == "All" else side,
@@ -4594,12 +4734,15 @@ class EditorApp:
         self.refresh_air_reports()
 
     def refresh_engine_list(self):
+        selected = self.engine_tree.selection()
         self.engine_tree.delete(*self.engine_tree.get_children())
         rows = sorted(self.engine_rows_all,
                       key=lambda r: self._industry_sort_key(ENGINE_COLUMN_BY_ID, self.engine_sort_col, r, r.id),
                       reverse=self.engine_sort_reverse)
         for r in rows:
             self.engine_tree.insert("", "end", iid=str(r.id), values=self._report_values(ENGINE_COLUMNS, ENGINE_TEXT, r))
+        if selected and self.engine_tree.exists(selected[0]):
+            self.engine_tree.selection_set(selected[0])
         self.engine_count.set(f"{len(rows)} engine{'' if len(rows) == 1 else 's'}")
 
     def sort_engines_by(self, col):
@@ -4607,11 +4750,11 @@ class EditorApp:
         self.engine_sort_col = col
         self.refresh_engine_list()
 
-    def jump_to_industry_place(self, report_tree):
+    def jump_to_industry_place(self, report_tree, iid=None):
         sel = report_tree.selection()
         if not sel:
             return
-        place_id = int(sel[0].split(":")[0])
+        place_id = int((iid or sel[0]).split(":")[0])
         if place_id not in self.bases:
             return
         iid = str(place_id)
@@ -4642,11 +4785,11 @@ class EditorApp:
     def jump_to_production_ship(self):
         self._jump_to_ship(self.production_tree)
 
-    def _jump_to_ship(self, report_tree):
+    def _jump_to_ship(self, report_tree, iid=None):
         sel = report_tree.selection()
         if not sel:
             return
-        iid = sel[0]
+        iid = iid or sel[0]
         if not self.shiprec_tree.exists(iid):
             self.shiprec_search_var.set("")
             self.shiprec_side_var.set("All")

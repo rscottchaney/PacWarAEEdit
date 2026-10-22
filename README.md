@@ -266,7 +266,7 @@ edits go through `airgroups.Leader`.
 
 ## Reports
 
-The Reports tab holds fourteen reports; only the bulk switch buttons of Air production edit the save. It
+The Reports tab holds fifteen reports; only the bulk switch buttons of Air production edit the save. It
 shows the game date (section 0x01: day at 42, month at 44, two-digit year at 46,
 all i16) and refreshes whenever the tab is shown, so edits made in the Bases tab
 are reflected. Double-click a row to jump to that base (Bases tab) or ship (Ships
@@ -274,11 +274,44 @@ tab); the target tab's search and side filter are cleared if they hide the row.
 
 | Report | What it shows | Status |
 |---|---|---|
+| Alerts | The first sub-tab: the actionable problems of the other reports in one list, see below | built from the other reports, so it has no offsets of its own |
 | Spoilage | Bases and towns whose supply or fuel exceeds the spoilage limit, largest total excess first (columns can be re-sorted; Side filter; Region column). With s = port size + airfield size, the limit is supply 5000 + 3000 x s squared and fuel 1000 + 2000 x s squared (game manual 15.7); a base of size 1 gets 8000 / 3000, matching the base screen. "Over" is shown as `-` when not over | formula verified for size 1 (Bassein); the rule that there is no limit at s of 10 or more is from the manual and unverified (a patch note suggests the limit is shown below 9) |
 | Ship upgrades | One row per arrived ship whose class has a further upgrade (ships not yet arrived are left out, because reinforcements arrive with the upgrades of their arrival date): current class, target class, type change (for example DD -> DE), the date the upgrade becomes available, months until then relative to the game date, and the Location. Search (ship or class name), Side and "Due within" (default 3 months) filters | link (ship class u16 at 256 = next class id, available on the target class's date) matches the game's "Upgrade on" dates for Maryland and Kanawha; chains end when the id is 0, the class itself or an unused record |
 | Yard? column (target class i16 at 260) | the shipyard size shown for the upgrade target | unverified |
 
 The code is in `witpae/reports.py`; the upgrade link and yard fields are in `witpae/ships.py`.
+
+### Alerts
+
+The "Alerts" sub-tab (first in the notebook) is read-only. It gathers the problems the other reports find into one
+sortable table (Category, Side, Subject, Detail), worst first within each category. The top bar has a Side filter
+(All, Allied, Japanese), a Category filter, a Search box (subject and detail), two thresholds ("Supply below %",
+default 50, and "Pilot pool below", default 100; changing one recomputes the list, neither is saved) and a count such
+as "37 alerts". A check that cannot read its part of the save is left out on its own and named in the count, for
+example "(skipped: Pilots)". Double-click a row to open the base (Bases tab), ship (Ships tab), pilot pool (Air Groups
+tab), aircraft model (Aircraft tab), engine (Engines report) or minefields (Minefields report); filters that hide the target are cleared.
+
+- Low supply: a base or town whose supply is below the chosen share of its requirement (supply x 100 // required;
+  places with no requirement are left out). The detail gives the supply, the requirement and, for a place that is
+  worth victory points to its owner, the points it scores now of its full value (Victory points report). Worst first:
+  most victory points lost, then the biggest shortfall.
+- Spoilage: the Spoilage report's rows, with the supply and fuel over their limits; largest total excess first.
+- Repair: a damaged ship in port that is above both the port's largest ship and its yard capacity (the Ship repair
+  report's oversize rule; opens the ship), and a port whose Shipyard-mode queue is bigger than its repair yard (opens
+  the port).
+- Minefields: one alert per side, only when that side has unprotected mines in its own ports (hexes at sea and on
+  enemy bases are left out). It sums mines less protected mines (each docked ACM protects 150) over those hexes and
+  gives the number of ports and about how many mines are lost a day: the unprotected mines x 1% (the decay at a
+  friendly port, manual 6.6.1.2). Double-click opens the Minefields
+  report in By hex view with that side selected.
+- Pilots: a nation that is not empty with a pilot pool below the threshold; the detail adds the monthly rate and the
+  pilots in training.
+- Aircraft: a model in production (planes a day above 0 in the Air production report) whose arrived air groups are
+  missing more planes than the pool plus 30 days of production (Groups short above Pool + 30 x planes a day). Models
+  nobody builds, such as obsolete or future types, never alert. Worst first: the biggest excess.
+- Engines: a Japanese engine the factories build in fewer numbers than the aircraft factories use (net below 0 in the
+  Engines report).
+- The code is in `witpae/alerts.py`.
 
 ### Ship production
 
