@@ -703,12 +703,25 @@ the report files are never written, and their text is only ever shown.
   Sighting, Submarine, Pilot, Air, Arrival, Upgrade, Base, Capture, Ship, Task force and Other, chosen by keyword
   rules where the first match wins (the table `OPS_RULES` in `witpae/intel.py` lists them). The hex is the
   "x,y" or "(x,y)" in the line; the place is the name after "near", "at", "off" and similar words.
+- Combat: the game's daily after-action reports, `combatreport_YYMMDD.txt` (one file per turn holding both sides,
+  plus an undated `combatreport.txt` copy handled like the other undated files; the `Combat_Events_*.txt` engine
+  logs are ignored). Each action (blocks separated by lines of dashes) is one row: Date, Kind, Phase, Place, Hex,
+  aircraft taking part and aircraft lost per side (destroyed, on the ground and by flak; damaged is not counted),
+  Ships hit and Ships sunk, and ground losses Allied/Japanese (squads, non-combat and engineer units, guns and
+  vehicles destroyed). The kinds are Air attack, Amphibious assault, Ground combat, Invasion support,
+  Pre-invasion, ASW, Submarine, Sub vs sub, Bombardment, Mine field, Surface combat and Other (a block no rule
+  recognises is kept, never dropped), chosen from the first line of the block by the table `KIND_RULES` in
+  `witpae/combat.py`. The place is the base named in the title, or the name after "near" for an attack on a task
+  force, or the name in brackets for an attack on a land unit. Filters: Kind, Involving (All, With ships sunk, With
+  aircraft lost), a text search and the shared Turns choice; Reports of does not apply. Selecting a row shows the
+  action's full text in the pane below (drag the divider to resize it), and the line under the table totals the
+  shown actions, aircraft lost and ships sunk per side. Double-clicking a row opens its place, as above.
 - Places: a line with a hex is matched to the open save's base or town at that hex (a base wins over a town in the
   same hex); a line with only a name is matched by exact name, ignoring case. Double-clicking such a row opens the
   place in the Bases tab. Other rows (a land unit, a minor place, a hex at sea) have nothing to open.
 - Every column heading sorts the table; clicking it again reverses the order.
 
-The code is in `witpae/intel.py`.
+The code is in `witpae/intel.py` and, for Combat, `witpae/combat.py`.
 
 ## Backups
 
