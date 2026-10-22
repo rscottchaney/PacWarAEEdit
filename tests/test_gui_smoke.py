@@ -1820,6 +1820,135 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertIn("folder", err.call_args[0][1])
         self.assertIsNone(app.save)
 
+    def _intel_folder(self, files):
+        """A temporary copy of the sample save with report files written next to it."""
+        import shutil
+        import tempfile
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = os.path.join(tmp.name, "going2_411210.pws")
+        shutil.copy(SAVE_015, path)
+        for name, lines in files.items():
+            with open(os.path.join(tmp.name, name), "wb") as f:
+                f.write("\r\n".join(lines).encode("latin-1") + b"\r\n")
+        return path
+
+    def test_intel_tab(self):
+        import witpae_editor
+        path = self._intel_folder({
+            "asigint_411209.txt": ["SIG INT REPORT FOR Dec 9, 41", "Radio transmissions detected at 1,2."],
+            "asigint_411210.txt": [
+                "SIG INT REPORT FOR Dec 10, 41", "Radio transmissions detected at Pearl Harbor (180,107).",
+                "Heavy Volume of Radio transmissions detected at 180,107.",
+                "9th Tank Regiment is located at Yenki(110,44).",
+                "4th Fleet is planning for an attack on Pearl Harbor.", "Odd new line."],
+            "asigint.txt": ["SIG INT REPORT FOR Dec 10, 41", "Radio transmissions detected at 9,9."],
+            "joperationsreport_411210.txt": ["OPERATIONAL REPORT FOR Dec 10, 41",
+                                              "SS I-2 assigned to offensive patrol 225, 80 - 223, 81 off San Diego",
+                                              "xAK Ewa arrives at Pearl Harbor"]})
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(path))
+        self.root.update()
+        tabs = [app.notebook.tab(t, "text") for t in app.notebook.tabs()]
+        self.assertEqual(tabs[tabs.index("History") + 1], "Intel")
+        self.assertEqual([app.intel_notebook.tab(t, "text") for t in app.intel_notebook.tabs()],
+                         ["SigInt", "Operations"])
+        # Allied SIGINT exists, so Allied is shown; Latest keeps the newest turn only (the undated copy is a duplicate).
+        self.assertEqual(app.intel_side_var.get(), "Allied")
+        tree = app.intel_lines_tree
+        self.assertEqual(len(tree.get_children()), 5)
+        self.assertEqual(tree.set(tree.get_children()[0], "date"), "10 Dec 41")
+        self.assertEqual(app.intel_count.get(), "SigInt: 5 of 6 lines    Operations: 0 of 0 lines")
+        app.intel_turns_var.set("All")
+        app.refresh_intel()
+        self.assertEqual(len(tree.get_children()), 6)
+        # Type filter and search.
+        app.intel_kind_var.set("Radio")
+        app.refresh_intel_sigint()
+        self.assertEqual(len(tree.get_children()), 2)
+        app.intel_kind_var.set("All")
+        app.intel_search_var.set("yenki")
+        self.assertEqual(len(tree.get_children()), 1)
+        app.intel_search_var.set("")
+        app.intel_kind_var.set("Other")
+        app.refresh_intel_sigint()
+        self.assertEqual([tree.set(i, "kind") for i in tree.get_children()], ["Other"])
+        app.intel_kind_var.set("All")
+        app.refresh_intel_sigint()
+        # Sorting: by date (numeric), then reversed by clicking the heading again.
+        app.sort_intel_by("lines", "date")
+        self.assertEqual(tree.set(tree.get_children()[0], "date"), "9 Dec 41")
+        app.sort_intel_by("lines", "date")
+        self.assertEqual(tree.set(tree.get_children()[0], "date"), "10 Dec 41")
+        # Double-click opens a row that resolves to a place; an Other line has none.
+        other = next(i for i in tree.get_children() if tree.set(i, "kind") == "Other")
+        tree.selection_set(other)
+        app.notebook.select(app.history_tab)
+        app.open_intel("lines")
+        self.assertEqual(app.notebook.select(), str(app.history_tab))
+        pearl = next(i for i in tree.get_children() if tree.set(i, "place") == "Pearl Harbor")
+        tree.selection_set(pearl)
+        app.open_intel("lines")
+        self.assertEqual(app.notebook.select(), str(app.bases_tab))
+        self.assertEqual(app.tree.selection(), ("584",))
+        # By place view.
+        app.intel_view_var.set("By place")
+        app._show_intel_view()
+        places = app.intel_places_tree
+        row = places.get_children()[0]
+        self.assertEqual([places.set(row, c) for c in ("place", "hex", "radio", "heavy", "units", "reports")],
+                         ["Pearl Harbor", "180,107", "1", "1", "0", "3"])
+        self.assertEqual(places.set(row, "last"), "10 Dec 41")
+        self.assertEqual((app.intel_lines_frame.winfo_manager(), app.intel_places_frame.winfo_manager()), ("", "pack"))
+        app.sort_intel_by("places", "place")
+        app.notebook.select(app.history_tab)
+        places.selection_set(places.get_children()[0])
+        app.open_intel("places")
+        self.assertEqual(app.notebook.select(), str(app.history_tab))  # the unnamed 1,2 row sorts first and is no place
+        places.selection_set(next(i for i in places.get_children() if places.set(i, "place") == "Pearl Harbor"))
+        app.open_intel("places")
+        self.assertEqual(app.notebook.select(), str(app.bases_tab))
+        # Operations of the other side.
+        app.intel_side_var.set("Japanese")
+        app.refresh_intel()
+        ops = app.intel_ops_tree
+        self.assertEqual(len(ops.get_children()), 2)
+        app.intel_category_var.set("Arrival")
+        app.refresh_intel_ops()
+        self.assertEqual([ops.set(i, "place") for i in ops.get_children()], ["Pearl Harbor"])
+        app.intel_category_var.set("All")
+        app.intel_ops_search_var.set("patrol")
+        self.assertEqual([ops.set(i, "kind") for i in ops.get_children()], ["Submarine"])
+        app.intel_ops_search_var.set("")
+        app.sort_intel_by("ops", "kind")
+        self.assertEqual([ops.set(i, "kind") for i in ops.get_children()], ["Arrival", "Submarine"])
+        app.notebook.select(app.history_tab)
+        ops.selection_set(ops.get_children()[0])
+        app.open_intel("ops")
+        self.assertEqual(app.notebook.select(), str(app.bases_tab))
+        # Reload picks up a new file.
+        with open(os.path.join(os.path.dirname(path), "asigint_411211.txt"), "wb") as f:
+            f.write(b"SIG INT REPORT FOR Dec 11, 41\r\nRadio transmissions detected at 5,5.\r\n")
+        app.intel_side_var.set("Allied")
+        app.intel_turns_var.set("Latest")
+        app.load_intel_view()
+        self.assertEqual(app.intel_count.get(), "SigInt: 1 of 7 lines    Operations: 0 of 0 lines")
+
+    def test_intel_default_side_and_empty_folder(self):
+        import witpae_editor
+        path = self._intel_folder({"jsigint_411210.txt": ["SIG INT REPORT FOR Dec 10, 41",
+                                                          "Radio transmissions detected at 1,2."]})
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(path))
+        self.assertEqual(app.intel_side_var.get(), "Japanese")
+        self.assertEqual(len(app.intel_lines_tree.get_children()), 1)
+        self.assertTrue(app.load(self._intel_folder({})))
+        self.assertEqual(app.intel_lines_tree.get_children(), ())
+        self.assertEqual(app.intel_ops_tree.get_children(), ())
+        self.assertIn("No intel reports found", app.intel_count.get())
+        app.open_intel("lines")  # nothing selected: no error
+        app.sort_intel_by("lines", "place")
+
     def test_history_tab(self):
         import witpae_editor
         from witpae import history
