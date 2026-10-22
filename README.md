@@ -723,6 +723,38 @@ the report files are never written, and their text is only ever shown.
 
 The code is in `witpae/intel.py` and, for Combat, `witpae/combat.py`.
 
+## Map
+
+The Map tab (after Intel) draws the game's own map art with the open save's data on top, like WiTPTracker's map. It
+is read-only: nothing is written to the save or to the art.
+
+- Art: `WPEH00.bmp`..`WPEH41.bmp` (hex grid drawn) and `WPEN00`..`41` (no grid) from the game's ART folder, found
+  the way the Aircraft tab finds its pictures (`..\ART` next to the save's folder, then next to the editor). The 42
+  tiles make a 9703 x 7767 px map, too big for a Tk image, so it is drawn at 12 %, 25 % (the default) or 50 %, by
+  keeping every 8th, 4th or 2nd pixel; a picture takes under a second to build and is kept until the editor closes. It
+  is built when the tab is first shown. If the art is not found or cannot be read, the tab says so and the overlays are
+  drawn on a plain background of the same size.
+- Top bar: Background (Hexes or No hexes), Scale, Overlay, Side (All, Allied or Japanese; it does not apply to
+  Combat, which is not tied to a side) and Find, which centres the map on the base or town whose name matches (exact
+  name first, then a name starting with the text, then one containing it). The second row holds the filters of the
+  chosen overlay. Drag the map to pan it; the mouse wheel scrolls (Shift for sideways).
+- Locations: bases, or bases and towns (towns are hollow), by Side and Region (the same regions as the reports);
+  base names are written at 50 % only.
+- Search arcs: the air groups with a search patrol (Naval) or ASW patrol above 0 %, as a circle or a wedge of the
+  group's search radius (dashed for ASW). The radius is the group's maximum range setting, capped by the aircraft's
+  normal radius; a setting of 0 uses the normal radius. A group aboard a ship is drawn at the ship's task force (or
+  port). Arc: All, Defined (a wedge from the start to the end bearing, 0 = north, clockwise) or Random (a full
+  circle). Not verified in the game: a start equal to the end is taken as "Random", only one arc is stored so it is
+  used for both Naval and ASW, and the range cap may differ from the game's.
+- Task forces: a square per task force, with a dashed arrow to its destination when it has one.
+- Combat: a diamond per action of the combat reports that has a hex, filtered by Kind (Submarine and ASW are the
+  tracker's enemy subs) and Turns (Latest, Last 3, Last 7 or All).
+- Click a hex to ring it and list, below the map, the places, task forces, air groups searching from it and combat
+  actions in it, whatever overlay is shown.
+- The hex of a pixel is `x * 42 - 6` (plus 21 on odd rows) by `y * 38 - 18` at full size; Pearl Harbor lands on Oahu.
+
+The code is in `witpae/mapview.py` (art, hexes and the overlay data) and the Map section of `witpae_editor.py`.
+
 ## Backups
 
 Always keep a copy of your saves before editing. Prefer saving to a new file

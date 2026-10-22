@@ -2213,5 +2213,111 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertIn("deleted", app.history_status.get())
 
 
+    def test_map_tab(self):
+        import tempfile
+        from unittest import mock
+        import witpae_editor
+        from tests.test_mapview import write_art
+        from witpae import mapview
+        art = tempfile.TemporaryDirectory()
+        self.addCleanup(art.cleanup)
+        write_art(art.name, "WPEH")
+        write_art(art.name, "WPEN")
+        dashes = "-" * 80
+        path = self._intel_folder({"combatreport_411210.txt": [
+            "AFTER ACTION REPORTS FOR Dec 10, 41", dashes, "ASW attack near Pearl Harbor at 180,107", " ",
+            "Weather in hex: Clear sky", " ", dashes, "Ground combat at Nowhere", " ", "Weather in hex: Clear sky"]})
+        with mock.patch.object(witpae_editor.EditorApp, "_art_dirs", lambda self: [art.name]):
+            app = witpae_editor.EditorApp(self.root)
+            tabs = [app.notebook.tab(t, "text") for t in app.notebook.tabs()]
+            self.assertEqual(tabs[tabs.index("Intel") + 1], "Map")
+            self.assertEqual(app.map_info.get(), "Open a save to see the map")
+            self.assertTrue(app.load(path))
+            self.root.update()
+            self.assertIsNone(app.map_shown)  # not drawn until the tab is shown
+            app.notebook.select(app.map_tab)
+            self.root.update()
+            self.assertEqual(app.map_shown, ("Hexes", 4))
+            self.assertEqual(app.map_message, "")
+            self.assertIsNotNone(app.map_image)
+            self.assertEqual(len(app.map_canvas.find_withtag("bg")), 1)
+            self.assertEqual(app.map_info.get(), "781 bases")
+            self.assertGreaterEqual(len(app.map_canvas.find_withtag("overlay")), 781)
+            # Filters of the Locations overlay.
+            app.map_towns_var.set("Bases and towns")
+            app.refresh_map()
+            self.assertEqual(app.map_info.get(), "1052 bases and towns")
+            app.map_side_var.set("Allied")
+            app.map_region_var.set(next(r for r in app.region_ids if r != witpae_editor.REGION_ALL))
+            app.refresh_map()
+            self.assertTrue(app.map_info.get().endswith("bases and towns"))
+            app.map_side_var.set("All")
+            app.map_region_var.set(witpae_editor.REGION_ALL)
+            # Every overlay draws, at every scale, on either background.
+            counts = {}
+            for overlay in witpae_editor.MAP_OVERLAYS:
+                app.map_overlay_var.set(overlay)
+                app._map_overlay_changed()
+                counts[overlay] = len(app.map_canvas.find_withtag("overlay"))
+                self.assertTrue(app.map_info.get().startswith(
+                    {"Locations": "1052", "Search arcs": "173", "Task forces": "236", "Combat": "1"}[overlay]
+                ), (overlay, app.map_info.get()))
+            self.assertTrue(all(counts.values()), counts)
+            self.assertEqual(str(app.map_side_box.cget("state")), "disabled")  # Side does not apply to combat
+            app.map_overlay_var.set("Search arcs")
+            app._map_overlay_changed()
+            self.assertEqual(str(app.map_side_box.cget("state")), "readonly")
+            app.map_arc_kind_var.set("ASW")
+            app.map_arc_mode_var.set("Defined")
+            app.refresh_map()
+            self.assertTrue(app.map_info.get().startswith("0 ASW search arcs"))
+            app.map_arc_mode_var.set("All")
+            app.map_overlay_var.set("Combat")
+            app.map_combat_kind_var.set("ASW")
+            app._map_overlay_changed()
+            self.assertEqual(app.map_info.get(), "1 combat actions")
+            app.map_combat_kind_var.set("Submarine")
+            app.refresh_map()
+            self.assertEqual(app.map_info.get(), "0 combat actions")
+            for style in mapview.STYLES:
+                for scale in witpae_editor.MAP_SCALES:
+                    app.map_style_var.set(style)
+                    app.map_scale_var.set(scale)
+                    app.map_overlay_var.set("Task forces")
+                    app._map_overlay_changed()
+                    self.assertEqual(app.map_shown, (style, witpae_editor.MAP_SCALES[scale]))
+                    self.assertEqual(app.map_message, "")
+            # Click report and Find.
+            app.map_find_var.set("pearl")
+            app.find_map_place()
+            text = app.map_detail.get("1.0", "end")
+            self.assertTrue(text.startswith("Hex 180,107"))
+            for expected in ("Places:", "Pearl Harbor (base, Allied)", "Air groups searching:", "Combat:", "ASW:"):
+                self.assertIn(expected, text)
+            self.assertEqual(len(app.map_canvas.find_withtag("pick")), 1)
+            app.show_map_hex(0, 0)
+            self.assertIn("Nothing here", app.map_detail.get("1.0", "end"))
+            app.map_find_var.set("no such place")
+            app.find_map_place()
+            self.assertIn("No base or town matches", app.map_info.get())
+            # Opening another save clears what was drawn.
+            app.load(path)
+            self.assertEqual(app.map_canvas.find_withtag("pick"), ())
+
+    def test_map_tab_without_art(self):
+        from unittest import mock
+        import witpae_editor
+        with mock.patch.object(witpae_editor.EditorApp, "_art_dirs", lambda self: []):
+            app = witpae_editor.EditorApp(self.root)
+            self.assertTrue(app.load(SAVE_015))
+            app.notebook.select(app.map_tab)
+            self.root.update()
+            self.assertIn("not found", app.map_message)
+            self.assertIsNone(app.map_image)
+            self.assertTrue(app.map_info.get().startswith("Map art"))
+            self.assertEqual(len(app.map_canvas.find_withtag("bg")), 1)
+            self.assertGreaterEqual(len(app.map_canvas.find_withtag("overlay")), 781)
+
+
 if __name__ == "__main__":
     unittest.main()

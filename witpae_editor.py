@@ -13,7 +13,7 @@ import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from witpae import (aircraft, airgroups, airproduction, alerts, bases, chart, combat, factories, history, industry, intel, landunits, lcuproduction, leaders, losses, minefields,
+from witpae import (aircraft, airgroups, airproduction, alerts, bases, chart, combat, factories, history, industry, intel, landunits, lcuproduction, leaders, losses, mapview, minefields,
                     pilotpool, planeart, regions, reports, shipproduction, shiprecords, shiprepair, ships, taskforces, victory)
 from witpae.container import SaveFile, SaveFormatError
 from witpae.fileio import is_pbem, save_with_backup
@@ -737,6 +737,17 @@ HISTORY_SIDES_COLUMNS = ("date", "turn", "allied", "allied_change", "japanese", 
 HISTORY_BASE_COLUMNS = ("date", "turn", "side", "value", "change")
 HISTORY_AIRCRAFT_COLUMNS = ("date", "turn", "value", "change")
 
+MAP_SCALES = {"12%": 8, "25%": 4, "50%": 2}  # label -> every step-th pixel of the art
+MAP_OVERLAYS = ("Locations", "Search arcs", "Task forces", "Combat")
+MAP_SIDES = ("All", "Allied", "Japanese")
+MAP_TOWNS = ("Bases", "Bases and towns")
+MAP_ARC_KINDS = ("Naval", "ASW")
+MAP_ARC_MODES = ("All", "Defined", "Random")
+MAP_OTHER_COLOR = "#777777"
+MAP_COMBAT_COLOR = "#e08a00"
+MAP_PLAIN_COLOR = "#c9d6e3"
+MAP_CLICK_PIXELS = 3  # a press that moves more than this is a drag of the map, not a click
+
 INTEL_ALL = "All"
 INTEL_VIEWS = ("Lines", "By place")
 INTEL_NOTE = (
@@ -1022,6 +1033,7 @@ class EditorApp:
         self._build_reports_tab()
         self._build_history_tab()
         self._build_intel_tab()
+        self._build_map_tab()
 
         left = ttk.Frame(body)
         left.pack(side="left", fill="both", expand=True)
@@ -2526,6 +2538,7 @@ class EditorApp:
         self.refresh_reports()
         self.record_history()
         self.load_intel_view()
+        self.load_map_view()
         return True
 
     def confirm_discard(self):
@@ -5346,6 +5359,329 @@ class EditorApp:
         place_id = self.intel_place_by_iid[name].get(sel[0]) if sel else None
         if place_id is not None:
             self.jump_to_industry_place(tree, str(place_id))
+
+    # ---- map -----------------------------------------------------------
+
+    def _build_map_tab(self):
+        tab = self.map_tab = ttk.Frame(self.notebook, padding=4)
+        self.notebook.add(tab, text="Map")
+        self.map_image = None  # the background on the canvas, kept alive here
+        self.map_images = {}  # (style, step) -> PhotoImage, for the session
+        self.map_shown = None  # (style, step) of the background on the canvas
+        self.map_size = (1, 1)  # canvas pixels of the map as drawn
+        self.map_cache = {}  # overlay data of the open save, by the arguments of its builder
+        self.map_index = None
+        self.map_places = None
+        self.map_stale = True  # the open save has not been drawn yet
+        self.map_message = ""
+        self.map_press = None
+        bar = ttk.Frame(tab)
+        bar.pack(side="top", fill="x")
+        self.map_style_var = tk.StringVar(value=next(iter(mapview.STYLES)))
+        self._report_combo(bar, "Background:", self.map_style_var, mapview.STYLES, self.refresh_map, 9)
+        self.map_scale_var = tk.StringVar(value="25%")
+        self._report_combo(bar, "Scale:", self.map_scale_var, MAP_SCALES, self.refresh_map, 5)
+        self.map_overlay_var = tk.StringVar(value=MAP_OVERLAYS[0])
+        self._report_combo(bar, "Overlay:", self.map_overlay_var, MAP_OVERLAYS, self._map_overlay_changed, 11)
+        self.map_side_var = tk.StringVar(value=MAP_SIDES[0])
+        self.map_side_box = self._report_combo(bar, "Side:", self.map_side_var, MAP_SIDES, self.refresh_map, 9)
+        ttk.Label(bar, text="Find:").pack(side="left")
+        self.map_find_var = tk.StringVar()
+        find = ttk.Entry(bar, textvariable=self.map_find_var, width=18)
+        find.pack(side="left", padx=(4, 2))
+        find.bind("<Return>", lambda e: self.find_map_place())
+        ttk.Button(bar, text="Find", command=self.find_map_place).pack(side="left")
+
+        self.map_filters = ttk.Frame(tab)
+        self.map_filters.pack(side="top", fill="x", pady=(4, 0))
+        self.map_filter_frames = {}
+        loc = self.map_filter_frames["Locations"] = ttk.Frame(self.map_filters)
+        self.map_towns_var = tk.StringVar(value=MAP_TOWNS[0])
+        self._report_combo(loc, "Show:", self.map_towns_var, MAP_TOWNS, self.refresh_map, 15)
+        self.map_region_var = tk.StringVar(value=REGION_ALL)
+        self._report_combo(loc, "Region:", self.map_region_var, self.region_ids, self.refresh_map, 22)
+        arcs = self.map_filter_frames["Search arcs"] = ttk.Frame(self.map_filters)
+        self.map_arc_kind_var = tk.StringVar(value=MAP_ARC_KINDS[0])
+        self._report_combo(arcs, "Patrol:", self.map_arc_kind_var, MAP_ARC_KINDS, self.refresh_map, 7)
+        self.map_arc_mode_var = tk.StringVar(value=MAP_ARC_MODES[0])
+        self._report_combo(arcs, "Arc:", self.map_arc_mode_var, MAP_ARC_MODES, self.refresh_map, 8)
+        self.map_filter_frames["Task forces"] = ttk.Frame(self.map_filters)
+        cmb = self.map_filter_frames["Combat"] = ttk.Frame(self.map_filters)
+        self.map_combat_kind_var = tk.StringVar(value=INTEL_ALL)
+        self._report_combo(cmb, "Kind:", self.map_combat_kind_var, [INTEL_ALL, *combat.KINDS], self.refresh_map, 17)
+        self.map_combat_turns_var = tk.StringVar(value=next(iter(intel.TURN_CHOICES)))
+        self._report_combo(cmb, "Turns:", self.map_combat_turns_var, intel.TURN_CHOICES, self.refresh_map, 8)
+
+        self.map_info = tk.StringVar(value="Open a save to see the map")
+        ttk.Label(tab, textvariable=self.map_info).pack(side="bottom", anchor="w", pady=(4, 0))
+        dframe = ttk.Frame(tab)
+        dframe.pack(side="bottom", fill="x", pady=(4, 0))
+        dscroll = ttk.Scrollbar(dframe, orient="vertical")
+        self.map_detail = tk.Text(dframe, height=6, wrap="none", state="disabled", yscrollcommand=dscroll.set)
+        dscroll.configure(command=self.map_detail.yview)
+        dscroll.pack(side="right", fill="y")
+        self.map_detail.pack(side="left", fill="x", expand=True)
+
+        frame = ttk.Frame(tab)
+        frame.pack(side="top", fill="both", expand=True, pady=(4, 0))
+        hbar = ttk.Scrollbar(frame, orient="horizontal")
+        vbar = ttk.Scrollbar(frame, orient="vertical")
+        c = self.map_canvas = tk.Canvas(frame, background=MAP_PLAIN_COLOR, highlightthickness=0, width=900,
+                                        height=420, xscrollcommand=hbar.set, yscrollcommand=vbar.set)
+        hbar.configure(command=c.xview)
+        vbar.configure(command=c.yview)
+        c.grid(row=0, column=0, sticky="nsew")
+        vbar.grid(row=0, column=1, sticky="ns")
+        hbar.grid(row=1, column=0, sticky="ew")
+        frame.grid_rowconfigure(0, weight=1)
+        frame.grid_columnconfigure(0, weight=1)
+        c.bind("<ButtonPress-1>", self._map_press)
+        c.bind("<B1-Motion>", self._map_drag)
+        c.bind("<ButtonRelease-1>", self._map_release)
+        c.bind("<MouseWheel>", lambda e: c.yview_scroll(-1 if e.delta > 0 else 1, "units"))
+        c.bind("<Shift-MouseWheel>", lambda e: c.xview_scroll(-1 if e.delta > 0 else 1, "units"))
+        c.bind("<Button-4>", lambda e: c.yview_scroll(-1, "units"))
+        c.bind("<Button-5>", lambda e: c.yview_scroll(1, "units"))
+        self._map_overlay_changed(draw=False)
+        # Bound last (and added) so the Reports handler stays; the map is drawn only when it is first shown.
+        self.notebook.bind("<<NotebookTabChanged>>", lambda e: self._map_shown_event(), add="+")
+
+    def _map_overlay_changed(self, draw=True):
+        overlay = self.map_overlay_var.get()
+        for name, frame in self.map_filter_frames.items():
+            frame.pack_forget()
+            if name == overlay:
+                frame.pack(side="left")
+        self.map_side_box.configure(state="disabled" if overlay == "Combat" else "readonly")
+        if draw:
+            self.refresh_map()
+
+    def _map_visible(self):
+        return self.notebook.select() == str(self.map_tab)
+
+    def _map_shown_event(self):
+        if self.map_stale and self._map_visible():
+            self.refresh_map()
+
+    def load_map_view(self):
+        """Forget the overlays of the previous save; the map is redrawn now if its tab is showing, else when shown."""
+        self.map_cache = {}
+        self.map_index = None
+        self.map_places = None
+        self.map_shown = None  # the art folder depends on the save's folder
+        self.map_stale = True
+        self.map_canvas.delete("overlay", "pick")
+        self._set_map_detail("")
+        if self._map_visible():
+            self.refresh_map()
+
+    def _map_step(self):
+        return MAP_SCALES[self.map_scale_var.get()]
+
+    def refresh_map(self):
+        if self.save is None:
+            self.map_info.set("Open a save to see the map")
+            return
+        self.map_stale = False
+        self._draw_map_background()
+        try:
+            self._draw_map_overlay()
+        except (SaveFormatError, IndexError, KeyError, struct.error) as exc:
+            self.map_canvas.delete("overlay")
+            self.map_info.set(f"Could not read the {self.map_overlay_var.get().lower()}: {exc}")
+
+    def _draw_map_background(self):
+        style, step = self.map_style_var.get(), self._map_step()
+        if self.map_shown == (style, step):
+            return
+        c = self.map_canvas
+        centre = (sum(c.xview()) / 2, sum(c.yview()) / 2)
+        c.delete("bg", "pick")
+        self.map_message = ""
+        image = self.map_images.get((style, step))
+        if image is None:
+            folder = mapview.find_art(self._art_dirs(), style)
+            if folder is None:
+                self.map_message = "Map art (WPEH00.bmp ... WPEN41.bmp) not found in the ART folder; plain background."
+            else:
+                try:
+                    _w, _h, ppm = mapview.render(folder, style, step)
+                    image = tk.PhotoImage(master=self.root, data=ppm)
+                    self.map_images[(style, step)] = image
+                except (ValueError, tk.TclError) as exc:
+                    self.map_message = f"Map art could not be read ({exc}); plain background."
+        if image is not None:
+            width, height = image.width(), image.height()
+            c.create_image(0, 0, anchor="nw", image=image, tags="bg")
+        else:
+            width, height = -(-mapview.FULL_SIZE[0] // step), -(-mapview.FULL_SIZE[1] // step)
+            c.create_rectangle(0, 0, width, height, fill=MAP_PLAIN_COLOR, outline="", tags="bg")
+        self.map_image = image
+        c.tag_lower("bg")
+        self.map_size = (width, height)
+        self.map_shown = (style, step)
+        c.configure(scrollregion=(0, 0, width, height))
+        c.xview_moveto(centre[0] - c.winfo_width() / width / 2)
+        c.yview_moveto(centre[1] - c.winfo_height() / height / 2)
+
+    def _map_data(self, key, build):
+        if key not in self.map_cache:
+            self.map_cache[key] = build()
+        return self.map_cache[key]
+
+    @staticmethod
+    def _map_color(side):
+        return HISTORY_SIDE_COLORS.get(side, MAP_OTHER_COLOR)
+
+    def _draw_map_overlay(self):
+        c = self.map_canvas
+        c.delete("overlay")
+        step = self._map_step()
+        scale = 1 / step
+        overlay, side = self.map_overlay_var.get(), self.map_side_var.get()
+
+        def point(x, y):
+            px, py = mapview.hex_to_pixel(x, y)
+            return px * scale, py * scale
+
+        if overlay == "Locations":
+            towns = self.map_towns_var.get() == MAP_TOWNS[1]
+            region = self.region_ids[self.map_region_var.get()]
+            marks = self._map_data(("loc", towns, side, region),
+                                   lambda: mapview.location_marks(self.save, towns, side, region))
+            r = {8: 2, 4: 3, 2: 4}[step]
+            for m in marks:
+                x, y = point(m.x, m.y)
+                color = self._map_color(m.side)
+                c.create_oval(x - r, y - r, x + r, y + r, outline=color, width=2,
+                              fill=color if m.kind == "Base" else "", tags="overlay")
+                if step == 2 and m.kind == "Base":
+                    for dx, fill in ((1, "white"), (0, "black")):  # a light shadow keeps the name legible
+                        c.create_text(x + r + 3 + dx, y + dx, text=m.name, anchor="w", fill=fill,
+                                      font=("TkDefaultFont", 7), tags="overlay")
+            summary = f"{len(marks)} {'bases and towns' if towns else 'bases'}"
+        elif overlay == "Search arcs":
+            kind, mode = self.map_arc_kind_var.get(), self.map_arc_mode_var.get()
+            arcs = self._map_data(("arc", kind, mode, side), lambda: mapview.search_arcs(self.save, kind, mode, side))
+            for a in arcs:
+                x, y = point(a.x, a.y)
+                rad = a.radius * mapview.HEX_W * scale
+                box = (x - rad, y - rad, x + rad, y + rad)
+                style = {"outline": self._map_color(a.side), "dash": (4, 3) if kind == "ASW" else "",
+                         "tags": "overlay"}
+                if a.full:
+                    c.create_oval(*box, **style)
+                else:
+                    start, extent = mapview.compass_to_tk(a.start, a.end)
+                    c.create_arc(*box, start=start, extent=extent, style="pieslice", fill="", **style)
+                c.create_oval(x - 2, y - 2, x + 2, y + 2, fill=style["outline"], outline="", tags="overlay")
+            summary = f"{len(arcs)} {kind} search arcs ({sum(a.full for a in arcs)} full circle)"
+        elif overlay == "Task forces":
+            tfs = self._map_data(("tf", side), lambda: mapview.task_force_marks(self.save, side))
+            for t in tfs:
+                x, y = point(t.x, t.y)
+                color = self._map_color(t.side)
+                if t.dest_x is not None:
+                    dx, dy = point(t.dest_x, t.dest_y)
+                    c.create_line(x, y, dx, dy, fill=color, dash=(3, 3), arrow="last", tags="overlay")
+                c.create_rectangle(x - 3, y - 3, x + 3, y + 3, fill=color, outline="black", tags="overlay")
+            summary = f"{len(tfs)} task forces ({sum(t.dest_x is not None for t in tfs)} with a destination)"
+        else:
+            kind = self.map_combat_kind_var.get()
+            turns = intel.TURN_CHOICES[self.map_combat_turns_var.get()]
+            marks = mapview.combat_marks(intel.recent(self.intel_combat_all, turns), kind)
+            for m in marks:
+                x, y = point(m.x, m.y)
+                c.create_polygon(x, y - 5, x + 5, y, x, y + 5, x - 5, y, fill=MAP_COMBAT_COLOR, outline="black",
+                                 tags="overlay")
+            summary = f"{len(marks)} combat actions"
+        self.map_info.set(f"{self.map_message}  {summary}".strip() if self.map_message else summary)
+
+    # Left-drag pans the map; a press that hardly moves is a click on a hex.
+    def _map_press(self, event):
+        self.map_press = (event.x, event.y)
+        self.map_canvas.scan_mark(event.x, event.y)
+
+    def _map_drag(self, event):
+        self.map_canvas.scan_dragto(event.x, event.y, gain=1)
+
+    def _map_release(self, event):
+        start, self.map_press = self.map_press, None
+        if start is None or max(abs(event.x - start[0]), abs(event.y - start[1])) > MAP_CLICK_PIXELS:
+            return
+        step = self._map_step()
+        c = self.map_canvas
+        self.show_map_hex(*mapview.pixel_to_hex(c.canvasx(event.x) * step, c.canvasy(event.y) * step))
+
+    def _set_map_detail(self, text):
+        self.map_detail.configure(state="normal")
+        self.map_detail.delete("1.0", "end")
+        self.map_detail.insert("1.0", text)
+        self.map_detail.configure(state="disabled")
+
+    def _map_hex_index(self):
+        if self.map_index is None:
+            try:
+                self.map_index = mapview.hex_index(self.save, self.intel_combat_all)
+            except (SaveFormatError, IndexError, KeyError, struct.error) as exc:
+                self.map_index = {}
+                self.map_info.set(f"Could not read the hex contents: {exc}")
+        return self.map_index
+
+    @staticmethod
+    def _map_item_text(category, m):
+        if category == "Places":
+            return f"{m.name} ({m.kind.lower()}, {m.side})"
+        if category == "Task forces":
+            dest = f", to {m.dest_x},{m.dest_y}" if m.dest_x is not None else ""
+            return f"{m.name or 'TF ' + str(m.id)} ({m.side}, {m.mission}, {m.ships} ships{dest})"
+        if category == "Air groups searching":
+            arc = "full circle" if m.full else f"arc {m.start} to {m.end} deg"
+            return f"{m.name} ({m.side}, {m.kind}, range {m.radius}, {arc})"
+        return f"{chart.date_label(m.date)} {m.kind}: {m.title}"
+
+    def show_map_hex(self, x, y):
+        """Mark hex (x, y) and list what is in it: places, task forces, air groups searching from it, combat."""
+        c = self.map_canvas
+        scale = 1 / self._map_step()
+        px, py = mapview.hex_to_pixel(x, y)
+        r = max(4, mapview.HEX_W / 2 * scale)
+        c.delete("pick")
+        c.create_oval(px * scale - r, py * scale - r, px * scale + r, py * scale + r, outline="black", width=2,
+                      tags="pick")
+        contents = self._map_hex_index().get((x, y), {})
+        lines = [f"Hex {x},{y}"]
+        for category in mapview.INDEX_CATEGORIES:
+            if category in contents:
+                lines.append(f"{category}:")
+                lines.extend(f"  {self._map_item_text(category, m)}" for m in contents[category])
+        if not contents:
+            lines.append("Nothing here")
+        self._set_map_detail("\n".join(lines))
+
+    def find_map_place(self):
+        """Centre the map on the base or town whose name matches the Find box (exact, then prefix, then contains)."""
+        needle = self.map_find_var.get().strip().lower()
+        if self.save is None or not needle:
+            return
+        if self.map_places is None:
+            self.map_places = bases.list_places(self.save)
+        places = self.map_places
+        match = (next((p for p in places if p.name.lower() == needle), None)
+                 or next((p for p in places if p.name.lower().startswith(needle)), None)
+                 or next((p for p in places if needle in p.name.lower()), None))
+        if match is None:
+            self.map_info.set(f"No base or town matches {needle!r}")
+            return
+        if self.map_stale:
+            self.refresh_map()
+        c = self.map_canvas
+        scale = 1 / self._map_step()
+        px, py = mapview.hex_to_pixel(match.x, match.y)
+        width, height = self.map_size
+        c.xview_moveto((px * scale - c.winfo_width() / 2) / width)
+        c.yview_moveto((py * scale - c.winfo_height() / 2) / height)
+        self.show_map_hex(match.x, match.y)
 
     def apply_title(self):
         if self.save is None:
