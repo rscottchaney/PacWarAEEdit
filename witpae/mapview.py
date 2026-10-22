@@ -108,7 +108,7 @@ def map_size(folder, style):
 
 
 def render(folder, style, step):
-    """(width, height, PPM bytes) of the map with every step-th pixel kept (step 8 = 12 %, 4 = 25 %, 2 = 50 %)."""
+    """(width, height, PPM bytes) of the map with every step-th pixel kept (step 8 = 12 %, 4 = 25 %, 2 = 50 %, 1 = 100 %)."""
     if not isinstance(step, int) or isinstance(step, bool) or step < 1:
         raise ValueError("step must be a positive whole number")
     info, widths, heights = _tile_sizes(folder, style)

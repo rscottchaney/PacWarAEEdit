@@ -2294,6 +2294,7 @@ class GuiSmokeTests(unittest.TestCase):
                     app._map_overlay_changed()
                     self.assertEqual(app.map_shown, (style, witpae_editor.MAP_SCALES[scale]))
                     self.assertEqual(app.map_message, "")
+            self.assertNotIn(1, {step for _style, step in app.map_images})  # full size is never cached
             # Click report and Find.
             app.map_find_var.set("pearl")
             app.find_map_place()
@@ -2312,7 +2313,9 @@ class GuiSmokeTests(unittest.TestCase):
             self.assertEqual(app.map_canvas.find_withtag("pick"), ())
 
     def test_map_tab_without_art(self):
+        from types import SimpleNamespace
         from unittest import mock
+        from witpae import mapview
         import witpae_editor
         with mock.patch.object(witpae_editor.EditorApp, "_art_dirs", lambda self: []):
             app = witpae_editor.EditorApp(self.root)
@@ -2324,6 +2327,24 @@ class GuiSmokeTests(unittest.TestCase):
             self.assertTrue(app.map_info.get().startswith("Map art"))
             self.assertEqual(len(app.map_canvas.find_withtag("bg")), 1)
             self.assertGreaterEqual(len(app.map_canvas.find_withtag("overlay")), 781)
+            # Ctrl+wheel steps the scale and keeps the map point under the mouse in place.
+            c, event = app.map_canvas, SimpleNamespace(x=100, y=80)
+            c.xview_moveto(0.4)
+            c.yview_moveto(0.3)
+            width, height = app.map_size
+            before = (c.canvasx(event.x) / width, c.canvasy(event.y) / height)
+            app.zoom_map(event, 1)
+            self.assertEqual(app.map_scale_var.get(), "50%")
+            width, height = app.map_size
+            self.assertEqual(app.map_size, (-(-mapview.FULL_SIZE[0] // 2), -(-mapview.FULL_SIZE[1] // 2)))
+            self.assertAlmostEqual(c.canvasx(event.x) / width, before[0], delta=2 / width)
+            self.assertAlmostEqual(c.canvasy(event.y) / height, before[1], delta=2 / height)
+            app.zoom_map(event, 1)
+            app.zoom_map(event, 1)  # already at the closest scale
+            self.assertEqual(app.map_scale_var.get(), "100%")
+            for _ in range(4):
+                app.zoom_map(event, -1)
+            self.assertEqual(app.map_scale_var.get(), "12%")
 
 
 if __name__ == "__main__":

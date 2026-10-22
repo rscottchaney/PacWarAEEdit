@@ -730,16 +730,18 @@ is read-only: nothing is written to the save or to the art.
 
 - Art: `WPEH00.bmp`..`WPEH41.bmp` (hex grid drawn) and `WPEN00`..`41` (no grid) from the game's ART folder, found
   the way the Aircraft tab finds its pictures (`..\ART` next to the save's folder, then next to the editor). The 42
-  tiles make a 9703 x 7767 px map, too big for a Tk image, so it is drawn at 12 %, 25 % (the default) or 50 %, by
-  keeping every 8th, 4th or 2nd pixel; a picture takes under a second to build and is kept until the editor closes. It
+  tiles make a 9703 x 7767 px map, drawn at 12 %, 25 % (the default), 50 % or 100 % by keeping every 8th, 4th, 2nd
+  or every pixel; a picture takes under a second to build and is kept until the editor closes, except the 100 % one
+  (about 300 MB), which is kept only while it is shown. It
   is built when the tab is first shown. If the art is not found or cannot be read, the tab says so and the overlays are
   drawn on a plain background of the same size.
 - Top bar: Background (Hexes or No hexes), Scale, Overlay, Side (All, Allied or Japanese; it does not apply to
   Combat, which is not tied to a side) and Find, which centres the map on the base or town whose name matches (exact
   name first, then a name starting with the text, then one containing it). The second row holds the filters of the
-  chosen overlay. Drag the map to pan it; the mouse wheel scrolls (Shift for sideways).
+  chosen overlay. Drag the map to pan it; the mouse wheel scrolls (Shift for sideways) and
+  Ctrl+wheel steps the Scale in or out around the mouse pointer.
 - Locations: bases, or bases and towns (towns are hollow), by Side and Region (the same regions as the reports);
-  base names are written at 50 % only.
+  base names are written at 50 % only (the 100 % art shows its own names).
 - Search arcs: the air groups with a search patrol (Naval) or ASW patrol above 0 %, as a circle or a wedge of the
   group's search radius (dashed for ASW). The radius is the group's maximum range setting, capped by the aircraft's
   normal radius; a setting of 0 uses the normal radius. A group aboard a ship is drawn at the ship's task force (or
