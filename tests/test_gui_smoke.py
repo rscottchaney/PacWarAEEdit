@@ -1674,6 +1674,125 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertEqual(app.notebook.select(), str(app.bases_tab))
         self.assertEqual(app.tree.selection(), ("621",))
 
+    def test_alerts_report(self):
+        import witpae_editor
+        from witpae import alerts
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        app.notebook.select(app.reports_tab)
+        self.root.update()
+        tabs = [app.reports_notebook.tab(t, "text") for t in app.reports_notebook.tabs()]
+        self.assertEqual(tabs[0], "Alerts")
+        self.assertEqual(tabs.count("Alerts"), 1)
+        tree = app.alert_tree
+        everything = list(app.alerts_all)
+        self.assertEqual(len(tree.get_children()), len(everything))
+        self.assertEqual(app.alert_count.get(), f"{len(everything)} alerts")
+        self.assertEqual((app.alert_supply_var.get(), app.alert_pool_var.get()), ("50", "100"))
+        # Default order is the module's order: category order, worst first.
+        cats = [tree.set(i, "category") for i in tree.get_children()]
+        self.assertEqual(cats, [a.category for a in everything])
+        self.assertEqual(cats[0], "Low supply")
+        # Side and category filters, search.
+        app.alert_side_var.set("Japanese")
+        app.refresh_alert_list()
+        self.assertEqual(len(tree.get_children()), sum(1 for a in everything if a.side == "Japanese"))
+        self.assertTrue(all(tree.set(i, "side") == "Japanese" for i in tree.get_children()))
+        app.alert_side_var.set("All")
+        app.alert_category_var.set("Engines")
+        app.refresh_alert_list()
+        self.assertEqual(len(tree.get_children()), sum(1 for a in everything if a.category == "Engines"))
+        self.assertEqual(app.alert_count.get(), f"{len(tree.get_children())} alerts")
+        app.alert_category_var.set("All")
+        app.alert_search_var.set("own-port")  # subject
+        self.assertEqual({tree.set(i, "category") for i in tree.get_children()}, {"Minefields"})
+        self.assertEqual(len(tree.get_children()), 2)
+        app.alert_search_var.set("needed (pool")  # detail
+        self.assertEqual({tree.set(i, "category") for i in tree.get_children()}, {"Engines"})
+        app.alert_search_var.set("")
+        self.assertEqual(len(tree.get_children()), len(everything))
+        # Sorting by a header, then reversed.
+        app.sort_alerts_by("subject")
+        names = [tree.set(i, "subject").lower() for i in tree.get_children()]
+        self.assertEqual(names, sorted(names))
+        app.sort_alerts_by("subject")
+        names = [tree.set(i, "subject").lower() for i in tree.get_children()]
+        self.assertEqual(names, sorted(names, reverse=True))
+        # Thresholds recompute the alerts.
+        low = sum(1 for a in everything if a.category == "Low supply")
+        app.alert_supply_var.set("0")
+        self.assertEqual(sum(1 for a in app.alerts_all if a.category == "Low supply"), 0)
+        app.alert_supply_var.set("100")
+        self.assertGreater(sum(1 for a in app.alerts_all if a.category == "Low supply"), low)
+        app.alert_supply_var.set("abc")  # not a number: back to the default
+        self.assertEqual(sum(1 for a in app.alerts_all if a.category == "Low supply"), low)
+        app.alert_supply_var.set("50")
+        self.assertEqual(sum(1 for a in app.alerts_all if a.category == "Pilots"), 0)
+        app.alert_pool_var.set("100000")
+        pilots = [a for a in app.alerts_all if a.category == "Pilots"]
+        self.assertTrue(pilots)
+        app.alert_pool_var.set("100")
+        # Jumps, one per kind.
+        def alert_iid(kind):
+            return next(i for i in tree.get_children() if app.alerts_by_iid[i].kind == kind)
+
+        def open_alert(a):
+            app.alerts_all = [a]
+            app.alert_sort_col = None
+            app.refresh_alert_list()
+            tree.selection_set(tree.get_children()[0])
+            app.open_alert()
+            self.root.update()
+
+        app.search_var.set("zzz")
+        base_alert = next(a for a in everything if a.kind == "base")
+        open_alert(base_alert)
+        self.assertEqual(app.notebook.select(), str(app.bases_tab))
+        self.assertEqual(app.tree.selection(), (str(base_alert.target_id),))
+        app.notebook.select(app.reports_tab)
+        app.shiprec_search_var.set("zzz")
+        open_alert(alerts.Alert("Repair", "Japanese", "Ushio", "", "ship", 240, 1))
+        self.assertEqual(app.notebook.select(), str(app.shiprec_tab))
+        self.assertEqual(app.shiprec_tree.selection(), ("240",))
+        app.notebook.select(app.reports_tab)
+        open_alert(pilots[0])
+        self.assertEqual(app.notebook.select(), str(app.groups_tab))
+        self.assertEqual(app.groups_notebook.select(), str(app.pool_page))
+        self.assertEqual(app.pool_tree.selection(), (str(pilots[0].target_id),))
+        app.notebook.select(app.reports_tab)
+        app.aircraft_search_var.set("zzz")
+        plane = next(a for a in everything if a.kind == "aircraft")
+        open_alert(plane)
+        self.assertEqual(app.notebook.select(), str(app.aircraft_tab))
+        self.assertEqual(app.aircraft_tree.selection(), (str(plane.target_id),))
+        app.notebook.select(app.reports_tab)
+        app.reports_notebook.select(app.alerts_frame)
+        mines = next(a for a in everything if a.kind == "minefields" and a.side == "Japanese")
+        app.minefield_side_var.set("All")
+        app.minefield_view_var.set("Fields")
+        open_alert(mines)
+        self.assertEqual(app.reports_notebook.select(), str(app.minefield_frame))
+        self.assertEqual((app.minefield_side_var.get(), app.minefield_view_var.get()), ("Japanese", "By hex"))
+        self.assertTrue(all(app.minefield_hex_tree.set(i, "side") == "Japanese"
+                            for i in app.minefield_hex_tree.get_children()))
+        app.notebook.select(app.reports_tab)
+        app.reports_notebook.select(app.alerts_frame)
+        engine = next(a for a in everything if a.kind == "engine")
+        open_alert(engine)
+        self.assertEqual(app.reports_notebook.select(), str(app.engine_frame))
+        self.assertEqual(app.engine_tree.selection(), (str(engine.target_id),))
+
+    def test_alerts_report_lists_skipped_checks(self):
+        import witpae_editor
+        from witpae import minefields
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        del app.save._by_id[minefields.SECTION]
+        app.refresh_reports()
+        self.assertEqual(app.alerts_skipped, ["Minefields"])
+        self.assertTrue(app.alert_count.get().endswith(" alerts (skipped: Minefields)"))
+        self.assertTrue(app.alert_tree.get_children())
+
     def test_reports_without_game_date(self):
         import witpae_editor
         from witpae import reports
