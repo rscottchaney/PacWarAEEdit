@@ -1852,7 +1852,7 @@ class GuiSmokeTests(unittest.TestCase):
         tabs = [app.notebook.tab(t, "text") for t in app.notebook.tabs()]
         self.assertEqual(tabs[tabs.index("History") + 1], "Intel")
         self.assertEqual([app.intel_notebook.tab(t, "text") for t in app.intel_notebook.tabs()],
-                         ["SigInt", "Operations"])
+                         ["SigInt", "Operations", "Combat"])
         # Allied SIGINT exists, so Allied is shown; Latest keeps the newest turn only (the undated copy is a duplicate).
         self.assertEqual(app.intel_side_var.get(), "Allied")
         tree = app.intel_lines_tree
@@ -1933,6 +1933,71 @@ class GuiSmokeTests(unittest.TestCase):
         app.intel_turns_var.set("Latest")
         app.load_intel_view()
         self.assertEqual(app.intel_count.get(), "SigInt: 1 of 7 lines    Operations: 0 of 0 lines")
+
+    def test_intel_combat_tab(self):
+        import witpae_editor
+        air = ["Morning Air attack on Pearl Harbor , at 180,107 ", "Japanese aircraft", "      G4M1 Betty x 5",
+               "Allied aircraft losses", "      P-40E Warhawk: 3 destroyed on ground", "Japanese aircraft losses",
+               "      G4M1 Betty: 1 destroyed"]
+        sunk = ["TF 12 encounters mine field at 5,5", "Allied Ships", "      SS Tarpon, Mine hits 1, and is sunk"]
+        dash = "-" * 80
+        path = self._intel_folder({
+            "combatreport_411209.txt": ["AFTER ACTION REPORTS FOR Dec 9, 41", dash, "ASW attack near Laoag  at 80,71"],
+            "combatreport_411210.txt": ["AFTER ACTION REPORTS FOR Dec 10, 41", dash, *air, "", dash, *sunk, dash,
+                                        "Odd new block"],
+            "combatreport.txt": ["AFTER ACTION REPORTS FOR Dec 10, 41", dash, "Ground combat at 9,9"]})
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(path))
+        self.root.update()
+        app.intel_notebook.select(2)
+        tree = app.intel_combat_tree
+        self.assertEqual(len(tree.get_children()), 3)  # Latest turn; the undated copy is a duplicate
+        self.assertEqual(app.intel_combat_totals.get(),
+                         "3 of 4 actions    Aircraft lost: Allied 3, Japanese 1    Ships sunk: Allied 1, Japanese 0")
+        first = tree.get_children()[0]
+        self.assertEqual([tree.set(first, c) for c in ("date", "kind", "phase", "place", "hex", "japanese_air",
+                                                       "allied_lost", "japanese_lost", "ships_sunk", "ground")],
+                         ["10 Dec 41", "Air attack", "Morning", "Pearl Harbor", "180,107", "5", "3", "1", "0", "0/0"])
+        # Selecting a row fills the text pane; refreshing clears it.
+        text = app.intel_combat_text
+        self.assertEqual(text.get("1.0", "end").strip(), "")
+        tree.selection_set(first)
+        self.root.update()
+        self.assertEqual(text.get("1.0", "end").strip(), "\n".join(l.rstrip() for l in air))
+        self.assertEqual(str(text.cget("state")), "disabled")
+        # Filters.
+        app.intel_combat_kind_var.set("Mine field")
+        app.refresh_intel_combat()
+        self.assertEqual([tree.set(i, "kind") for i in tree.get_children()], ["Mine field"])
+        self.assertEqual(text.get("1.0", "end").strip(), "")
+        app.intel_combat_kind_var.set("All")
+        app.intel_combat_involved_var.set("With ships sunk")
+        app.refresh_intel_combat()
+        self.assertEqual([tree.set(i, "kind") for i in tree.get_children()], ["Mine field"])
+        app.intel_combat_involved_var.set("With aircraft lost")
+        app.refresh_intel_combat()
+        self.assertEqual([tree.set(i, "kind") for i in tree.get_children()], ["Air attack"])
+        app.intel_combat_involved_var.set("All")
+        app.intel_combat_search_var.set("odd new")
+        self.assertEqual([tree.set(i, "kind") for i in tree.get_children()], ["Other"])
+        app.intel_combat_search_var.set("")
+        app.intel_turns_var.set("All")
+        app.refresh_intel()
+        self.assertEqual(len(tree.get_children()), 4)
+        # Sorting: numeric by aircraft lost, reversed by clicking again.
+        app.sort_intel_by("combat", "allied_lost")
+        self.assertEqual(tree.set(tree.get_children()[-1], "allied_lost"), "3")
+        app.sort_intel_by("combat", "allied_lost")
+        self.assertEqual(tree.set(tree.get_children()[0], "allied_lost"), "3")
+        # Double-click: a row naming a place opens it; an Other row has none.
+        app.notebook.select(app.history_tab)
+        tree.selection_set(next(i for i in tree.get_children() if tree.set(i, "kind") == "Other"))
+        app.open_intel("combat")
+        self.assertEqual(app.notebook.select(), str(app.history_tab))
+        tree.selection_set(next(i for i in tree.get_children() if tree.set(i, "place") == "Pearl Harbor"))
+        app.open_intel("combat")
+        self.assertEqual(app.notebook.select(), str(app.bases_tab))
+        self.assertEqual(app.tree.selection(), ("584",))
 
     def test_intel_default_side_and_empty_folder(self):
         import witpae_editor

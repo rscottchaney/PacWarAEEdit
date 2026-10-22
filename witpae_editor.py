@@ -13,7 +13,7 @@ import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from witpae import (aircraft, airgroups, airproduction, alerts, bases, chart, factories, history, industry, intel, landunits, lcuproduction, leaders, losses, minefields,
+from witpae import (aircraft, airgroups, airproduction, alerts, bases, chart, combat, factories, history, industry, intel, landunits, lcuproduction, leaders, losses, minefields,
                     pilotpool, planeart, regions, reports, shipproduction, shiprecords, shiprepair, ships, taskforces, victory)
 from witpae.container import SaveFile, SaveFormatError
 from witpae.fileio import is_pbem, save_with_backup
@@ -743,7 +743,7 @@ INTEL_NOTE = (
     "Read from the game's asigint_*.txt / jsigint_*.txt and a/joperationsreport_*.txt files in the save's folder "
     "(the parent folder for a save in autosave); an undated copy is used only for a turn that has no dated file. "
     "Lines no rule recognises are kept as Other. Double-click a row that names a place to open it. Nothing here "
-    "writes to those files.")
+    "writes to those files. Combat reads combatreport_*.txt (both sides in one file) and ignores Reports of.")
 
 
 def _intel_hex(value):
@@ -776,7 +776,23 @@ INTEL_OPS_COLUMNS = [
     ("hex", "Hex", 70, True, lambda r: (-1, -1) if r.line.x is None else (r.line.x, r.line.y)),
     ("text", "Text", 700, False, lambda r: r.line.text),
 ]
-INTEL_TABLES = {"lines": INTEL_LINE_COLUMNS, "places": INTEL_PLACE_COLUMNS, "ops": INTEL_OPS_COLUMNS}
+INTEL_COMBAT_COLUMNS = [
+    ("date", "Date", 80, True, lambda r: r.line.date),
+    ("kind", "Kind", 120, False, lambda r: r.line.kind),
+    ("phase", "Phase", 70, False, lambda r: r.line.phase),
+    ("place", "Place", 140, False, lambda r: r.place),
+    ("hex", "Hex", 70, True, lambda r: (-1, -1) if r.line.x is None else (r.line.x, r.line.y)),
+    ("allied_air", "Allied a/c", 70, True, lambda r: r.line.allied_aircraft),
+    ("japanese_air", "Japanese a/c", 80, True, lambda r: r.line.japanese_aircraft),
+    ("allied_lost", "Allied a/c lost", 90, True, lambda r: r.line.allied_air_lost),
+    ("japanese_lost", "Japanese a/c lost", 100, True, lambda r: r.line.japanese_air_lost),
+    ("ships_hit", "Ships hit", 70, True, lambda r: r.line.ships_hit),
+    ("ships_sunk", "Ships sunk", 70, True, lambda r: r.line.allied_ships_sunk + r.line.japanese_ships_sunk),
+    ("ground", "Ground losses (A/J)", 120, True, lambda r: (r.line.allied_ground_lost, r.line.japanese_ground_lost)),
+]
+INTEL_COMBAT_TEXT = {**INTEL_TEXT, "ground": lambda v: f"{v[0]}/{v[1]}"}
+INTEL_TABLES = {"lines": INTEL_LINE_COLUMNS, "places": INTEL_PLACE_COLUMNS, "ops": INTEL_OPS_COLUMNS,
+                "combat": INTEL_COMBAT_COLUMNS}
 
 
 def _history_number(value):
@@ -939,6 +955,8 @@ class EditorApp:
         self.intel_all = {"sigint": [], "ops": []}  # every IntelLine of the folder; the filters only re-select
         self.intel_index = None  # the open save's intel.PlaceIndex
         self.intel_message = ""
+        self.intel_combat_all = []  # every CombatAction of the folder
+        self.intel_combat_rows = []  # the Resolved rows in the Combat tree, by iid
         self.intel_shown = {"sigint": 0, "ops": 0}
         self.intel_sort = {name: [None, False] for name in INTEL_TABLES}  # column, reverse
         self.intel_place_by_iid = {name: {} for name in INTEL_TABLES}
@@ -5163,6 +5181,39 @@ class EditorApp:
         oframe.pack(side="top", fill="both", expand=True, pady=(4, 0))
         self.intel_ops_tree = self._report_tree(oframe, INTEL_OPS_COLUMNS, lambda c: self.sort_intel_by("ops", c),
                                                 ("kind", "place", "text"), lambda: self.open_intel("ops"))
+
+        combat_tab = ttk.Frame(self.intel_notebook, padding=4)
+        self.intel_notebook.add(combat_tab, text="Combat")
+        cbar = ttk.Frame(combat_tab)
+        cbar.pack(side="top", fill="x")
+        self.intel_combat_kind_var = tk.StringVar(value=INTEL_ALL)
+        self._report_combo(cbar, "Kind:", self.intel_combat_kind_var, [INTEL_ALL, *combat.KINDS],
+                           self.refresh_intel_combat, 17)
+        self.intel_combat_involved_var = tk.StringVar(value=combat.INVOLVED_CHOICES[0])
+        self._report_combo(cbar, "Involving:", self.intel_combat_involved_var, combat.INVOLVED_CHOICES,
+                           self.refresh_intel_combat, 17)
+        ttk.Label(cbar, text="Search:").pack(side="left")
+        self.intel_combat_search_var = tk.StringVar()
+        self.intel_combat_search_var.trace_add("write", lambda *a: self.refresh_intel_combat())
+        ttk.Entry(cbar, textvariable=self.intel_combat_search_var, width=20).pack(side="left", padx=4)
+        self.intel_combat_totals = tk.StringVar()
+        ttk.Label(combat_tab, textvariable=self.intel_combat_totals).pack(side="bottom", anchor="w", pady=(4, 0))
+        panes = ttk.PanedWindow(combat_tab, orient="vertical")
+        panes.pack(side="top", fill="both", expand=True, pady=(4, 0))
+        cframe = ttk.Frame(panes)
+        panes.add(cframe, weight=3)
+        self.intel_combat_tree = self._report_tree(
+            cframe, INTEL_COMBAT_COLUMNS, lambda c: self.sort_intel_by("combat", c), ("kind", "phase", "place"),
+            lambda: self.open_intel("combat"))
+        self.intel_combat_tree.bind("<<TreeviewSelect>>", lambda e: self.show_intel_combat_text())
+        tframe = ttk.Frame(panes)
+        panes.add(tframe, weight=2)
+        tscroll = ttk.Scrollbar(tframe, orient="vertical")
+        self.intel_combat_text = tk.Text(tframe, height=10, wrap="none", state="disabled", font="TkFixedFont",
+                                         yscrollcommand=tscroll.set)
+        tscroll.configure(command=self.intel_combat_text.yview)
+        tscroll.pack(side="right", fill="y")
+        self.intel_combat_text.pack(side="left", fill="both", expand=True)
         self._show_intel_view()
 
     def _show_intel_view(self):
@@ -5188,10 +5239,15 @@ class EditorApp:
             self.intel_index = intel.PlaceIndex(self.save)
         except (SaveFormatError, IndexError, KeyError, struct.error):
             self.intel_index = None
+        try:
+            self.intel_combat_all = combat.load_actions(self.intel_folder)
+        except OSError as exc:
+            self.intel_combat_all = []
+            self.intel_message = self.intel_message or f"Could not read the combat reports: {exc}"
         sides = {line.side for lines in self.intel_all.values() for line in lines}
         if sides and self.intel_side_var.get() not in sides:
             self.intel_side_var.set(next(side for side in intel.SIDE_NAMES if side in sides))
-        if not sides and not self.intel_message:
+        if not sides and not self.intel_combat_all and not self.intel_message:
             self.intel_message = f"No intel reports found in {self.intel_folder}"
         self.refresh_intel()
 
@@ -5207,6 +5263,7 @@ class EditorApp:
     def refresh_intel(self):
         self.refresh_intel_sigint()
         self.refresh_intel_ops()
+        self.refresh_intel_combat()
 
     def _fill_intel_tree(self, name, tree, rows, place_ids):
         columns = INTEL_TABLES[name]
@@ -5218,7 +5275,8 @@ class EditorApp:
         tree.delete(*tree.get_children())
         self.intel_place_by_iid[name] = {str(k): place_ids[k] for k in order}
         for k in order:
-            tree.insert("", "end", iid=str(k), values=self._report_values(columns, INTEL_TEXT, rows[k]))
+            tree.insert("", "end", iid=str(k), values=self._report_values(
+                columns, INTEL_COMBAT_TEXT if name == "combat" else INTEL_TEXT, rows[k]))
 
     def refresh_intel_sigint(self):
         lines = self._intel_lines("sigint", self.intel_search_var, self.intel_kind_var)
@@ -5238,6 +5296,28 @@ class EditorApp:
         self.intel_shown["ops"] = len(lines)
         self._set_intel_count()
 
+    def refresh_intel_combat(self):
+        actions = combat.select(intel.recent(self.intel_combat_all, intel.TURN_CHOICES[self.intel_turns_var.get()]),
+                                self.intel_combat_kind_var.get(), self.intel_combat_search_var.get(),
+                                self.intel_combat_involved_var.get())
+        self.intel_combat_rows = rows = intel.resolve_lines(actions, self.intel_index)
+        self._fill_intel_tree("combat", self.intel_combat_tree, rows, [r.place_id for r in rows])
+        t = combat.totals(actions)
+        self.intel_combat_totals.set(
+            f"{t['actions']} of {len(self.intel_combat_all)} actions    "
+            f"Aircraft lost: Allied {t['allied_air_lost']}, Japanese {t['japanese_air_lost']}    "
+            f"Ships sunk: Allied {t['allied_ships_sunk']}, Japanese {t['japanese_ships_sunk']}")
+        self.show_intel_combat_text()
+
+    def show_intel_combat_text(self):
+        """The selected action's full report text in the pane below the table (empty when none is selected)."""
+        sel = self.intel_combat_tree.selection()
+        text = self.intel_combat_rows[int(sel[0])].line.text if sel else ""
+        self.intel_combat_text.configure(state="normal")
+        self.intel_combat_text.delete("1.0", "end")
+        self.intel_combat_text.insert("1.0", text)
+        self.intel_combat_text.configure(state="disabled")
+
     def _set_intel_count(self):
         if self.save is None:
             return
@@ -5253,12 +5333,15 @@ class EditorApp:
         state[0] = col
         if name == "ops":
             self.refresh_intel_ops()
+        elif name == "combat":
+            self.refresh_intel_combat()
         else:
             self.refresh_intel_sigint()
 
     def open_intel(self, name):
         """Double-click: open the place the row names, when it is a base or town of the open save."""
-        tree = {"lines": self.intel_lines_tree, "places": self.intel_places_tree, "ops": self.intel_ops_tree}[name]
+        tree = {"lines": self.intel_lines_tree, "places": self.intel_places_tree, "ops": self.intel_ops_tree,
+                "combat": self.intel_combat_tree}[name]
         sel = tree.selection()
         place_id = self.intel_place_by_iid[name].get(sel[0]) if sel else None
         if place_id is not None:

@@ -149,11 +149,11 @@ def header_date(line):
     return year * 10000 + month * 100 + day
 
 
-def read_lines(path):
-    """The non-blank lines of a report file, latin-1, CR/LF/CRLF, trailing spaces stripped."""
+def read_lines(path, keep_blank=False):
+    """The lines of a report file, latin-1, CR/LF/CRLF, trailing spaces stripped; blank lines only on request."""
     with open(path, "rb") as f:
         text = f.read().decode("latin-1")
-    return [line.rstrip() for line in re.split(r"\r\n|\r|\n", text) if line.strip()]
+    return [line.rstrip() for line in re.split(r"\r\n|\r|\n", text) if keep_blank or line.strip()]
 
 
 def _where(text):
