@@ -28,6 +28,13 @@ class GuiSmokeTests(unittest.TestCase):
         self.addCleanup(patch.stop)
 
     def tearDown(self):
+        # destroy() leaves variable traces in the interpreter; each callback holds the app and its save, and unittest
+        # keeps every test (and so its interpreter) until the run ends. Removing them lets the app be freed.
+        import gc
+        import tkinter as tk
+        for var in [o for o in gc.get_objects() if isinstance(o, tk.Variable) and o._tk is self.root.tk]:
+            for mode, callback in var.trace_info():
+                var.trace_remove(mode, callback)
         self.root.destroy()
 
     def test_builds_and_loads(self):
