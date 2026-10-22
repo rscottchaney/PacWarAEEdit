@@ -737,7 +737,7 @@ HISTORY_SIDES_COLUMNS = ("date", "turn", "allied", "allied_change", "japanese", 
 HISTORY_BASE_COLUMNS = ("date", "turn", "side", "value", "change")
 HISTORY_AIRCRAFT_COLUMNS = ("date", "turn", "value", "change")
 
-MAP_SCALES = {"12%": 8, "25%": 4, "50%": 2}  # label -> every step-th pixel of the art
+MAP_SCALES = {"12%": 8, "25%": 4, "50%": 2, "100%": 1}  # label -> every step-th pixel of the art
 MAP_OVERLAYS = ("Locations", "Search arcs", "Task forces", "Combat")
 MAP_SIDES = ("All", "Allied", "Japanese")
 MAP_TOWNS = ("Bases", "Bases and towns")
@@ -5442,6 +5442,9 @@ class EditorApp:
         c.bind("<Shift-MouseWheel>", lambda e: c.xview_scroll(-1 if e.delta > 0 else 1, "units"))
         c.bind("<Button-4>", lambda e: c.yview_scroll(-1, "units"))
         c.bind("<Button-5>", lambda e: c.yview_scroll(1, "units"))
+        c.bind("<Control-MouseWheel>", lambda e: self.zoom_map(e, 1 if e.delta > 0 else -1))
+        c.bind("<Control-Button-4>", lambda e: self.zoom_map(e, 1))
+        c.bind("<Control-Button-5>", lambda e: self.zoom_map(e, -1))
         self._map_overlay_changed(draw=False)
         # Bound last (and added) so the Reports handler stays; the map is drawn only when it is first shown.
         self.notebook.bind("<<NotebookTabChanged>>", lambda e: self._map_shown_event(), add="+")
@@ -5507,7 +5510,8 @@ class EditorApp:
                 try:
                     _w, _h, ppm = mapview.render(folder, style, step)
                     image = tk.PhotoImage(master=self.root, data=ppm)
-                    self.map_images[(style, step)] = image
+                    if step > 1:  # a full-size image is ~300 MB, so only the one on screen is kept
+                        self.map_images[(style, step)] = image
                 except (ValueError, tk.TclError) as exc:
                     self.map_message = f"Map art could not be read ({exc}); plain background."
         if image is not None:
@@ -5549,13 +5553,13 @@ class EditorApp:
             region = self.region_ids[self.map_region_var.get()]
             marks = self._map_data(("loc", towns, side, region),
                                    lambda: mapview.location_marks(self.save, towns, side, region))
-            r = {8: 2, 4: 3, 2: 4}[step]
+            r = {8: 2, 4: 3, 2: 4, 1: 6}[step]
             for m in marks:
                 x, y = point(m.x, m.y)
                 color = self._map_color(m.side)
                 c.create_oval(x - r, y - r, x + r, y + r, outline=color, width=2,
                               fill=color if m.kind == "Base" else "", tags="overlay")
-                if step == 2 and m.kind == "Base":
+                if step == 2 and m.kind == "Base":  # the full-size art has its own names
                     for dx, fill in ((1, "white"), (0, "black")):  # a light shadow keeps the name legible
                         c.create_text(x + r + 3 + dx, y + dx, text=m.name, anchor="w", fill=fill,
                                       font=("TkDefaultFont", 7), tags="overlay")
@@ -5596,6 +5600,21 @@ class EditorApp:
                                  tags="overlay")
             summary = f"{len(marks)} combat actions"
         self.map_info.set(f"{self.map_message}  {summary}".strip() if self.map_message else summary)
+
+    def zoom_map(self, event, direction):
+        """Step the Scale one choice in (direction 1) or out (-1), keeping the map point under the mouse in place."""
+        scales = list(MAP_SCALES)
+        i = scales.index(self.map_scale_var.get()) + direction
+        if self.save is None or not 0 <= i < len(scales):
+            return
+        c = self.map_canvas
+        width, height = self.map_size
+        fx, fy = c.canvasx(event.x) / width, c.canvasy(event.y) / height
+        self.map_scale_var.set(scales[i])
+        self.refresh_map()
+        width, height = self.map_size
+        c.xview_moveto((fx * width - event.x) / width)
+        c.yview_moveto((fy * height - event.y) / height)
 
     # Left-drag pans the map; a press that hardly moves is a click on a hex.
     def _map_press(self, event):
