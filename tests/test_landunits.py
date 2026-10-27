@@ -1,4 +1,5 @@
 import os
+import struct
 import tempfile
 import unittest
 
@@ -56,6 +57,117 @@ class LandUnitTests(unittest.TestCase):
         self.assertEqual((eq[1]["device"], eq[1]["count"], eq[1]["toe_device"]),
                          ("155mm M1918 GPF", 8, "155mm M1A1 GPF"))
         self.assertEqual((eq[3]["device"], eq[3]["count"], eq[3]["toe_count"]), ("Motorized Support", 2, 6))
+
+    # ---- fill to TOE ----------------------------------------------------
+
+    FILL_UNITS = (2, 68, 106, 124, 3064, 3435, 5635, 5639)
+
+    def record_bytes(self, unit_id):
+        return bytes(self.sf[SECTION].data[unit_id * RECORD:(unit_id + 1) * RECORD])
+
+    def slot(self, unit_id, k):
+        eq = self.units[unit_id]
+        return tuple(eq._i16(off + 2 * k) for off in (landunits.DEVICE_OFFSET, landunits.COUNT_OFFSET,
+                                                      landunits.DISABLED_OFFSET))
+
+    def test_fill_to_toe_below_toe(self):
+        # Unit 2 slot 0: 218 of TOE 240 with 22 disabled.
+        for percent, expected in ((0, 240), (10, 264), (25, 300)):
+            with self.subTest(percent=percent):
+                self.setUp()
+                u = self.units[2]
+                self.assertEqual(self.slot(2, 0), (252, 218, 22))
+                self.assertGreater(u.fill_to_toe(percent), 0)
+                self.assertEqual(self.slot(2, 0), (252, expected, 0))
+
+    def test_fill_to_toe_empty_slot_gets_toe_device(self):
+        # Unit 124 slot 1: no device, TOE 50 of device 253.
+        for percent, expected in ((0, 50), (10, 55), (25, 63)):
+            with self.subTest(percent=percent):
+                self.setUp()
+                self.assertEqual(self.slot(124, 1), (0, 0, 0))
+                self.units[124].fill_to_toe(percent)
+                self.assertEqual(self.slot(124, 1), (253, expected, 0))
+
+    def test_fill_to_toe_keeps_older_device(self):
+        # Unit 106 slot 1 holds device 1318 (TOE device 1415), 16 of 20, 4 disabled.
+        for percent, expected in ((0, 20), (10, 22), (25, 25)):
+            with self.subTest(percent=percent):
+                self.setUp()
+                self.assertEqual(self.slot(106, 1), (1318, 16, 4))
+                self.units[106].fill_to_toe(percent)
+                self.assertEqual(self.slot(106, 1), (1318, expected, 0))
+
+    def test_fill_to_toe_never_lowers_count(self):
+        # Unit 68 slot 0: 158 against TOE 120 with 2 disabled.
+        for percent, expected in ((0, 158), (10, 158), (25, 158)):
+            with self.subTest(percent=percent):
+                self.setUp()
+                self.assertEqual(self.slot(68, 0), (252, 158, 2))
+                self.units[68].fill_to_toe(percent)
+                self.assertEqual(self.slot(68, 0), (252, expected, 0))
+
+    def test_fill_to_toe_rounds_up(self):
+        # Unit 3064 slot 2: TOE 9 -> 9, 10 (9.9), 12 (11.25).
+        for percent, expected in ((0, 9), (10, 10), (25, 12)):
+            with self.subTest(percent=percent):
+                self.setUp()
+                self.units[3064].fill_to_toe(percent)
+                self.assertEqual(self.slot(3064, 2), (704, expected, 0))
+
+    def test_fill_to_toe_only_touches_toe_slots(self):
+        toe_fields = (landunits.DEVICE_OFFSET, landunits.COUNT_OFFSET, landunits.DISABLED_OFFSET)
+        for unit_id in self.FILL_UNITS:
+            u = self.units[unit_id]
+            toe_slots = [k for k in range(landunits.SLOTS)
+                         if u._i16(landunits.TOE_DEVICE_OFFSET + 2 * k) and u._i16(landunits.TOE_COUNT_OFFSET + 2 * k) > 0]
+            allowed = {off + 2 * k + i for off in toe_fields for k in toe_slots for i in (0, 1)}
+            before = self.record_bytes(unit_id)
+            changed = u.fill_to_toe(25)
+            after = self.record_bytes(unit_id)
+            diff = {i for i in range(RECORD) if before[i] != after[i]}
+            with self.subTest(unit=unit_id):
+                self.assertTrue(diff <= allowed)
+                self.assertGreater(changed, 0)
+                self.assertLessEqual(changed, len(toe_slots))
+
+    def test_fill_to_toe_leaves_slots_without_toe(self):
+        # Unit 3435 slot 5 holds 11 (1 disabled) with no TOE entry.
+        self.assertEqual(self.slot(3435, 5), (self.slot(3435, 5)[0], 11, 1))
+        before = self.slot(3435, 5)
+        self.assertGreater(self.units[3435].fill_to_toe(25), 0)
+        self.assertEqual(self.slot(3435, 5), before)
+
+    def test_fill_to_toe_is_idempotent(self):
+        for percent in (0, 10, 25):
+            with self.subTest(percent=percent):
+                self.setUp()
+                u = self.units[2]
+                self.assertGreater(u.fill_to_toe(percent), 0)
+                snapshot = self.record_bytes(2)
+                self.assertEqual(u.fill_to_toe(percent), 0)
+                self.assertEqual(self.record_bytes(2), snapshot)
+
+    def test_fill_to_toe_clears_disabled_on_full_slot(self):
+        # Unit 69 slot 0 is above target with 0 disabled; unit 68 slot 1 has 1 disabled and is above TOE.
+        self.assertEqual(self.slot(68, 1), (253, 79, 1))
+        self.units[68].fill_to_toe(0)
+        self.assertEqual(self.slot(68, 1), (253, 79, 0))
+
+    def test_fill_to_toe_caps_at_max_count(self):
+        u = self.units[2]
+        struct.pack_into("<h", u._data, u._offset + landunits.TOE_COUNT_OFFSET, landunits.MAX_COUNT)
+        u.fill_to_toe(25)
+        self.assertEqual(self.slot(2, 0)[1], landunits.MAX_COUNT)
+
+    def test_fill_to_toe_rejects_bad_percent(self):
+        u = self.units[2]
+        before = self.record_bytes(2)
+        for bad in (-1, 5, 11, 100, True, False, 10.0, "10", None):
+            with self.subTest(percent=bad):
+                with self.assertRaises(ValueError):
+                    u.fill_to_toe(bad)
+                self.assertEqual(self.record_bytes(2), before)
 
     def test_display_names_match_game(self):
         # Names as shown on the game's ground unit list and detail screens.

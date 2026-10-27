@@ -852,6 +852,29 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertTrue(app.load(SAVE_015))
         self.assertEqual(app.units_edited, set())
 
+    def test_fill_land_unit_to_toe(self):
+        import witpae_editor
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        app.fill_unit_to_toe(10)  # nothing selected
+        self.assertEqual(app.units_edited, set())
+        self.assertFalse(app.dirty)
+        app.unit_search_var.set("1/153rd")
+        app.unit_tree.selection_set("5639")
+        self.root.update()
+        self.assertEqual(app.unit_equipment_tree.set("0", "count"), "28")
+        app.fill_unit_to_toe(10)
+        self.root.update()
+        self.assertEqual(app.unit_equipment_tree.set("0", "count"), "35")  # ceil(31 * 1.1)
+        self.assertEqual(app.unit_equipment_tree.set("0", "disabled"), "0")
+        self.assertIn(5639, app.units_edited)
+        self.assertTrue(app.dirty)
+        self.assertEqual(app.unit_tree.item("5639", "tags"), ("edited",))
+        self.assertIn("TOE +10%", app.status.get())
+        self.assertIn("not yet saved", app.status.get())
+        app.fill_unit_to_toe(10)
+        self.assertIn("already at TOE +10%", app.status.get())
+
     def test_add_land_unit_equipment(self):
         from unittest import mock
         import witpae_editor

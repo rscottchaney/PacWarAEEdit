@@ -263,6 +263,34 @@ class LandUnit(Record):
         struct.pack_into("<h", self._data, self._offset + DISABLED_OFFSET + 2 * slot, disabled)
         return slot
 
+    def fill_to_toe(self, percent):
+        """Bring every slot that has a TOE entry up to its TOE count, plus `percent` (0, 10 or 25).
+
+        The target is the TOE count plus percent, rounded up and capped at MAX_COUNT. An empty
+        slot gets the TOE device; a slot holding another (older) device keeps it. Counts are never
+        lowered and disabled is cleared on every TOE slot. Slots without a TOE entry are left alone.
+        Returns the number of slots whose bytes changed. Nothing is written if percent is invalid.
+        """
+        if isinstance(percent, bool) or not isinstance(percent, int) or percent not in (0, 10, 25):
+            raise ValueError("Percent must be 0, 10 or 25")
+        changed = 0
+        for k in range(SLOTS):
+            toe_device = self._i16(TOE_DEVICE_OFFSET + 2 * k)
+            toe_count = self._i16(TOE_COUNT_OFFSET + 2 * k)
+            if not toe_device or toe_count <= 0:
+                continue
+            target = min(MAX_COUNT, (toe_count * (100 + percent) + 99) // 100)
+            device = self._i16(DEVICE_OFFSET + 2 * k) or toe_device
+            count = max(self._i16(COUNT_OFFSET + 2 * k), target)
+            new = (device, count, 0)
+            old = tuple(self._i16(off + 2 * k) for off in (DEVICE_OFFSET, COUNT_OFFSET, DISABLED_OFFSET))
+            if new == old:
+                continue
+            for off, value in zip((DEVICE_OFFSET, COUNT_OFFSET, DISABLED_OFFSET), new):
+                struct.pack_into("<h", self._data, self._offset + off + 2 * k, value)
+            changed += 1
+        return changed
+
 
 def available_devices(save):
     """Devices a side can add: those any land unit of that side already uses (current or TOE).

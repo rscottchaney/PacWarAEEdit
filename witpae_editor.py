@@ -2242,6 +2242,11 @@ class EditorApp:
             self.unit_equipment_vars[name] = tk.StringVar()
             ttk.Entry(edit, textvariable=self.unit_equipment_vars[name], width=8).pack(side="left", padx=(2, 8))
         ttk.Button(edit, text="Apply equipment", command=self.apply_unit_equipment).pack(side="left", padx=4)
+        fill = ttk.Frame(box)
+        fill.pack(side="top", fill="x", pady=(4, 0))
+        ttk.Label(fill, text="Bring up to TOE:").pack(side="left")
+        for text, percent in (("Fill to TOE", 0), ("TOE +10%", 10), ("TOE +25%", 25)):
+            ttk.Button(fill, text=text, command=lambda p=percent: self.fill_unit_to_toe(p)).pack(side="left", padx=(6, 0))
         add = ttk.Frame(box)
         add.pack(side="top", fill="x", pady=(4, 0))
         ttk.Label(add, text="Add:").pack(side="left")
@@ -4140,6 +4145,21 @@ class EditorApp:
             self.dirty = True
         self.refresh_unit_list()
         self.show_unit_equipment(u)
+
+    def fill_unit_to_toe(self, percent):
+        if self.unit_current is None:
+            return
+        u = self.units[self.unit_current]
+        level = "TOE" if percent == 0 else f"TOE +{percent}%"
+        changed = u.fill_to_toe(percent)
+        if not changed:
+            self.status.set(f"{u.name} is already at {level}")
+            return
+        self.units_edited.add(u.id)
+        self.dirty = True
+        self.refresh_unit_list()
+        self.show_unit_equipment(u)
+        self.status.set(f"Filled {changed} slot{'s' if changed != 1 else ''} of {u.name} to {level} (not yet saved)")
 
     def add_unit_equipment(self):
         if self.unit_current is None:
