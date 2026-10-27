@@ -227,6 +227,7 @@ game-style HQ names.
 | Support and support required | matched 2 of 3 units on screen, approximate, read-only |
 | Location (Move button) | verified in-game, editable: only to bases and towns on the same side; units not yet arrived or on the march are read-only. A move also sets the unit's hex, its target and its map position (the game names the location after the nearest base to that position). Moves to towns verified in-game |
 | Add equipment (Add box, count, disabled): only devices that some land unit of the same side already uses (current or TOE); written to the first empty slot with no TOE entry | verified in-game (kept after a turn), editable |
+| Fill to TOE, TOE +10%, TOE +25% (Equipment box): raises every slot that has a TOE entry to its TOE count, rounded up (never lowers a count; clears the disabled count; an empty slot gets the TOE device, a slot with an older device keeps it); slots without a TOE entry are untouched | editable; counts above TOE are kept by the game (seen with manual count edits); the fill buttons themselves not yet checked in-game |
 | HQ, target, supplies required (recalculated by the game), the device of an existing slot, TOE device and TOE count | verified, read-only |
 | Types HQ, INF, ART, ENG, CD verified; AA and ARM are guesses ending in `?` | read-only |
 
