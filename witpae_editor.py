@@ -2137,7 +2137,7 @@ class EditorApp:
         cols = [("id", "ID", 50), ("name", "Name", 100), ("status", "Status", 60), ("experience", "Exp", 35)] + [
             ("skill_" + n.lower(), n, 38) for n in airgroups.SKILLS]
         self.pilot_tree = ttk.Treeview(box, columns=[c[0] for c in cols], show="headings",
-                                       selectmode="browse", height=4)
+                                       selectmode="extended", height=4)
         for cid, heading, width in cols:
             self.pilot_tree.heading(cid, text=heading)
             self.pilot_tree.column(cid, width=width, anchor="w" if cid == "name" else "e")
@@ -2156,6 +2156,23 @@ class EditorApp:
         k = len(airgroups.PILOT_FIELDS)
         ttk.Button(edit, text="Apply pilot", command=self.apply_pilot).grid(
             row=k // per_row, column=2 * (k % per_row), columnspan=2, sticky="w", pady=1)
+        # Scope is the selected pilots, or every active pilot of the group when none are selected.
+        bulk = ttk.Frame(box)
+        bulk.pack(side="top", fill="x", pady=(4, 0))
+        ttk.Label(bulk, text="Bulk edit").pack(side="left")
+        self.bulk_targets = ["Experience", "All skills"] + [airgroups.SKILL_NAMES[n] for n in airgroups.SKILLS]
+        self.bulk_field_var = tk.StringVar(value=self.bulk_targets[0])
+        ttk.Combobox(bulk, textvariable=self.bulk_field_var, values=self.bulk_targets, state="readonly",
+                     width=16).pack(side="left", padx=(4, 0))
+        self.bulk_modes = {"Set to": "set", "Raise to at least": "raise", "Add": "add"}
+        self.bulk_mode_var = tk.StringVar(value="Set to")
+        ttk.Combobox(bulk, textvariable=self.bulk_mode_var, values=list(self.bulk_modes), state="readonly",
+                     width=16).pack(side="left", padx=(4, 0))
+        self.bulk_amount_var = tk.StringVar()
+        ttk.Entry(bulk, textvariable=self.bulk_amount_var, width=5).pack(side="left", padx=(4, 0))
+        ttk.Button(bulk, text="Apply to pilots", command=self.apply_bulk_pilots).pack(side="left", padx=(4, 0))
+        self.bulk_scope = tk.StringVar()
+        ttk.Label(bulk, textvariable=self.bulk_scope).pack(side="left", padx=(8, 0))
 
     def _build_leader(self, parent):
         box = ttk.LabelFrame(parent, text="Commander", padding=4)
@@ -3795,17 +3812,23 @@ class EditorApp:
         return values
 
     def show_pilots(self, g):
+        previous = self.pilot_tree.selection()
         self.pilot_tree.delete(*self.pilot_tree.get_children())
         if g is not None:
             for p in self.pilot_index.get(g.id, []):
                 self.pilot_tree.insert("", "end", iid=str(p.id), values=[p.id, p.name, p.status_label] + [
                     p.get(f.name) for f in airgroups.PILOT_FIELDS])
-        if g is not None and self.pilot_current is not None and self.pilot_tree.exists(str(self.pilot_current)):
-            self.pilot_tree.selection_set(str(self.pilot_current))
+        # Keep the selection (a pilot id belongs to one group, so another group's rows never match).
+        selected = [i for i in previous if self.pilot_tree.exists(i)] if g is not None else []
+        if selected:
+            self.pilot_tree.selection_set(selected)
+        if len(selected) == 1:
+            self.pilot_current = int(selected[0])
         else:
             self.pilot_current = None
             for var in self.pilot_vars.values():
                 var.set("")
+        self._update_bulk_scope()
 
     def _selected_pilot(self):
         if self.group_current is None or self.pilot_current is None:
@@ -3814,12 +3837,62 @@ class EditorApp:
 
     def on_pilot_select(self):
         sel = self.pilot_tree.selection()
-        if not sel or self.group_current is None:
+        self._update_bulk_scope()
+        if len(sel) != 1 or self.group_current is None:
+            # Several pilots (or none): the single-pilot editor is idle and the bulk edit applies.
+            self.pilot_current = None
+            for var in self.pilot_vars.values():
+                var.set("")
             return
         self.pilot_current = int(sel[0])
         pilot = self._selected_pilot()
         for f in airgroups.PILOT_FIELDS:
             self.pilot_vars[f.name].set(str(pilot.get(f.name)))
+
+    def _bulk_pilots(self):
+        """Selected pilots of the current group, else all its active pilots."""
+        pilots = self.pilot_index.get(self.group_current, []) if self.group_current is not None else []
+        selected = {int(i) for i in self.pilot_tree.selection()}
+        if selected:
+            return [p for p in pilots if p.id in selected]
+        return [p for p in pilots if p.status == 1]
+
+    def _update_bulk_scope(self):
+        count = len(self._bulk_pilots())
+        if self.pilot_tree.selection():
+            self.bulk_scope.set(f"{count} selected pilot{'s' if count != 1 else ''}")
+        else:
+            self.bulk_scope.set(f"all {count} active pilot{'s' if count != 1 else ''}")
+
+    def apply_bulk_pilots(self):
+        if self.group_current is None:
+            return
+        text = self.bulk_amount_var.get().strip()
+        try:
+            amount = int(text)
+        except ValueError:
+            messagebox.showerror("Invalid value", f"Amount must be a whole number (got {text!r}).")
+            return
+        target = self.bulk_field_var.get()
+        if target == "All skills":
+            fields = airgroups.SKILL_FIELDS
+        elif target == "Experience":
+            fields = ["experience"]
+        else:
+            fields = [next(f.name for f in airgroups.PILOT_FIELDS[1:] if f.label.startswith(target + " ("))]
+        pilots = self._bulk_pilots()
+        try:
+            changed = airgroups.bulk_edit_pilots(pilots, fields, self.bulk_modes[self.bulk_mode_var.get()], amount)
+        except ValueError as e:
+            messagebox.showerror("Invalid value", str(e))
+            return
+        g = self.groups[self.group_current]
+        if changed:
+            self.groups_edited.add(self.group_current)
+            self.dirty = True
+            self.status.set(f"Bulk edit changed {changed} pilot{'s' if changed != 1 else ''} of {g.name} (not yet saved)")
+        self.refresh_group_list()
+        self.show_pilots(g)
 
     def apply_pilot(self):
         pilot = self._selected_pilot()

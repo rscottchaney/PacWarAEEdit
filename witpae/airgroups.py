@@ -2,9 +2,9 @@
 
 Group records are indexed by the group number shown in the game and have
 encrypted names like base names. Pilots and commanders have plain names. Views
-read and write the section bytearrays in place. Only the first copy of each
-pilot skill is written; the byte copy at 78..89 and the byte at 122 are left
-alone because their purpose is unknown.
+read and write the section bytearrays in place. Both stored copies of each
+pilot skill (65..76 and 78..89) are written; the byte at 122 is left alone
+because its purpose is unknown.
 """
 
 import calendar
@@ -204,6 +204,8 @@ PILOT_FIELDS = [Field("experience", "Experience", 44, "B", True, True, 0, 99)] +
     Field("skill_" + name.lower(), f"{SKILL_NAMES[name]} ({name})", SKILL_OFFSET + k, "B", True, True, 0, 99)
     for k, name in enumerate(SKILLS)
 ]
+SKILL_FIELDS = [f.name for f in PILOT_FIELDS[1:]]
+BULK_MODES = ("set", "raise", "add")
 
 LEADER_FIELDS = [
     Field(name.lower(), name, 26 + k, "B", True, True, 0, 99)
@@ -613,6 +615,40 @@ def pilots_by_group(save):
             group = struct.unpack_from("<h", data, start + PILOT_GROUP_OFFSET)[0]
             index.setdefault(group, []).append(Pilot(save, pilot_id, name))
     return index
+
+
+def bulk_edit_pilots(pilots, field_names, mode, amount):
+    """Apply one change to the named pilot fields of every pilot; return how many pilots changed.
+
+    mode "set" writes amount, "raise" lifts values below amount (never lowers) and "add" adds amount
+    (negative lowers), clamped to the field's range. All new values are checked before anything is written.
+    """
+    if mode not in BULK_MODES:
+        raise ValueError(f"unknown bulk edit mode {mode!r}")
+    if isinstance(amount, bool) or not isinstance(amount, int):
+        raise ValueError("Amount must be an integer")
+    low, high = (-99, 99) if mode == "add" else (0, 99)
+    if not low <= amount <= high:
+        raise ValueError(f"Amount must be between {low} and {high}")
+    plan = []
+    for pilot in pilots:
+        values = {}
+        for name in field_names:
+            f = pilot._field(name)
+            current = pilot.get(name)
+            if mode == "set":
+                new = amount
+            elif mode == "raise":
+                new = max(current, amount)
+            else:
+                new = min(max(current + amount, f.min), f.max)
+            if new != current:
+                values[name] = new
+        if values:
+            plan.append((pilot, values))
+    for pilot, values in plan:
+        pilot.set_many(values)
+    return len(plan)
 
 
 def get_leader(save, leader_id):

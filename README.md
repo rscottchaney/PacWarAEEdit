@@ -176,6 +176,7 @@ highlights the group row. The Side filter uses the group's side byte
 | Pilot status (1 = Active; 2-4 probably killed/wounded/missing, unverified) | read-only; the Pilots list column counts active pilots |
 | Pilot experience | verified in-game, editable |
 | Pilot 12 skills (Air, NavB, NavT, NavS, Recn, ASW, Tran, GrdB, LowN, LowG, Staf, Defn) | verified in-game, editable; written to both stored copies |
+| Bulk pilot edit (Bulk edit row under the pilot list): experience, all skills or one skill; Set to, Raise to at least (never lowers) or Add (negative lowers, clamped to 0..99); applies to the selected pilots (Ctrl or Shift click), or to every active pilot of the group when none are selected | editable; uses the same writes as the single-pilot editor |
 | Commander leadership, inspiration, naval, air, land, admin, aggression | verified in-game, editable |
 | Pilot "Age?" | unverified, read-only |
 | Commander rank (shown as text and code, for example `LTC (37)`; same decoding as the Leaders tab) | read-only |

@@ -108,6 +108,55 @@ class AirGroupTests(unittest.TestCase):
         p = {x.id: x for x in airgroups.pilots_by_group(other)[4205]}[5041]
         self.assertEqual((p.get("experience"), p.get("skill_air")), (60, 70))
 
+    def test_bulk_edit_modes(self):
+        pilots = self.pilots[4205]
+        self.assertEqual(airgroups.bulk_edit_pilots(pilots, ["experience"], "set", 70), 2)
+        self.assertEqual([p.get("experience") for p in pilots], [70, 70])
+        # Raise never lowers: 5041 and 18570 are both at 70 now, so nothing changes at 50.
+        self.assertEqual(airgroups.bulk_edit_pilots(pilots, ["experience"], "raise", 50), 0)
+        pilots[0].set("experience", 40)
+        self.assertEqual(airgroups.bulk_edit_pilots(pilots, ["experience"], "raise", 50), 1)
+        self.assertEqual([p.get("experience") for p in pilots], [50, 70])
+        self.assertEqual(airgroups.bulk_edit_pilots(pilots, ["experience"], "add", 30), 2)
+        self.assertEqual([p.get("experience") for p in pilots], [80, 99])
+        self.assertEqual(airgroups.bulk_edit_pilots(pilots, ["experience"], "add", -99), 2)
+        self.assertEqual([p.get("experience") for p in pilots], [0, 0])
+        # Only pilots whose value changes are counted.
+        self.assertEqual(airgroups.bulk_edit_pilots(pilots, ["experience"], "add", -5), 0)
+        self.assertEqual(airgroups.bulk_edit_pilots(pilots, ["experience"], "set", 0), 0)
+
+    def test_bulk_edit_all_skills_writes_both_copies(self):
+        pilots = self.pilots[4205]
+        self.assertEqual(airgroups.bulk_edit_pilots(pilots, airgroups.SKILL_FIELDS, "set", 99), 2)
+        other = self.roundtrip()
+        for pilot in pilots:
+            self.assertEqual(skills(pilot), [99] * 12)
+        pilot = {x.id: x for x in airgroups.pilots_by_group(other)[4205]}[5041]
+        self.assertEqual(skills(pilot), [99] * 12)
+        before = bytes(SaveFile.load(SAVE_015)[0x16].data)
+        size = airgroups.PILOT_RECORD_SIZE
+        for pid, original in ((5041, SKILLS_5041), (18570, SKILLS_18570)):
+            first = bytes(other[0x16].data[pid * size + 65:pid * size + 77])
+            second = bytes(other[0x16].data[pid * size + 78:pid * size + 90])
+            self.assertEqual(first, bytes([99] * 12))
+            self.assertEqual(second, bytes([99] * 12))
+            self.assertEqual(before[pid * size + 78:pid * size + 90], bytes(original))
+        after = bytes(other[0x16].data)
+        changed = {i % size for i in range(len(after)) if after[i] != before[i]}
+        self.assertEqual(changed, set(range(65, 77)) | set(range(78, 90)))
+
+    def test_bulk_edit_invalid_leaves_data_unchanged(self):
+        pilots = self.pilots[4205]
+        before = bytes(self.sf[0x16].data)
+        cases = [("bogus", 5), ("set", 100), ("set", -1), ("raise", 100), ("add", 100), ("add", -100),
+                 ("set", True), ("set", "5"), ("set", 5.0)]
+        for mode, amount in cases:
+            with self.assertRaises(ValueError, msg=f"{mode} {amount!r}"):
+                airgroups.bulk_edit_pilots(pilots, ["experience"], mode, amount)
+        with self.assertRaises(ValueError):
+            airgroups.bulk_edit_pilots(pilots, ["experience", "nope"], "set", 5)
+        self.assertEqual(bytes(self.sf[0x16].data), before)
+
     def test_leader_edit_roundtrip(self):
         leader = airgroups.get_leader(self.sf, 27701)
         leader.set("leadership", 99)
