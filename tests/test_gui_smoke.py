@@ -566,6 +566,69 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertTrue(app.load(SAVE_015))
         self.assertEqual(app.groups_edited, set())
 
+    def test_air_group_bulk_pilot_edit(self):
+        from unittest import mock
+        from witpae import airgroups
+        import witpae_editor
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        app.group_search_var.set("19th TS")
+        app.group_tree.selection_set("4205")
+        self.root.update()
+        pilots = {p.id: p for p in app.pilot_index[4205]}
+        original = {i: p.get("skill_air") for i, p in pilots.items()}
+        self.assertEqual(app.bulk_scope.get(), "all 2 active pilots")
+        # Invalid amounts show an error and change nothing.
+        with mock.patch.object(witpae_editor.messagebox, "showerror") as err:
+            for bad in ("", "abc", "100"):
+                app.bulk_amount_var.set(bad)
+                app.apply_bulk_pilots()
+        self.assertEqual(err.call_count, 3)
+        self.assertEqual({i: p.get("skill_air") for i, p in pilots.items()}, original)
+        self.assertFalse(app.dirty)
+        self.assertEqual(app.groups_edited, set())
+        # No selection: every active pilot of the group.
+        app.bulk_field_var.set("All skills")
+        app.bulk_mode_var.set("Set to")
+        app.bulk_amount_var.set("55")
+        app.apply_bulk_pilots()
+        for p in pilots.values():
+            self.assertEqual([p.get("skill_" + n.lower()) for n in airgroups.SKILLS], [55] * 12)
+        self.assertIn(4205, app.groups_edited)
+        self.assertTrue(app.dirty)
+        self.assertIn("changed 2 pilots", app.status.get())
+        # Several selected: the single-pilot editor is cleared and idle.
+        app.pilot_tree.selection_set("5041")
+        self.root.update()
+        self.assertEqual(app.pilot_vars["skill_air"].get(), "55")
+        app.pilot_tree.selection_set(("5041", "18570"))
+        self.root.update()
+        self.assertEqual(app.bulk_scope.get(), "2 selected pilots")
+        self.assertIsNone(app.pilot_current)
+        self.assertEqual(app.pilot_vars["skill_air"].get(), "")
+        app.apply_pilot()  # does nothing
+        # One of several selected: only that pilot changes, and the selection is kept.
+        app.pilot_tree.selection_set(("18570",))
+        self.root.update()
+        app.bulk_field_var.set("Air combat")
+        app.bulk_mode_var.set("Add")
+        app.bulk_amount_var.set("-5")
+        app.apply_bulk_pilots()
+        self.root.update()
+        self.assertEqual(pilots[18570].get("skill_air"), 50)
+        self.assertEqual(pilots[5041].get("skill_air"), 55)
+        self.assertEqual(app.pilot_tree.set("18570", "skill_air"), "50")
+        self.assertEqual(app.pilot_tree.selection(), ("18570",))
+        # Raise lifts only the pilot below the amount.
+        app.pilot_tree.selection_set(("5041", "18570"))
+        self.root.update()
+        app.bulk_mode_var.set("Raise to at least")
+        app.bulk_amount_var.set("52")
+        app.apply_bulk_pilots()
+        self.root.update()
+        self.assertEqual((pilots[5041].get("skill_air"), pilots[18570].get("skill_air")), (55, 52))
+        self.assertEqual(app.pilot_tree.selection(), ("5041", "18570"))
+
     def test_air_group_schedule_and_dates(self):
         from unittest import mock
         from witpae import airgroups
