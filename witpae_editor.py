@@ -2143,8 +2143,31 @@ class EditorApp:
             self.pilot_tree.column(cid, width=width, anchor="w" if cid == "name" else "e")
         self.pilot_tree.pack(side="top", fill="x")
         self.pilot_tree.bind("<<TreeviewSelect>>", lambda e: self.on_pilot_select())
-        edit = ttk.Frame(box)
-        edit.pack(side="top", fill="x", pady=(4, 0))
+        # Bulk edit sits to the right of the single-pilot editor so the tab stays short.
+        lower = ttk.Frame(box)
+        lower.pack(side="top", fill="x", pady=(4, 0))
+        edit = ttk.Frame(lower)
+        edit.pack(side="left", anchor="n")
+        ttk.Separator(lower, orient="vertical").pack(side="left", fill="y", padx=8)
+        # Scope is the selected pilots, or every active pilot of the group when none are selected.
+        bulk = ttk.Frame(lower)
+        bulk.pack(side="left", anchor="n")
+        ttk.Label(bulk, text="Bulk edit").grid(row=0, column=0, sticky="w", padx=(0, 4), pady=1)
+        self.bulk_targets = ["Experience", "All skills"] + [airgroups.SKILL_NAMES[n] for n in airgroups.SKILLS]
+        self.bulk_field_var = tk.StringVar(value=self.bulk_targets[0])
+        ttk.Combobox(bulk, textvariable=self.bulk_field_var, values=self.bulk_targets, state="readonly",
+                     width=16).grid(row=0, column=1, columnspan=2, sticky="w", pady=1)
+        self.bulk_modes = {"Set to": "set", "Raise to at least": "raise", "Add": "add"}
+        self.bulk_mode_var = tk.StringVar(value="Set to")
+        ttk.Combobox(bulk, textvariable=self.bulk_mode_var, values=list(self.bulk_modes), state="readonly",
+                     width=16).grid(row=1, column=1, columnspan=2, sticky="w", pady=1)
+        ttk.Label(bulk, text="Amount").grid(row=2, column=0, sticky="w", padx=(0, 4), pady=1)
+        self.bulk_amount_var = tk.StringVar()
+        ttk.Entry(bulk, textvariable=self.bulk_amount_var, width=5).grid(row=2, column=1, sticky="w", pady=1)
+        ttk.Button(bulk, text="Apply to pilots", command=self.apply_bulk_pilots).grid(
+            row=2, column=2, sticky="w", padx=(4, 0), pady=1)
+        self.bulk_scope = tk.StringVar()
+        ttk.Label(bulk, textvariable=self.bulk_scope).grid(row=3, column=0, columnspan=3, sticky="w", pady=1)
         # Four label/entry pairs per row so the full skill names fit.
         per_row = 4
         for k, f in enumerate(airgroups.PILOT_FIELDS):
@@ -2156,23 +2179,6 @@ class EditorApp:
         k = len(airgroups.PILOT_FIELDS)
         ttk.Button(edit, text="Apply pilot", command=self.apply_pilot).grid(
             row=k // per_row, column=2 * (k % per_row), columnspan=2, sticky="w", pady=1)
-        # Scope is the selected pilots, or every active pilot of the group when none are selected.
-        bulk = ttk.Frame(box)
-        bulk.pack(side="top", fill="x", pady=(4, 0))
-        ttk.Label(bulk, text="Bulk edit").pack(side="left")
-        self.bulk_targets = ["Experience", "All skills"] + [airgroups.SKILL_NAMES[n] for n in airgroups.SKILLS]
-        self.bulk_field_var = tk.StringVar(value=self.bulk_targets[0])
-        ttk.Combobox(bulk, textvariable=self.bulk_field_var, values=self.bulk_targets, state="readonly",
-                     width=16).pack(side="left", padx=(4, 0))
-        self.bulk_modes = {"Set to": "set", "Raise to at least": "raise", "Add": "add"}
-        self.bulk_mode_var = tk.StringVar(value="Set to")
-        ttk.Combobox(bulk, textvariable=self.bulk_mode_var, values=list(self.bulk_modes), state="readonly",
-                     width=16).pack(side="left", padx=(4, 0))
-        self.bulk_amount_var = tk.StringVar()
-        ttk.Entry(bulk, textvariable=self.bulk_amount_var, width=5).pack(side="left", padx=(4, 0))
-        ttk.Button(bulk, text="Apply to pilots", command=self.apply_bulk_pilots).pack(side="left", padx=(4, 0))
-        self.bulk_scope = tk.StringVar()
-        ttk.Label(bulk, textvariable=self.bulk_scope).pack(side="left", padx=(8, 0))
 
     def _build_leader(self, parent):
         box = ttk.LabelFrame(parent, text="Commander", padding=4)
