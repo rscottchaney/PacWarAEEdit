@@ -875,6 +875,44 @@ class GuiSmokeTests(unittest.TestCase):
         app.fill_unit_to_toe(10)
         self.assertIn("already at TOE +10%", app.status.get())
 
+    def test_land_unit_support_estimate(self):
+        from unittest import mock
+        import witpae_editor
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        app.raise_unit_support()  # nothing selected
+        self.assertEqual(app.units_edited, set())
+        self.assertFalse(app.dirty)
+        self.assertEqual(app.unit_info["support_estimate"].get(), "")
+        app.unit_tree.selection_set("2038")
+        self.root.update()
+        self.assertEqual(app.unit_info["support_estimate"].get(), "30 (6 short)")
+        app.raise_unit_support()
+        self.root.update()
+        self.assertEqual(app.unit_info["support_estimate"].get(), "30")
+        self.assertIn(2038, app.units_edited)
+        self.assertTrue(app.dirty)
+        self.assertEqual(app.unit_tree.item("2038", "tags"), ("edited",))
+        self.assertEqual(app.unit_equipment_tree.set("3", "count"), "30")
+        self.assertIn("Added 6 support squads", app.status.get())
+        self.assertIn("not yet saved", app.status.get())
+        app.raise_unit_support()
+        self.assertIn("already has enough support", app.status.get())
+        # Fill to TOE changes the equipment, so the estimate follows.
+        app.unit_tree.selection_set("5639")
+        self.root.update()
+        u = app.units[5639]
+        before = u.support_estimate()
+        app.fill_unit_to_toe(25)
+        support, needed = u.support_estimate()
+        self.assertNotEqual((support, needed), before)
+        expected = f"{needed} ({needed - support} short)" if needed > support else str(needed)
+        self.assertEqual(app.unit_info["support_estimate"].get(), expected)
+        with mock.patch.object(witpae_editor.messagebox, "showerror") as err:
+            with mock.patch.object(type(u), "raise_support_to_estimate", side_effect=ValueError("no slot")):
+                app.raise_unit_support()
+        self.assertTrue(err.called)
+
     def test_add_land_unit_equipment(self):
         from unittest import mock
         import witpae_editor

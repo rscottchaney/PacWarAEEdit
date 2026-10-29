@@ -67,6 +67,8 @@ DISABLED_OFFSET = 216
 TOE_DEVICE_OFFSET = 336
 TOE_COUNT_OFFSET = 376
 MAX_COUNT = 9999
+SUPPORT_DEVICES = (252, 253)  # Support, Motorized Support: these count toward the unit's support
+NO_SUPPORT_NEEDED = frozenset({252, 253, 254, 255})  # plus Aviation Support and Naval Support
 
 
 def type_label(type_id):
@@ -290,6 +292,51 @@ class LandUnit(Record):
                 struct.pack_into("<h", self._data, self._offset + off + 2 * k, value)
             changed += 1
         return changed
+
+    def support_estimate(self):
+        """Return (support, needed), an estimate of the game's support rule from current equipment.
+
+        support is the count in slots holding Support or Motorized Support; needed is the count in
+        all other slots with a device, following the manual's one support squad per non-support
+        element. It matches the stored value on most but not all units.
+        """
+        support = needed = 0
+        for k in range(SLOTS):
+            device = self._i16(DEVICE_OFFSET + 2 * k)
+            count = self._i16(COUNT_OFFSET + 2 * k)
+            if device in SUPPORT_DEVICES:
+                support += count
+            elif device and device not in NO_SUPPORT_NEEDED:
+                needed += count
+        return support, needed
+
+    def raise_support_to_estimate(self):
+        """Add support squads up to support_estimate()'s need; return the number added.
+
+        The shortfall goes to the first Support slot, else the first Motorized Support slot, else
+        Support in the lowest empty slot (TOE bytes stay 0). Nothing is ever lowered and disabled
+        is not changed. The slot count is capped at MAX_COUNT. Raises ValueError, writing nothing,
+        if a new slot is needed and none is empty.
+        """
+        support, needed = self.support_estimate()
+        if support >= needed:
+            return 0
+        shortfall = needed - support
+        devices = [self._i16(DEVICE_OFFSET + 2 * k) for k in range(SLOTS)]
+        slot = next((k for k, d in enumerate(devices) if d == SUPPORT_DEVICES[0]), None)
+        if slot is None:
+            slot = next((k for k, d in enumerate(devices) if d == SUPPORT_DEVICES[1]), None)
+        if slot is None:
+            used = set(self.equipment_slots())
+            slot = next((k for k in range(SLOTS) if k not in used), None)
+            if slot is None:
+                raise ValueError(f"{self.name} has no empty equipment slot for support squads")
+            struct.pack_into("<h", self._data, self._offset + DEVICE_OFFSET + 2 * slot, SUPPORT_DEVICES[0])
+            struct.pack_into("<h", self._data, self._offset + DISABLED_OFFSET + 2 * slot, 0)
+        old = self._i16(COUNT_OFFSET + 2 * slot)
+        new = min(MAX_COUNT, old + shortfall)
+        struct.pack_into("<h", self._data, self._offset + COUNT_OFFSET + 2 * slot, new)
+        return new - old
 
 
 def available_devices(save):
