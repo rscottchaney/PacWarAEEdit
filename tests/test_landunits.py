@@ -49,6 +49,11 @@ class LandUnitTests(unittest.TestCase):
         self.assertEqual(eq[6], {"device": "Support", "count": 38, "disabled": 7,
                                  "toe_device": "Support", "toe_count": 45})
 
+    def test_arrived(self):
+        self.assertTrue(self.units[5639].arrived)
+        self.assertFalse(self.units[8].arrived)  # Burma Area HQ, a reinforcement
+        self.assertEqual(sum(not u.arrived for u in self.units.values()), 3276)
+
     def test_supplies_short(self):
         u = self.units[3447]
         self.assertEqual((u.get("supplies"), u.supplies_required), (271, 277))

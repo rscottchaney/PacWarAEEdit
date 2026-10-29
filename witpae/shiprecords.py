@@ -128,6 +128,11 @@ class ShipRecord(Record):
         return struct.unpack_from("<I", self._data, self._offset + ARRIVAL_OFFSET)[0]
 
     @property
+    def arrived(self):
+        """True once the ship is in the game; reinforcements (and sunk ships, 19999) have a non-zero value."""
+        return self.days_to_arrival == 0
+
+    @property
     def base_name(self):
         """Name of the current base, "" at sea."""
         loc = self.base_id

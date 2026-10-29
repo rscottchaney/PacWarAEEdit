@@ -34,6 +34,7 @@ SUPPLIES_REQUIRED_OFFSET = 540
 # Matched the screen for 2 of 3 units, the third was off by a few.
 SUPPORT_REQUIRED_OFFSET = 548
 SUPPORT_OFFSET = 552
+DAYS_OFFSET = 564  # i16 days to arrival; 0 = arrived (or no date), 9999 / 19999 / 29999 = not scheduled
 
 # fmt is a struct code: B = u8, i = i32.
 FIELDS = [
@@ -145,6 +146,11 @@ class LandUnit(Record):
     @property
     def target_name(self):
         return self._location_name(self.target_id)
+
+    @property
+    def arrived(self):
+        """False for reinforcements and units not yet scheduled (days to arrival not 0)."""
+        return self._i16(DAYS_OFFSET) == 0
 
     @property
     def supplies_short(self):

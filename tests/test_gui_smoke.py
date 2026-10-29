@@ -729,6 +729,29 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertEqual(app.pools_edited, set())
         self.assertFalse(app.dirty)
 
+    def test_inactive_rows_are_dimmed(self):
+        import witpae_editor
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        self.root.update()
+        # (tree, active id, inactive id): ship 7 is a reinforcement, 3152 is sunk; aircraft 2 is not yet available
+        for tree, active, inactive in ((app.shiprec_tree, "3144", "7"), (app.shiprec_tree, "3144", "3152"),
+                                       (app.group_tree, "4205", "2"), (app.ldr_tree, "27701", "1"),
+                                       (app.aircraft_tree, "487", "2")):
+            self.assertNotIn("pending", tree.item(active, "tags"))
+            self.assertEqual(tree.item(inactive, "tags"), ("pending",))
+        app.shiprecs_edited.add(7)
+        app.groups_edited.add(2)
+        app.ldr_edited.add(1)
+        app.aircraft_edited.add(2)
+        app.refresh_shiprec_list()
+        app.refresh_group_list()
+        app.refresh_ldr_list()
+        app.refresh_aircraft_list()
+        for tree, iid in ((app.shiprec_tree, "7"), (app.group_tree, "2"), (app.ldr_tree, "1"),
+                          (app.aircraft_tree, "2")):
+            self.assertEqual(tree.item(iid, "tags"), ("edited", "pending"))
+
     def test_leaders_tab(self):
         from unittest import mock
         from witpae import airgroups
@@ -892,7 +915,7 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertEqual(app.unit_info["support_estimate"].get(), "30")
         self.assertIn(2038, app.units_edited)
         self.assertTrue(app.dirty)
-        self.assertEqual(app.unit_tree.item("2038", "tags"), ("edited",))
+        self.assertEqual(app.unit_tree.item("2038", "tags"), ("edited", "pending"))  # 2038 has not arrived
         self.assertEqual(app.unit_equipment_tree.set("3", "count"), "30")
         self.assertIn("Added 6 support squads", app.status.get())
         self.assertIn("not yet saved", app.status.get())
@@ -919,6 +942,16 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertTrue(app.load(SAVE_015))
         self.assertIn("short", app.unit_tree.item("3447", "tags"))  # 271 of 277
         self.assertNotIn("short", app.unit_tree.item("5639", "tags"))  # 99 of 89
+        self.assertEqual(app.unit_tree.set("3447", "supplies"), "271 / 277")
+        self.assertEqual(app.unit_tree.set("5639", "supplies"), "99")
+        # Not yet arrived: dimmed, and a shortage is not flagged in the list.
+        self.assertEqual(app.unit_tree.item("8", "tags"), ("pending",))  # Burma Area, reinforcement
+        self.assertEqual(app.unit_tree.item("6652", "tags"), ("pending",))  # 3rd ISF, short but not arrived
+        self.assertNotIn("/", app.unit_tree.set("6652", "supplies"))
+        self.assertEqual(app.unit_tree.item("5639", "tags"), "")
+        app.sort_units_by("supplies")  # still sorts on the number, not the "have / required" text
+        order = [int(app.unit_tree.set(i, "supplies").split(" /")[0]) for i in app.unit_tree.get_children()]
+        self.assertEqual(order, sorted(order))
         app.unit_tree.selection_set("3447")
         self.root.update()
         self.assertEqual(app.unit_info["required"].get(), "277 (short)")
@@ -927,6 +960,7 @@ class GuiSmokeTests(unittest.TestCase):
         app.apply_unit()
         self.root.update()
         self.assertEqual(app.unit_tree.item("3447", "tags"), ("edited",))
+        self.assertEqual(app.unit_tree.set("3447", "supplies"), "300")
         self.assertEqual(app.unit_info["required"].get(), "277")
         self.assertEqual(str(app.unit_info_labels["required"].cget("foreground")), "")
 
