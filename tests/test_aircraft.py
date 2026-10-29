@@ -69,6 +69,17 @@ class AircraftTests(unittest.TestCase):
         self.assertIn(487, sbd)
         self.assertTrue(all(a.name for a in self.by_id.values()))
 
+    def test_is_available(self):
+        future = self.by_id[2]  # from date after 12/41
+        self.assertGreater(tuple(reversed(future.get_date("from"))), (41, 12))
+        self.assertFalse(future.is_available(12, 1941))
+        self.assertTrue(future.is_available(12, 1999))
+        self.assertTrue(self.by_id[487].is_available(12, 1941))  # from 12/41: the boundary month counts
+        self.assertFalse(self.by_id[487].is_available(11, 1941))
+        future.set_date("from", (0, 0))
+        self.assertEqual(future.get_date("from"), (0, 0))
+        self.assertTrue(future.is_available(1, 1900))  # no date
+
     def test_p38(self):
         a = self.by_id[332]
         self.assertEqual(a.name, "P-38G Lightning")

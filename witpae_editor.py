@@ -107,9 +107,12 @@ UNIT_COLUMNS = [
     ("exp", "Exp", 45, True, lambda u: u.get("experience")),
     ("morale", "Morale", 55, True, lambda u: u.get("morale")),
     ("fatigue", "Fatigue", 55, True, lambda u: u.get("fatigue")),
-    ("supplies", "Supplies", 70, True, lambda u: u.get("supplies")),
+    ("supplies", "Supplies", 95, True, lambda u: u.get("supplies")),
 ]
 UNIT_COLUMN_BY_ID = {c[0]: c for c in UNIT_COLUMNS}
+# Cell text where it differs from the sort value: a short unit's supplies read "have / required".
+UNIT_TEXT = {"supplies": lambda u: f"{u.get('supplies')} / {u.supplies_required}" if u.arrived and u.supplies_short
+             else u.get("supplies")}
 
 # Rows are the LeaderRow tuples of witpae.leaders.
 LEADER_COLUMNS = [
@@ -1616,6 +1619,8 @@ class EditorApp:
             self.aircraft_tree.heading(cid, text=heading, command=lambda c=cid: self.sort_aircraft_by(c))
             self.aircraft_tree.column(cid, width=width, anchor="w" if cid in ("name", "nation", "type") else "e")
         self.aircraft_tree.tag_configure("edited", background="#fff2b3")
+        # Models whose availability date is after the game date are dimmed.
+        self.aircraft_tree.tag_configure("pending", foreground="gray55")
         scroll = ttk.Scrollbar(left, orient="vertical", command=self.aircraft_tree.yview)
         self.aircraft_tree.configure(yscrollcommand=scroll.set)
         scroll.pack(side="right", fill="y")
@@ -1778,6 +1783,8 @@ class EditorApp:
             self.shiprec_tree.heading(cid, text=heading, command=lambda c=cid: self.sort_shiprecs_by(c))
             self.shiprec_tree.column(cid, width=width, anchor="e" if cid == "id" else "w")
         self.shiprec_tree.tag_configure("edited", background="#fff2b3")
+        # Ships not yet arrived (reinforcements, sunk) are dimmed.
+        self.shiprec_tree.tag_configure("pending", foreground="gray55")
         scroll = ttk.Scrollbar(left, orient="vertical", command=self.shiprec_tree.yview)
         self.shiprec_tree.configure(yscrollcommand=scroll.set)
         scroll.pack(side="right", fill="y")
@@ -1988,6 +1995,8 @@ class EditorApp:
             self.group_tree.heading(cid, text=heading, command=lambda c=cid: self.sort_groups_by(c))
             self.group_tree.column(cid, width=width, anchor="w" if cid in ("name", "aircraft", "location") else "e")
         self.group_tree.tag_configure("edited", background="#fff2b3")
+        # Groups not yet arrived are dimmed.
+        self.group_tree.tag_configure("pending", foreground="gray55")
         scroll = ttk.Scrollbar(left, orient="vertical", command=self.group_tree.yview)
         self.group_tree.configure(yscrollcommand=scroll.set)
         scroll.pack(side="right", fill="y")
@@ -2269,6 +2278,8 @@ class EditorApp:
         self.unit_tree.tag_configure("edited", background="#fff2b3")
         # Red text like the game's unit screen when supplies are below supplies required.
         self.unit_tree.tag_configure("short", foreground="red")
+        # Units not yet arrived (reinforcements, not scheduled) are dimmed.
+        self.unit_tree.tag_configure("pending", foreground="gray55")
         scroll = ttk.Scrollbar(left, orient="vertical", command=self.unit_tree.yview)
         self.unit_tree.configure(yscrollcommand=scroll.set)
         scroll.pack(side="right", fill="y")
@@ -2341,6 +2352,8 @@ class EditorApp:
             self.ldr_tree.column(cid, width=width, anchor="w" if cid in ("name", "nation", "rank", "type", "commands")
                                  else "e")
         self.ldr_tree.tag_configure("edited", background="#fff2b3")
+        # Leaders not yet available (delay above 0) are dimmed.
+        self.ldr_tree.tag_configure("pending", foreground="gray55")
         scroll = ttk.Scrollbar(left, orient="vertical", command=self.ldr_tree.yview)
         self.ldr_tree.configure(yscrollcommand=scroll.set)
         scroll.pack(side="right", fill="y")
@@ -2816,14 +2829,25 @@ class EditorApp:
         # Ties fall back to the id so the order is stable.
         return (v if numeric else str(v).lower(), a.id)
 
+    def _game_month_year(self):
+        """(month, year) of the save's game date, or None when it cannot be read."""
+        try:
+            _, month, year = reports.game_date(self.save)
+        except (SaveFormatError, IndexError):
+            return None
+        return month, year
+
     def refresh_aircraft_list(self):
         selected = self.aircraft_current
         self.aircraft_tree.delete(*self.aircraft_tree.get_children())
         needle = self.aircraft_search_var.get().strip().lower()
         rows = [a for a in self.aircraft.values() if needle in a.name.lower()]
         rows.sort(key=self._aircraft_sort_key, reverse=self.aircraft_sort_reverse)
+        game_date = self._game_month_year()
         for a in rows:
             tags = ("edited",) if a.id in self.aircraft_edited else ()
+            if game_date and not a.is_available(*game_date):
+                tags += ("pending",)
             self.aircraft_tree.insert("", "end", iid=str(a.id), values=self._aircraft_row(a), tags=tags)
         if selected is not None and self.aircraft_tree.exists(str(selected)):
             self.aircraft_tree.selection_set(str(selected))
@@ -3129,6 +3153,8 @@ class EditorApp:
         rows.sort(key=self._shiprec_sort_key, reverse=self.shiprec_sort_reverse)
         for x in rows:
             tags = ("edited",) if x.id in self.shiprecs_edited else ()
+            if not x.arrived:
+                tags += ("pending",)
             self.shiprec_tree.insert("", "end", iid=str(x.id), values=[get(x) for *_, get in SHIPREC_COLUMNS],
                                      tags=tags)
         if selected is not None and self.shiprec_tree.exists(str(selected)):
@@ -3595,6 +3621,8 @@ class EditorApp:
         rows.sort(key=self._group_sort_key, reverse=self.group_sort_reverse)
         for g in rows:
             tags = ("edited",) if g.id in self.groups_edited else ()
+            if not g.arrived:
+                tags += ("pending",)
             self.group_tree.insert("", "end", iid=str(g.id), values=[get(g) for *_, get in GROUP_COLUMNS],
                                    tags=tags)
         if selected is not None and self.group_tree.exists(str(selected)):
@@ -4028,8 +4056,11 @@ class EditorApp:
                 if needle in u.display_name.lower() and (side == "All" or u.side == side)]
         rows.sort(key=self._unit_sort_key, reverse=self.unit_sort_reverse)
         for u in rows:
-            tags = (("edited",) if u.id in self.units_edited else ()) + (("short",) if u.supplies_short else ())
-            self.unit_tree.insert("", "end", iid=str(u.id), values=[get(u) for *_, get in UNIT_COLUMNS],
+            # Text colour: dimmed while not arrived (a shortage is not shown then), else red when short.
+            colour = ("pending",) if not u.arrived else ("short",) if u.supplies_short else ()
+            tags = (("edited",) if u.id in self.units_edited else ()) + colour
+            self.unit_tree.insert("", "end", iid=str(u.id), values=[UNIT_TEXT.get(cid, get)(u)
+                                                                    for cid, *_, get in UNIT_COLUMNS],
                                   tags=tags)
         if selected is not None and self.unit_tree.exists(str(selected)):
             self.unit_tree.selection_set(str(selected))
@@ -4250,6 +4281,8 @@ class EditorApp:
         rows.sort(key=self._ldr_sort_key, reverse=self.ldr_sort_reverse)
         for r in rows:
             tags = ("edited",) if r.id in self.ldr_edited else ()
+            if r.delay > 0:
+                tags += ("pending",)
             self.ldr_tree.insert("", "end", iid=str(r.id), values=[get(r) for *_, get in LEADER_COLUMNS], tags=tags)
         self.ldr_count.set(f"{len(rows)} of {len(self.ldr_rows)} leaders")
         if selected is not None and self.ldr_tree.exists(str(selected)):

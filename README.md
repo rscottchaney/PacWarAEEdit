@@ -53,6 +53,8 @@ Name, side and hex coordinates are read-only. The field table is in
 The Aircraft tab lists the aircraft table (section 0x20) with search and
 sortable columns. Several models share a name (one per nation), so always check
 the ID. Edits use the same Apply button, row highlight and Save As as bases.
+Models whose "from" availability date is after the game date are dimmed (the
+"to" date is not a retirement date, so it is ignored).
 
 | Field | Status |
 |---|---|
@@ -105,7 +107,8 @@ are verified except China and India, which end in `?`.
 ## Ships
 
 The Ships tab lists the ships in play (section 0x08, one record per ship, indexed
-by ship id; records with an empty name are unused). Search by name and filter by
+by ship id; records with an empty name are unused). Ships that have not arrived
+(days to arrival not 0: reinforcements, and sunk ships) are dimmed. Search by name and filter by
 side; the side comes from the ship's nation (IJA and IJN are Japanese, all
 others Allied). The Location column shows the current base, `TF n` for a ship at
 sea in a task force, or `at sea`. Offsets were mapped against game screens;
@@ -153,7 +156,8 @@ The model functions are in `witpae/taskforces.py` (`set_flagship`, `set_mission`
 
 The Air Groups tab lists the air group table (section 0x14; the ID is the group
 number shown in the game). Select a group to edit it, its pilots (section
-0x16) and its commander (section 0x15). Editing a pilot or commander
+0x16) and its commander (section 0x15). Groups that have not arrived are
+dimmed. Editing a pilot or commander
 highlights the group row. The Side filter uses the group's side byte
 (offset 26), so groups aboard ships or not yet arrived are filtered too.
 
@@ -230,7 +234,8 @@ game-style HQ names.
 | Add equipment (Add box, count, disabled): only devices that some land unit of the same side already uses (current or TOE); written to the first empty slot with no TOE entry | verified in-game (kept after a turn), editable |
 | Fill to TOE, TOE +10%, TOE +25% (Equipment box): raises every slot that has a TOE entry to its TOE count, rounded up (never lowers a count; clears the disabled count; an empty slot gets the TOE device, a slot with an older device keeps it); slots without a TOE entry are untouched | editable; counts above TOE are kept by the game (seen with manual count edits); the fill buttons themselves not yet checked in-game |
 | HQ, target, supplies required (recalculated by the game), the device of an existing slot, TOE device and TOE count | verified, read-only |
-| Supply shortage: units whose supplies are below supplies required are listed in red, and the detail panel shows the requirement in red with "(short)", as the game's unit screen does | display only; uses the stored requirement, so it updates when supplies are edited |
+| Not-arrived units (reinforcements and units not yet scheduled: days to arrival, i16 at 564, not 0) are dimmed in the list, and a shortage is not flagged for them there | display only |
+| Supply shortage: units whose supplies are below supplies required are listed in red with the Supplies cell reading "have / required" (e.g. 271 / 277; the column still sorts on supplies), and the detail panel shows the requirement in red with "(short)", as the game's unit screen does | display only; uses the stored requirement, so it updates when supplies are edited |
 | Types HQ, INF, ART, ENG, CD verified; AA and ARM are guesses ending in `?` | read-only |
 
 Load cost and AV are computed by the game.
@@ -241,7 +246,7 @@ The Leaders tab lists every named leader (section 0x15, 50000 records of 180
 bytes; the ID is the leader id that air groups, ships and land units refer to).
 Filters: Side, Branch (Army, Navy, Air, from the rank), Type, Assigned, and a
 Search box that matches the name or the unit the leader commands. All columns
-sort. Select a leader to edit the ratings (same Apply, validation and row
+sort. Leaders who are not yet available (delay above 0 days) are dimmed. Select a leader to edit the ratings (same Apply, validation and row
 highlight as the other tabs); double-click one that commands a unit to jump to
 that unit in its tab (Air Groups, Ships, Task Forces or Land Units), with that
 tab's filters cleared. Edits in the Air Groups commander box and in this tab

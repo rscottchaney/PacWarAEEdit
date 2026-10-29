@@ -16,7 +16,7 @@ from collections import namedtuple
 from . import bases, factories, industry, landunits
 from .container import SaveFormatError
 
-DAYS_OFFSET = 564  # i16; 0 = arrived (or no date), 9999 / 19999 / 29999 = not scheduled
+DAYS_OFFSET = landunits.DAYS_OFFSET
 SENTINEL_DAYS = frozenset({9999, 19999, 29999})
 DEVICE_TYPE_OFFSET = 26  # u8
 DEVICE_LOAD_OFFSET = 28  # i16

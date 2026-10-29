@@ -45,6 +45,12 @@ class ShipRecordTests(unittest.TestCase):
                          ("USN", "Allied", "Pearl Harbor", 0, 0))
         self.assertEqual(x.base_name, "Pearl Harbor")
 
+    def test_arrived(self):
+        self.assertTrue(self.by_id[MARYLAND].arrived)
+        self.assertFalse(self.by_id[7].arrived)  # reinforcement
+        self.assertEqual(self.by_id[3152].days_to_arrival, 19999)
+        self.assertFalse(self.by_id[3152].arrived)  # sunk
+
     def test_montanes(self):
         x = self.by_id[MONTANES]
         self.assertEqual(self.values(MONTANES), {

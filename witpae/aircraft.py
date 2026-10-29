@@ -202,6 +202,13 @@ class Aircraft:
         month, year = DATES[name]
         return self._u8(month), self._u8(year)
 
+    def is_available(self, month, year):
+        """False when the "from" date is after the given game month and year (e.g. 12, 1941); no date counts as available."""
+        from_month, from_year = self.get_date("from")
+        if (from_month, from_year) == (0, 0):
+            return True
+        return (1900 + from_year, from_month) <= (year, month)
+
     def set_date(self, name, value):
         month, year = _check_date(name, value)
         month_pos, year_pos = DATES[name]
