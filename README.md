@@ -230,6 +230,7 @@ game-style HQ names.
 | Add equipment (Add box, count, disabled): only devices that some land unit of the same side already uses (current or TOE); written to the first empty slot with no TOE entry | verified in-game (kept after a turn), editable |
 | Fill to TOE, TOE +10%, TOE +25% (Equipment box): raises every slot that has a TOE entry to its TOE count, rounded up (never lowers a count; clears the disabled count; an empty slot gets the TOE device, a slot with an older device keeps it); slots without a TOE entry are untouched | editable; counts above TOE are kept by the game (seen with manual count edits); the fill buttons themselves not yet checked in-game |
 | HQ, target, supplies required (recalculated by the game), the device of an existing slot, TOE device and TOE count | verified, read-only |
+| Supply shortage: units whose supplies are below supplies required are listed in red, and the detail panel shows the requirement in red with "(short)", as the game's unit screen does | display only; uses the stored requirement, so it updates when supplies are edited |
 | Types HQ, INF, ART, ENG, CD verified; AA and ARM are guesses ending in `?` | read-only |
 
 Load cost and AV are computed by the game.
