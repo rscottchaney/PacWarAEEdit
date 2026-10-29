@@ -2289,12 +2289,16 @@ class EditorApp:
         self.unit_info = {}
         for name, label in (("hq", "HQ (read-only)"), ("location", "Location"),
                             ("target", "Target (set by a move)"), ("required", "Supplies required (read-only)"),
-                            ("support", "Support (approx., read-only)"),
-                            ("support_required", "Support required (approx., read-only)")):
+                            ("support", "Support (game, read-only)"),
+                            ("support_required", "Support required (game, read-only)"),
+                            ("support_estimate", "Support required (estimate)")):
             ttk.Label(right, text=label).grid(row=row, column=0, sticky="w", pady=1)
             self.unit_info[name] = tk.StringVar()
             ttk.Label(right, textvariable=self.unit_info[name]).grid(row=row, column=1, sticky="w", padx=(8, 0))
             row += 1
+        ttk.Button(right, text="Raise support to estimate", command=self.raise_unit_support).grid(
+            row=row, column=0, columnspan=2, pady=4)
+        row += 1
         self.unit_move_var, self.unit_move_box, self.unit_move_button, self.unit_move_note = self._build_move_row(
             right, row, self.move_unit)
 
@@ -4072,6 +4076,12 @@ class EditorApp:
         self._move(u, dest, self.units_edited, self.refresh_unit_list, self.show_unit)
 
     def show_unit_equipment(self, u):
+        if u is None:
+            self.unit_info["support_estimate"].set("")
+        else:
+            support, needed = u.support_estimate()
+            short = needed - support
+            self.unit_info["support_estimate"].set(f"{needed} ({short} short)" if short > 0 else str(needed))
         self.unit_equipment_tree.delete(*self.unit_equipment_tree.get_children())
         if u is not None:
             for slot, e in u.list_equipment():
@@ -4160,6 +4170,24 @@ class EditorApp:
         self.refresh_unit_list()
         self.show_unit_equipment(u)
         self.status.set(f"Filled {changed} slot{'s' if changed != 1 else ''} of {u.name} to {level} (not yet saved)")
+
+    def raise_unit_support(self):
+        if self.unit_current is None:
+            return
+        u = self.units[self.unit_current]
+        try:
+            added = u.raise_support_to_estimate()
+        except ValueError as exc:
+            messagebox.showerror("Cannot raise support", str(exc))
+            return
+        if not added:
+            self.status.set(f"{u.name} already has enough support (estimate)")
+            return
+        self.units_edited.add(u.id)
+        self.dirty = True
+        self.refresh_unit_list()
+        self.show_unit_equipment(u)
+        self.status.set(f"Added {added} support squad{'s' if added != 1 else ''} to {u.name} (not yet saved)")
 
     def add_unit_equipment(self):
         if self.unit_current is None:

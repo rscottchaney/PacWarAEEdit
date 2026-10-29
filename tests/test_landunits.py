@@ -160,6 +160,85 @@ class LandUnitTests(unittest.TestCase):
         u.fill_to_toe(25)
         self.assertEqual(self.slot(2, 0)[1], landunits.MAX_COUNT)
 
+    def full_slot(self, unit_id, k):
+        u = self.units[unit_id]
+        return tuple(u._i16(off + 2 * k) for off in (landunits.DEVICE_OFFSET, landunits.COUNT_OFFSET,
+                                                     landunits.DISABLED_OFFSET, landunits.TOE_DEVICE_OFFSET,
+                                                     landunits.TOE_COUNT_OFFSET))
+
+    def test_support_estimate(self):
+        self.assertEqual(self.units[2038].support_estimate(), (24, 30))  # only Support
+        self.assertEqual(self.units[2081].support_estimate(), (4, 6))  # only Motorized Support
+        self.assertEqual(self.units[2063].support_estimate(), (475, 597))  # both
+        self.assertEqual(self.units[6684].support_estimate(), (0, 121))  # neither
+        self.assertEqual(self.units[56].support_estimate(), (95, 19))  # disabled counts are included
+
+    def test_support_estimate_excludes_aviation_and_naval_support(self):
+        u = self.units[2220]  # 251 x16, Support x14, Aviation Support x0
+        self.assertEqual(u.support_estimate(), (14, 16))
+        for device in (254, 255):
+            struct.pack_into("<h", u._data, u._offset + landunits.DEVICE_OFFSET + 4, device)
+            struct.pack_into("<h", u._data, u._offset + landunits.COUNT_OFFSET + 4, 9)
+            self.assertEqual(u.support_estimate(), (14, 16))
+
+    def test_raise_support_tops_up_support_slot(self):
+        before = self.record_bytes(2038)
+        self.assertEqual(self.units[2038].raise_support_to_estimate(), 6)
+        self.assertEqual(self.full_slot(2038, 3), (252, 30, 0, 0, 0))
+        self.assertEqual(self.units[2038].support_estimate(), (30, 30))
+        changed = [i for i, (a, b) in enumerate(zip(before, self.record_bytes(2038))) if a != b]
+        self.assertEqual(changed, [landunits.COUNT_OFFSET + 6])
+
+    def test_raise_support_prefers_support_over_motorized(self):
+        self.assertEqual(self.units[2063].raise_support_to_estimate(), 122)
+        self.assertEqual(self.full_slot(2063, 14)[1], 552)
+        self.assertEqual(self.full_slot(2063, 13)[1], 45)
+
+    def test_raise_support_uses_motorized_when_only_that(self):
+        self.assertEqual(self.units[2081].raise_support_to_estimate(), 2)
+        self.assertEqual(self.full_slot(2081, 2), (253, 6, 0, 0, 0))
+        self.assertEqual(self.units[2081].equipment_slots(), [0, 1, 2])
+
+    def test_raise_support_adds_support_to_empty_slot_when_neither(self):
+        self.assertEqual(self.units[6684].raise_support_to_estimate(), 121)
+        self.assertEqual(self.full_slot(6684, 4), (252, 121, 0, 0, 0))
+        self.assertEqual(self.units[6684].equipment_slots(), [0, 1, 2, 3, 4])
+
+    def test_raise_support_without_empty_slot_raises(self):
+        u = self.units[7967]  # 20 slots, Motorized Support only
+        for k in range(20):
+            if self.full_slot(7967, k)[0] == 253:
+                struct.pack_into("<h", u._data, u._offset + landunits.DEVICE_OFFSET + 2 * k, 1002)
+                struct.pack_into("<h", u._data, u._offset + landunits.TOE_DEVICE_OFFSET + 2 * k, 1002)
+        before = self.record_bytes(7967)
+        with self.assertRaises(ValueError):
+            u.raise_support_to_estimate()
+        self.assertEqual(self.record_bytes(7967), before)
+
+    def test_raise_support_already_enough_changes_nothing(self):
+        for unit_id in (56, 6, 2220):
+            before = self.record_bytes(unit_id)
+            if unit_id == 2220:
+                self.units[unit_id].raise_support_to_estimate()
+                before = self.record_bytes(unit_id)
+            with self.subTest(unit=unit_id):
+                self.assertEqual(self.units[unit_id].raise_support_to_estimate(), 0)
+                self.assertEqual(self.record_bytes(unit_id), before)
+
+    def test_raise_support_caps_at_max_count(self):
+        u = self.units[2038]
+        struct.pack_into("<h", u._data, u._offset + landunits.COUNT_OFFSET + 6, landunits.MAX_COUNT - 2)
+        struct.pack_into("<h", u._data, u._offset + landunits.COUNT_OFFSET, landunits.MAX_COUNT)
+        self.assertEqual(u.raise_support_to_estimate(), 2)
+        self.assertEqual(self.full_slot(2038, 3)[1], landunits.MAX_COUNT)
+
+    def test_raise_support_is_idempotent(self):
+        u = self.units[2063]
+        self.assertGreater(u.raise_support_to_estimate(), 0)
+        after = self.record_bytes(2063)
+        self.assertEqual(u.raise_support_to_estimate(), 0)
+        self.assertEqual(self.record_bytes(2063), after)
+
     def test_fill_to_toe_rejects_bad_percent(self):
         u = self.units[2]
         before = self.record_bytes(2)
