@@ -913,6 +913,23 @@ class GuiSmokeTests(unittest.TestCase):
                 app.raise_unit_support()
         self.assertTrue(err.called)
 
+    def test_land_unit_supplies_short_highlight(self):
+        import witpae_editor
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        self.assertIn("short", app.unit_tree.item("3447", "tags"))  # 271 of 277
+        self.assertNotIn("short", app.unit_tree.item("5639", "tags"))  # 99 of 89
+        app.unit_tree.selection_set("3447")
+        self.root.update()
+        self.assertEqual(app.unit_info["required"].get(), "277 (short)")
+        self.assertEqual(str(app.unit_info_labels["required"].cget("foreground")), "red")
+        app.unit_vars["supplies"].set("300")
+        app.apply_unit()
+        self.root.update()
+        self.assertEqual(app.unit_tree.item("3447", "tags"), ("edited",))
+        self.assertEqual(app.unit_info["required"].get(), "277")
+        self.assertEqual(str(app.unit_info_labels["required"].cget("foreground")), "")
+
     def test_add_land_unit_equipment(self):
         from unittest import mock
         import witpae_editor

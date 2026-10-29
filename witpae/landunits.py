@@ -147,6 +147,11 @@ class LandUnit(Record):
         return self._location_name(self.target_id)
 
     @property
+    def supplies_short(self):
+        """True when the unit holds fewer supplies than the game's stored requirement (red in game)."""
+        return self.get("supplies") < self.supplies_required
+
+    @property
     def supplies_required(self):
         return struct.unpack_from("<i", self._data, self._offset + SUPPLIES_REQUIRED_OFFSET)[0]
 

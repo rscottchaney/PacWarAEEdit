@@ -37,6 +37,7 @@ class LandUnitTests(unittest.TestCase):
         self.assertEqual((u.hq_id, u.hq_name, u.location_name), (100, "West Coast", "Seattle"))
         self.assertEqual([u.get(n) for n in ("experience", "morale", "fatigue", "supplies")], [50, 52, 4, 99])
         self.assertEqual(u.supplies_required, 89)
+        self.assertFalse(u.supplies_short)
         self.assertEqual(u.target_id, 569)
         eq = dict(u.list_equipment())
         self.assertEqual(sorted(eq), [0, 1, 2, 3, 4, 6])
@@ -47,6 +48,13 @@ class LandUnitTests(unittest.TestCase):
                           ("81mm M1 Mortar", 6)])
         self.assertEqual(eq[6], {"device": "Support", "count": 38, "disabled": 7,
                                  "toe_device": "Support", "toe_count": 45})
+
+    def test_supplies_short(self):
+        u = self.units[3447]
+        self.assertEqual((u.get("supplies"), u.supplies_required), (271, 277))
+        self.assertTrue(u.supplies_short)
+        u.set("supplies", 277)
+        self.assertFalse(u.supplies_short)  # equal to the requirement is not short
 
     def test_coast_defence_with_upgrade_target(self):
         u = self.units[5635]

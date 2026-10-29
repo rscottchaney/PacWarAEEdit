@@ -2267,6 +2267,8 @@ class EditorApp:
             self.unit_tree.heading(cid, text=heading, command=lambda c=cid: self.sort_units_by(c))
             self.unit_tree.column(cid, width=width, anchor="w" if cid in ("name", "type", "hq", "location") else "e")
         self.unit_tree.tag_configure("edited", background="#fff2b3")
+        # Red text like the game's unit screen when supplies are below supplies required.
+        self.unit_tree.tag_configure("short", foreground="red")
         scroll = ttk.Scrollbar(left, orient="vertical", command=self.unit_tree.yview)
         self.unit_tree.configure(yscrollcommand=scroll.set)
         scroll.pack(side="right", fill="y")
@@ -2287,6 +2289,7 @@ class EditorApp:
         ttk.Button(right, text="Apply", command=self.apply_unit).grid(row=row, column=0, columnspan=2, pady=6)
         row += 1
         self.unit_info = {}
+        self.unit_info_labels = {}
         for name, label in (("hq", "HQ (read-only)"), ("location", "Location"),
                             ("target", "Target (set by a move)"), ("required", "Supplies required (read-only)"),
                             ("support", "Support (game, read-only)"),
@@ -2294,7 +2297,8 @@ class EditorApp:
                             ("support_estimate", "Support required (estimate)")):
             ttk.Label(right, text=label).grid(row=row, column=0, sticky="w", pady=1)
             self.unit_info[name] = tk.StringVar()
-            ttk.Label(right, textvariable=self.unit_info[name]).grid(row=row, column=1, sticky="w", padx=(8, 0))
+            self.unit_info_labels[name] = ttk.Label(right, textvariable=self.unit_info[name])
+            self.unit_info_labels[name].grid(row=row, column=1, sticky="w", padx=(8, 0))
             row += 1
         ttk.Button(right, text="Raise support to estimate", command=self.raise_unit_support).grid(
             row=row, column=0, columnspan=2, pady=4)
@@ -4024,7 +4028,7 @@ class EditorApp:
                 if needle in u.display_name.lower() and (side == "All" or u.side == side)]
         rows.sort(key=self._unit_sort_key, reverse=self.unit_sort_reverse)
         for u in rows:
-            tags = ("edited",) if u.id in self.units_edited else ()
+            tags = (("edited",) if u.id in self.units_edited else ()) + (("short",) if u.supplies_short else ())
             self.unit_tree.insert("", "end", iid=str(u.id), values=[get(u) for *_, get in UNIT_COLUMNS],
                                   tags=tags)
         if selected is not None and self.unit_tree.exists(str(selected)):
@@ -4058,7 +4062,8 @@ class EditorApp:
         self.unit_info["hq"].set(f"{u.hq_id} {u.hq_name}")
         self.unit_info["location"].set(f"{u.location_id} {u.location_name}")
         self.unit_info["target"].set(f"{u.target_id} {u.target_name}")
-        self.unit_info["required"].set(str(u.supplies_required))
+        self.unit_info["required"].set(f"{u.supplies_required} (short)" if u.supplies_short else str(u.supplies_required))
+        self.unit_info_labels["required"].configure(foreground="red" if u.supplies_short else "")
         self.unit_info["support"].set(str(u.support))
         self.unit_info["support_required"].set(str(u.support_required))
         self._show_move(u, self.unit_move_var, self.unit_move_box, self.unit_move_button, self.unit_move_note)
