@@ -2442,7 +2442,8 @@ class GuiSmokeTests(unittest.TestCase):
                 app._map_overlay_changed()
                 counts[overlay] = len(app.map_canvas.find_withtag("overlay"))
                 self.assertTrue(app.map_info.get().startswith(
-                    {"Locations": "1052", "Search arcs": "173", "Task forces": "236", "Combat": "1"}[overlay]
+                    {"Locations": "1052", "Search arcs": "173", "Task forces": "236",
+                     "Support": "664 hexes with land units (359 short", "Combat": "1"}[overlay]
                 ), (overlay, app.map_info.get()))
             self.assertTrue(all(counts.values()), counts)
             self.assertEqual(str(app.map_side_box.cget("state")), "disabled")  # Side does not apply to combat
@@ -2478,6 +2479,32 @@ class GuiSmokeTests(unittest.TestCase):
             for expected in ("Places:", "Pearl Harbor (base, Allied)", "Air groups searching:", "Combat:", "ASW:"):
                 self.assertIn(expected, text)
             self.assertEqual(len(app.map_canvas.find_withtag("pick")), 1)
+            for expected in ("Land units:", "Support:", "Allied: support 1985, needed 1532 (453 spare)"):
+                self.assertIn(expected, text)
+            # Edits in the Land Units tab show in the support overlay and the click report.
+            app.map_overlay_var.set("Support")
+            app._map_overlay_changed()
+            self.assertEqual(len(app.map_canvas.find_withtag("overlay")), 664)
+            short = next(m for m in mapview.support_marks(app.save) if m.support < m.needed)
+            unit = next(u for u in short.units if u.support < u.needed)
+            app.show_map_hex(short.x, short.y)
+            before = app.map_detail.get("1.0", "end")
+            app.notebook.select(app.units_tab)  # the map is not showing, so it is redrawn when shown
+            self.root.update()
+            app.unit_tree.selection_set(str(unit.id))
+            self.root.update()
+            app.raise_unit_support()
+            self.assertEqual(app.units_edited, {unit.id})
+            self.assertTrue(app.map_stale)
+            app.notebook.select(app.map_tab)
+            self.root.update()
+            self.assertFalse(app.map_stale)
+            app.show_map_hex(short.x, short.y)
+            self.assertNotEqual(app.map_detail.get("1.0", "end"), before)
+            after = next(m for m in mapview.support_marks(app.save)
+                         if (m.side, m.x, m.y) == (short.side, short.x, short.y))
+            self.assertGreater(after.support, short.support)
+            self.assertIn(f"support {after.support}, needed {after.needed}", app.map_detail.get("1.0", "end"))
             app.show_map_hex(0, 0)
             self.assertIn("Nothing here", app.map_detail.get("1.0", "end"))
             app.map_find_var.set("no such place")

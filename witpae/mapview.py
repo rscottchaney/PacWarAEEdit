@@ -18,12 +18,18 @@ degrees, 0 = north, clockwise from start to end. UNVERIFIED: a start equal to th
 tracker's "Random" (the others being "Defined"); only one arc pair is known, so it is used for both Naval and ASW;
 the patrol range may not be capped exactly like this in the game. Combat actions come from the combat reports and are
 not tied to a side, so the Side choice does not apply to them. Colours, scales and the drawing are in the editor.
+
+Support uses the editor's estimate from current equipment, the same one the Land Units tab shows: one support squad
+per non-support element; Support and Motorized Support supply it; Aviation and Naval Support neither supply nor need
+it. That estimate reflects unsaved edits, but it is not the game's stored per-unit value and matches it on most
+units, not all. Units are placed by their own record hex; those at (0,0) are left out.
 """
 
+import math
 import os
 from collections import namedtuple
 
-from . import aircraft, airgroups, bases, planeart, regions, shiprecords, taskforces
+from . import aircraft, airgroups, bases, landunits, planeart, regions, shiprecords, taskforces
 
 COLUMNS, ROWS = 7, 6
 STYLES = {"Hexes": "WPEH", "No hexes": "WPEN"}
@@ -36,6 +42,8 @@ LocationMark = namedtuple("LocationMark", "id name side x y kind")
 SearchArc = namedtuple("SearchArc", "group_id name side x y radius start end full kind")
 TaskForceMark = namedtuple("TaskForceMark", "id name side x y mission ships dest_id dest_x dest_y")
 CombatMark = namedtuple("CombatMark", "date kind phase place x y title action")
+UnitSupport = namedtuple("UnitSupport", "id name side x y support needed")
+SupportMark = namedtuple("SupportMark", "side x y support needed units")
 
 
 # ---- hexes ---------------------------------------------------------------
@@ -232,13 +240,52 @@ def combat_marks(actions, kind="All"):
             for a in actions if a.x is not None and a.y is not None and kind in ("All", a.kind)]
 
 
-INDEX_CATEGORIES = ("Places", "Task forces", "Air groups searching", "Combat")
+def unit_support(save, side="All"):
+    """UnitSupports of the arrived land units that are on the map, by the unit's own record hex.
+
+    Not the location's hex: units on the march and field units at location 0 are really in their hex.
+    """
+    out = []
+    for u in landunits.list_land_units(save):
+        if not u.arrived or not _side_ok(u.side, side):
+            continue
+        x, y = u._i16(bases.X_OFFSET), u._i16(bases.Y_OFFSET)
+        if (x, y) == (0, 0):  # not on the map
+            continue
+        support, needed = u.support_estimate()
+        out.append(UnitSupport(u.id, u.display_name, u.side, x, y, support, needed))
+    return out
+
+
+def support_marks(save, side="All"):
+    """SupportMarks per (side, hex) with land units, sorted by x, y, side.
+
+    A hex whose units neither need nor give support is left out.
+    """
+    groups = {}
+    for u in unit_support(save, side):
+        groups.setdefault((u.side, u.x, u.y), []).append(u)
+    out = []
+    for (s, x, y), units in sorted(groups.items(), key=lambda kv: (kv[0][1], kv[0][2], kv[0][0])):
+        support, needed = sum(u.support for u in units), sum(u.needed for u in units)
+        if support or needed:
+            out.append(SupportMark(s, x, y, support, needed, units))
+    return out
+
+
+def support_bar(diff):
+    """Bar length in hexes for support minus needed, quadratic as in WitpStaff: 15 = 1/4, 60 = 1/2, 230 = 1, max 1.5."""
+    return min(1.5, math.sqrt(abs(diff) / 230)) if diff else 0
+
+
+INDEX_CATEGORIES = ("Places", "Land units", "Support", "Task forces", "Air groups searching", "Combat")
 
 
 def hex_index(save, actions):
     """{(x, y): {category: [mark, ...]}} of everything the overlays can show, for the click report.
 
-    Places are bases and towns, Air groups searching are SearchArcs of both kinds (a group on both patrols is listed
+    Places are bases and towns, Land units and Support are the arrived land units on the map and the totals of their
+    hexes (both sides), Air groups searching are SearchArcs of both kinds (a group on both patrols is listed
     twice), Combat is every action with a hex.
     """
     index = {}
@@ -248,6 +295,8 @@ def hex_index(save, actions):
             index.setdefault((m.x, m.y), {}).setdefault(category, []).append(m)
 
     add("Places", location_marks(save, include_towns=True))
+    add("Land units", unit_support(save))
+    add("Support", support_marks(save))
     add("Task forces", task_force_marks(save))
     add("Air groups searching", search_arcs(save, "Naval") + search_arcs(save, "ASW"))
     add("Combat", combat_marks(actions))
