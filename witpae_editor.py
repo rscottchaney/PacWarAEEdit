@@ -741,13 +741,15 @@ HISTORY_BASE_COLUMNS = ("date", "turn", "side", "value", "change")
 HISTORY_AIRCRAFT_COLUMNS = ("date", "turn", "value", "change")
 
 MAP_SCALES = {"12%": 8, "25%": 4, "50%": 2, "100%": 1}  # label -> every step-th pixel of the art
-MAP_OVERLAYS = ("Locations", "Search arcs", "Task forces", "Combat")
+MAP_OVERLAYS = ("Locations", "Search arcs", "Task forces", "Support", "Combat")
 MAP_SIDES = ("All", "Allied", "Japanese")
 MAP_TOWNS = ("Bases", "Bases and towns")
 MAP_ARC_KINDS = ("Naval", "ASW")
 MAP_ARC_MODES = ("All", "Defined", "Random")
 MAP_OTHER_COLOR = "#777777"
 MAP_COMBAT_COLOR = "#e08a00"
+MAP_SUPPORT_OK = "#2e9e44"
+MAP_SUPPORT_SHORT = "#d43c3c"
 MAP_PLAIN_COLOR = "#c9d6e3"
 MAP_CLICK_PIXELS = 3  # a press that moves more than this is a drag of the map, not a click
 
@@ -3814,6 +3816,7 @@ class EditorApp:
         if changed:
             edited.add(record.id)
             self.dirty = True
+            self._map_data_changed()
         refresh()
         show(record)
 
@@ -4189,6 +4192,7 @@ class EditorApp:
         if (before["count"], before["disabled"]) != (count, disabled):
             self.units_edited.add(u.id)
             self.dirty = True
+            self._map_data_changed()
         self.refresh_unit_list()
         self.show_unit_equipment(u)
 
@@ -4203,6 +4207,7 @@ class EditorApp:
             return
         self.units_edited.add(u.id)
         self.dirty = True
+        self._map_data_changed()
         self.refresh_unit_list()
         self.show_unit_equipment(u)
         self.status.set(f"Filled {changed} slot{'s' if changed != 1 else ''} of {u.name} to {level} (not yet saved)")
@@ -4221,6 +4226,7 @@ class EditorApp:
             return
         self.units_edited.add(u.id)
         self.dirty = True
+        self._map_data_changed()
         self.refresh_unit_list()
         self.show_unit_equipment(u)
         self.status.set(f"Added {added} support squad{'s' if added != 1 else ''} to {u.name} (not yet saved)")
@@ -4247,6 +4253,7 @@ class EditorApp:
             return
         self.units_edited.add(u.id)
         self.dirty = True
+        self._map_data_changed()
         self.unit_add_vars["count"].set("")
         self.unit_add_vars["disabled"].set("0")
         self.unit_add_device_var.set("")
@@ -5571,6 +5578,7 @@ class EditorApp:
         self.map_arc_mode_var = tk.StringVar(value=MAP_ARC_MODES[0])
         self._report_combo(arcs, "Arc:", self.map_arc_mode_var, MAP_ARC_MODES, self.refresh_map, 8)
         self.map_filter_frames["Task forces"] = ttk.Frame(self.map_filters)
+        self.map_filter_frames["Support"] = ttk.Frame(self.map_filters)
         cmb = self.map_filter_frames["Combat"] = ttk.Frame(self.map_filters)
         self.map_combat_kind_var = tk.StringVar(value=INTEL_ALL)
         self._report_combo(cmb, "Kind:", self.map_combat_kind_var, [INTEL_ALL, *combat.KINDS], self.refresh_map, 17)
@@ -5640,6 +5648,15 @@ class EditorApp:
         self.map_stale = True
         self.map_canvas.delete("overlay", "pick")
         self._set_map_detail("")
+        if self._map_visible():
+            self.refresh_map()
+
+    def _map_data_changed(self):
+        """Drop the support overlay and the click index after an edit that moves or re-equips units."""
+        self.map_index = None
+        for key in [k for k in self.map_cache if k[0] == "support"]:
+            del self.map_cache[key]
+        self.map_stale = True
         if self._map_visible():
             self.refresh_map()
 
@@ -5755,6 +5772,18 @@ class EditorApp:
                     c.create_line(x, y, dx, dy, fill=color, dash=(3, 3), arrow="last", tags="overlay")
                 c.create_rectangle(x - 3, y - 3, x + 3, y + 3, fill=color, outline="black", tags="overlay")
             summary = f"{len(tfs)} task forces ({sum(t.dest_x is not None for t in tfs)} with a destination)"
+        elif overlay == "Support":
+            marks = self._map_data(("support", side), lambda: mapview.support_marks(self.save, side))
+            width = max(3, mapview.HEX_W * scale / 4)
+            for m in marks:
+                x, y = point(m.x, m.y)
+                length = max(2, mapview.support_bar(m.support - m.needed) * mapview.HEX_H * scale)
+                x += {"Allied": -width, "Japanese": width}.get(m.side, 0)  # two sides in one hex stay apart
+                c.create_rectangle(x - width / 2, y - length, x + width / 2, y,
+                                   fill=MAP_SUPPORT_OK if m.support >= m.needed else MAP_SUPPORT_SHORT,
+                                   outline="black", tags="overlay")
+            short = sum(m.support < m.needed for m in marks)
+            summary = f"{len(marks)} hexes with land units ({short} short of support, estimate)"
         else:
             kind = self.map_combat_kind_var.get()
             turns = intel.TURN_CHOICES[self.map_combat_turns_var.get()]
@@ -5822,10 +5851,17 @@ class EditorApp:
         if category == "Air groups searching":
             arc = "full circle" if m.full else f"arc {m.start} to {m.end} deg"
             return f"{m.name} ({m.side}, {m.kind}, range {m.radius}, {arc})"
+        if category == "Land units":
+            return f"{m.name} ({m.side}, support {m.support}, needs {m.needed})"
+        if category == "Support":
+            diff = m.support - m.needed
+            gap = f"{abs(diff)} {'short' if diff < 0 else 'spare'}" if diff else "enough"
+            return f"{m.side}: support {m.support}, needed {m.needed} ({gap})"
         return f"{chart.date_label(m.date)} {m.kind}: {m.title}"
 
     def show_map_hex(self, x, y):
-        """Mark hex (x, y) and list what is in it: places, task forces, air groups searching from it, combat."""
+        """Mark hex (x, y) and list what is in it: places, land units, support, task forces, air groups searching from
+        it, combat."""
         c = self.map_canvas
         scale = 1 / self._map_step()
         px, py = mapview.hex_to_pixel(x, y)

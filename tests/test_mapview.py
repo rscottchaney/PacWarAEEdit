@@ -3,7 +3,7 @@ import struct
 import tempfile
 import unittest
 
-from witpae import airgroups, bases, combat, mapview
+from witpae import airgroups, bases, combat, landunits, mapview
 from witpae.container import SaveFile
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
@@ -252,6 +252,55 @@ class OverlayTests(unittest.TestCase):
         self.assertEqual([m.kind for m in here["Combat"]], ["ASW"])
         self.assertTrue(here["Air groups searching"])
         self.assertTrue(set(here) <= set(mapview.INDEX_CATEGORIES))
+        self.assertIn("Land units", here)
+        self.assertIn("Support", here)
+        self.assertEqual(mapview.INDEX_CATEGORIES[:4], ("Places", "Land units", "Support", "Task forces"))
+        self.assertEqual({m.side for m in here["Support"]}, {"Allied"})
+
+    def test_support_bar(self):
+        self.assertEqual(mapview.support_bar(0), 0)
+        self.assertAlmostEqual(mapview.support_bar(15), 0.2554, places=3)  # 1/4 hex
+        self.assertAlmostEqual(mapview.support_bar(60), 0.5108, places=3)  # 1/2 hex
+        self.assertAlmostEqual(mapview.support_bar(230), 1.0)
+        self.assertAlmostEqual(mapview.support_bar(500), 1.4745, places=3)  # about 1.5 hexes
+        self.assertEqual(mapview.support_bar(10000), 1.5)
+        self.assertEqual(mapview.support_bar(-230), mapview.support_bar(230))
+        self.assertEqual(mapview.support_bar(-10000), 1.5)
+
+    def test_unit_support(self):
+        units = mapview.unit_support(self.save)
+        self.assertTrue(units)
+        self.assertTrue(all((u.x, u.y) != (0, 0) for u in units))
+        arrived = {u.id for u in landunits.list_land_units(self.save) if u.arrived}
+        self.assertLessEqual({u.id for u in units}, arrived)
+        self.assertEqual(len(units), 1939)  # of 2202 arrived units, 263 are at (0,0)
+        for side in ("Allied", "Japanese"):
+            self.assertEqual({u.side for u in mapview.unit_support(self.save, side)}, {side})
+        by_side = [mapview.unit_support(self.save, side) for side in ("Allied", "Japanese")]
+        self.assertEqual(sum(map(len, by_side)), len(units))
+        # A field unit at location 0 still counts, in the hex of its own record.
+        div = next(u for u in units if u.name == "37th Div" and u.side == "Japanese")
+        self.assertEqual((div.x, div.y, div.support, div.needed), (90, 40, 375, 500))
+        record = next(u for u in landunits.list_land_units(self.save) if u.id == div.id)
+        self.assertEqual(record.location_id, 0)
+
+    def test_support_marks(self):
+        marks = mapview.support_marks(self.save)
+        self.assertEqual(len(marks), 664)
+        self.assertEqual(sum(m.support < m.needed for m in marks), 359)
+        by_key = {(m.side, m.x, m.y): m for m in marks}
+        pearl = by_key[("Allied", 180, 107)]
+        self.assertEqual((pearl.support, pearl.needed, len(pearl.units)), (1985, 1532, 21))
+        japan = by_key[("Japanese", 92, 40)]
+        self.assertEqual((japan.support, japan.needed, len(japan.units)), (1864, 2438, 11))
+        self.assertEqual(marks, sorted(marks, key=lambda m: (m.x, m.y, m.side)))
+        self.assertTrue(all(m.support or m.needed for m in marks))
+        for m in marks:
+            self.assertEqual((m.support, m.needed), (sum(u.support for u in m.units), sum(u.needed for u in m.units)))
+        allied = mapview.support_marks(self.save, "Allied")
+        self.assertTrue(allied)
+        self.assertEqual({m.side for m in allied}, {"Allied"})
+        self.assertEqual({m.side for m in mapview.support_marks(self.save, "Japanese")}, {"Japanese"})
 
 
 if __name__ == "__main__":
