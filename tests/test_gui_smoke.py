@@ -2084,6 +2084,79 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertEqual(app.reports_notebook.select(), str(app.engine_frame))
         self.assertEqual(app.engine_tree.selection(), (str(engine.target_id),))
 
+    def test_inconsistencies_report(self):
+        import witpae_editor
+        from witpae import inconsistencies as inc
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        app.notebook.select(app.reports_tab)
+        self.root.update()
+        tabs = [app.reports_notebook.tab(t, "text") for t in app.reports_notebook.tabs()]
+        self.assertEqual(tabs.index("Inconsistencies"), tabs.index("Alerts") + 1)
+        tree = app.incon_tree
+        found = [i for i in app.incon_all if not i.future]
+        self.assertEqual(len(tree.get_children()), len(found))
+        self.assertEqual(app.incon_count.get(), f"{len(found)} inconsistencies")
+        # Check and side filters.
+        app.incon_check_var.set(inc.CHECK_HOME)
+        app.refresh_incon_list()
+        self.assertEqual(len(tree.get_children()), 1)
+        self.assertEqual(app.incon_count.get(), "1 inconsistency")
+        app.incon_side_var.set("Allied")
+        app.refresh_incon_list()
+        self.assertEqual(len(tree.get_children()), 0)
+        app.incon_check_var.set("All")
+        app.incon_side_var.set("All")
+        # The not-yet-arrived checkbox adds the future issues.
+        future = inc.Issue(inc.CHECK_SIDE, "Allied", "land unit", 100, "West Coast", "x", True)
+        app.incon_all = app.incon_all + [future]
+        app.refresh_incon_list()
+        self.assertEqual(len(tree.get_children()), len(found))
+        app.incon_future_var.set(True)
+        app.refresh_incon_list()
+        self.assertEqual(len(tree.get_children()), len(found) + 1)
+        app.incon_future_var.set(False)
+        # Header sort, then reversed.
+        app.sort_incon_by("subject")
+        names = [tree.set(i, "subject").lower() for i in tree.get_children()]
+        self.assertEqual(names, sorted(names))
+        app.sort_incon_by("subject")
+        names = [tree.set(i, "subject").lower() for i in tree.get_children()]
+        self.assertEqual(names, sorted(names, reverse=True))
+
+        def open_issue(kind, subject_id):
+            app.notebook.select(app.reports_tab)
+            app.incon_all = [inc.Issue(inc.CHECK_SIDE, "Allied", kind, subject_id, "x", "y", False)]
+            app.incon_sort_col = None
+            app.refresh_incon_list()
+            tree.selection_set(tree.get_children()[0])
+            app.open_incon()
+            self.root.update()
+
+        app.search_var.set("zzz")
+        open_issue("place", 584)
+        self.assertEqual(app.notebook.select(), str(app.bases_tab))
+        self.assertEqual(app.tree.selection(), ("584",))
+        app.unit_search_var.set("zzz")
+        open_issue("land unit", 100)
+        self.assertEqual(app.notebook.select(), str(app.units_tab))
+        self.assertEqual(app.unit_tree.selection(), ("100",))
+        app.shiprec_search_var.set("zzz")
+        open_issue("ship", 3002)
+        self.assertEqual(app.notebook.select(), str(app.shiprec_tab))
+        self.assertEqual(app.shiprec_tree.selection(), ("3002",))
+        open_issue("task force", 14402)
+        self.assertEqual(app.notebook.select(), str(app.tf_tab))
+        self.assertEqual(app.tf_tree.selection(), ("14402",))
+        app.group_search_var.set("zzz")
+        open_issue("air group", 1)
+        self.assertEqual(app.notebook.select(), str(app.groups_tab))
+        self.assertEqual(app.group_tree.selection(), ("1",))
+        app.ldr_search_var.set("zzz")
+        open_issue("leader", 6652)
+        self.assertEqual(app.notebook.select(), str(app.leaders_tab))
+        self.assertEqual(app.ldr_tree.selection(), ("6652",))
+
     def test_alerts_report_lists_skipped_checks(self):
         import witpae_editor
         from witpae import minefields
