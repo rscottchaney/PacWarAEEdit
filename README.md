@@ -401,6 +401,31 @@ Device types (WitPTracker's names): 0 Aircraft Cannon, 1 GA Rocket, 2 PGM, 3 GP 
 23 Squad, 24 Engineer, 25 Vehicle, 26 Resource, 27 Engine Factory. None of this is checked in the game yet. The
 code is in `witpae/lcuproduction.py`.
 
+### LCU targets
+
+The "LCU targets" sub-tab (after LCU production) is read-only and follows the idea of WitpStaff's LCU targets
+tab: which land units are moving to, or preparing for, each base, and where they are now.
+
+- Controls: Side (All default, Allied or Japanese; the units' side), Targets (All, Enemy bases, Own bases) and
+  Status (All, Preparing, On the march, Aboard ship). The upper table has one row per target (owner, units,
+  how many are preparing, marching or aboard, how many are fully prepared at 100 %, and the distance in hexes
+  of the nearest unit); enemy targets come first, then the most units. The lower table lists the units of the
+  selected target (all targets when none is selected) with status, location, prep % and distance. Double-click a
+  unit to jump to it in the Land Units tab (its filters are cleared if they hide it) or a target to open the place.
+  A unit loaded on several ships is stored as one record per ship (the original id plus fragments with ids 10000
+  and up); the report shows it as one row with a Parts count and counts it once per target.
+- Listed are arrived land units whose target is not 0 and not their own location (a unit whose target is its own
+  location is preparing to defend it). A target is any location record with a name, so named minor places count.
+- Status: Aboard ship when loaded on a transport, else On the march when the unit's hex is not its location's
+  hex, else Preparing. An embarked unit is shown "aboard <ship>" and measured from the ship's hex (its task
+  force, else its port). Distance is a straight line over the hexes.
+
+Save offsets (land unit record, section 0x13): target i16 at 102, prep percent u8 at 104 (0-100), aboard a ship
+u8 at 1115 (1 = aboard) and the ship id u16 at 666. These were read from saves and are not yet checked on a game
+screen: prep rose 1-2 a day on stationary units, stayed frozen while a unit was aboard a ship and read 100 when
+complete (saves of 11-13 Dec 41), and every embarked unit of one save pointed to a real transport. The code is in
+`witpae/lcutargets.py`.
+
 ### Industry reports
 
 Three more sub-tabs cover factories, using the Region column and filter described
