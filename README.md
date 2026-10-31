@@ -281,7 +281,7 @@ edits go through `airgroups.Leader`.
 
 ## Reports
 
-The Reports tab holds fifteen reports; only the bulk switch buttons of Air production edit the save. It
+The Reports tab holds sixteen reports; only the bulk switch buttons of Air production edit the save. It
 shows the game date (section 0x01: day at 42, month at 44, two-digit year at 46,
 all i16) and refreshes whenever the tab is shown, so edits made in the Bases tab
 are reflected. Double-click a row to jump to that base (Bases tab) or ship (Ships
@@ -290,6 +290,7 @@ tab); the target tab's search and side filter are cleared if they hide the row.
 | Report | What it shows | Status |
 |---|---|---|
 | Alerts | The first sub-tab: the actionable problems of the other reports in one list, see below | built from the other reports, so it has no offsets of its own |
+| Inconsistencies | The second sub-tab: data in the save that contradicts itself, see below | ported from WitpStaff, built from existing readers, so it has no offsets of its own |
 | Spoilage | Bases and towns whose supply or fuel exceeds the spoilage limit, largest total excess first (columns can be re-sorted; Side filter; Region column). With s = port size + airfield size, the limit is supply 5000 + 3000 x s squared and fuel 1000 + 2000 x s squared (game manual 15.7); a base of size 1 gets 8000 / 3000, matching the base screen. "Over" is shown as `-` when not over | formula verified for size 1 (Bassein); the rule that there is no limit at s of 10 or more is from the manual and unverified (a patch note suggests the limit is shown below 9) |
 | Ship upgrades | One row per arrived ship whose class has a further upgrade (ships not yet arrived are left out, because reinforcements arrive with the upgrades of their arrival date): current class, target class, type change (for example DD -> DE), the date the upgrade becomes available, months until then relative to the game date, and the Location. Search (ship or class name), Side and "Due within" (default 3 months) filters | link (ship class u16 at 256 = next class id, available on the target class's date) matches the game's "Upgrade on" dates for Maryland and Kanawha; chains end when the id is 0, the class itself or an unused record |
 | Yard? column (target class i16 at 260) | the shipyard size shown for the upgrade target | unverified |
@@ -327,6 +328,36 @@ tab), aircraft model (Aircraft tab), engine (Engines report) or minefields (Mine
 - Engines: a Japanese engine the factories build in fewer numbers than the aircraft factories use (net below 0 in the
   Engines report).
 - The code is in `witpae/alerts.py`.
+
+### Inconsistencies
+
+The "Inconsistencies" sub-tab (after Alerts) is read-only. It ports the Inconsistencies tab of WitpStaff (manual 4.11),
+which lists data in the save that contradicts itself, into a sortable table (Check, Side, Subject, Detail). The top bar
+has a Check filter, a Side filter, an "Include not yet arrived" checkbox (off by default: land units, air groups and
+ships that have not arrived, and leaders with a delay) and a count. Double-click a row to open the leader (Leaders
+tab), air group, ship, task force, land unit or place (Bases tab). WitpStaff notes that leader data in saves "seems a
+bit unreliable", so the rules are narrower than its list. Each check was measured on the sample save and on a real save
+before it was kept (sample, real):
+
+- Leader commands several units: a leader with more than one command, except exactly one ship plus one task force (a
+  captain who also leads the TF; 70 and 86 leaders do). 0 and 0.
+- Unit without a leader: leader 0 on an arrived air group (3 and 3), land unit or HQ (0 and 0: the 187 and 130 raw
+  hits were all per-ship fragments of loaded units, which carry no leader and are skipped), ship (0 and 0; the 12
+  and 16 ships with leader 0 have not arrived), or task force (2 and 10). Task forces are narrowed: 48 of 236 (84 of 284) have no leader, but every Cargo, Transport, Tanker, Replenishment, Barge and Air
+  Transport TF has none, which is normal, so those missions are skipped.
+- Leader of the other side: a unit whose leader's nation is of the other side, or whose leader id is an unused leader
+  record. 0 and 0.
+- Land unit HQ is not an HQ: an arrived land unit whose HQ id (i16 at 122) is non-zero and not an HQ record (type 4; an
+  HQ naming itself is fine). Narrowed to arrived units, because all 730 units not yet arrived point at placeholder
+  records and the unfiltered check would fire on 13% of land units. 0 and 0.
+- Ship in missing task force: a ship whose task force id is non-zero but is not a task force. 0 and 0.
+- Broken ship chain: any task force or port holding ships whose ship chain fails `taskforces.chain`; the detail is its
+  error text. The editor refuses ship moves in such saves. 0 of 377 and 0 of 425 chains.
+- Task force home port: a home port that is not a base or town, or belongs to the other side. 1 and 1 (the Japanese
+  Guam Invasion TF names Guam, an Allied base).
+
+Left out: WitpStaff's check for LCUs with the wrong suffix (the suffix table is only partly known). The code is in
+`witpae/inconsistencies.py`.
 
 ### Ship class ratings
 

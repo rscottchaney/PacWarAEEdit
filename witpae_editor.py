@@ -13,7 +13,7 @@ import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from witpae import (aircraft, airgroups, airproduction, alerts, bases, chart, combat, factories, history, industry, intel, landunits, lcuproduction, lcutargets, leaders, losses, mapview, minefields,
+from witpae import (aircraft, airgroups, airproduction, alerts, bases, chart, combat, factories, history, inconsistencies, industry, intel, landunits, lcuproduction, lcutargets, leaders, losses, mapview, minefields,
                     pilotpool, planeart, regions, reports, shipproduction, shipratings, shiprecords, shiprepair, ships,
                     taskforces, victory)
 from witpae.container import SaveFile, SaveFormatError
@@ -635,6 +635,24 @@ ALERT_NOTE = (
     "production. Engines: Japanese engines built in fewer numbers than the factories use. The two thresholds are "
     "not saved. Double-click a row to open the base, ship, pilot pool, aircraft, engine or minefields.")
 
+INCON_ALL = "All"
+INCON_COLUMNS = [
+    ("check", "Check", 190, False, lambda r: r.check),
+    ("side", "Side", 70, False, lambda r: r.side),
+    ("subject", "Subject", 240, False, lambda r: r.subject),
+    ("detail", "Detail", 600, False, lambda r: r.detail),
+]
+INCON_COLUMN_BY_ID = {c[0]: c for c in INCON_COLUMNS}
+INCON_NOTE = (
+    "Data in the save that contradicts itself, from WitpStaff's Inconsistencies tab (manual 4.11). A leader who "
+    "commands several units (one ship plus one task force is normal); an arrived air group, land unit, HQ, ship or "
+    "task force with no leader (supply task forces are skipped, they normally have none); a unit whose leader is of "
+    "the other side or an unused leader record; an arrived land unit whose HQ is not an HQ record (units not yet "
+    "arrived all point at placeholders); a ship in a task force that does not exist; a task force or port whose ship "
+    "chain is broken, which the editor refuses to move ships in; a task force whose home port is not a base or "
+    "belongs to the other side. WitpStaff also lists LCUs with the wrong suffix, which is not checked. Leader data "
+    "in saves is not fully reliable, so rows are hints. Double-click a row to open the subject.")
+
 
 
 def _shortest_text(v):
@@ -1058,6 +1076,10 @@ class EditorApp:
         self.alerts_by_iid = {}
         self.alert_sort_col = None  # None keeps the order alerts.collect gives
         self.alert_sort_reverse = False
+        self.incon_all = []
+        self.incon_by_iid = {}
+        self.incon_sort_col = None  # None keeps the order inconsistencies.find_issues gives
+        self.incon_sort_reverse = False
         self.history_dir = None
         self.history_snaps = []
         self.history_problems = []
@@ -1212,6 +1234,7 @@ class EditorApp:
         self.reports_notebook.pack(side="top", fill="both", expand=True, pady=(4, 0))
 
         self._build_alerts_report()
+        self._build_inconsistencies_report()
         spoil = ttk.Frame(self.reports_notebook, padding=4)
         self.reports_notebook.add(spoil, text="Spoilage")
         bar = ttk.Frame(spoil)
@@ -1714,6 +1737,26 @@ class EditorApp:
         ttk.Label(rep, text=ALERT_NOTE, wraplength=1100, justify="left").pack(side="bottom", anchor="w", pady=(4, 0))
         self.alert_tree = self._report_tree(rep, ALERT_COLUMNS, self.sort_alerts_by,
                                             ("category", "side", "subject", "detail"), self.open_alert)
+
+    def _build_inconsistencies_report(self):
+        rep = self.incon_frame = ttk.Frame(self.reports_notebook, padding=4)
+        self.reports_notebook.add(rep, text="Inconsistencies")
+        bar = ttk.Frame(rep)
+        bar.pack(side="top", fill="x")
+        self.incon_check_var = tk.StringVar(value=INCON_ALL)
+        self._report_combo(bar, "Check:", self.incon_check_var, [INCON_ALL, *inconsistencies.CHECKS],
+                           self.refresh_incon_list, 26)
+        self.incon_side_var = tk.StringVar(value=INCON_ALL)
+        self._report_combo(bar, "Side:", self.incon_side_var, [INCON_ALL, "Allied", "Japanese"],
+                           self.refresh_incon_list, 9)
+        self.incon_future_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(bar, text="Include not yet arrived", variable=self.incon_future_var,
+                        command=self.refresh_incon_list).pack(side="left", padx=(4, 8))
+        self.incon_count = tk.StringVar()
+        ttk.Label(bar, textvariable=self.incon_count).pack(side="left", padx=8)
+        ttk.Label(rep, text=INCON_NOTE, wraplength=1100, justify="left").pack(side="bottom", anchor="w", pady=(4, 0))
+        self.incon_tree = self._report_tree(rep, INCON_COLUMNS, self.sort_incon_by,
+                                            ("check", "side", "subject", "detail"), self.open_incon)
 
     def _build_victory_report(self):
         rep = ttk.Frame(self.reports_notebook, padding=4)
@@ -4582,18 +4625,20 @@ class EditorApp:
     def jump_to_ldr_unit(self):
         """Select the unit the leader commands in its own tab; nothing for an unassigned leader."""
         row = self.ldr_rows.get(self.ldr_current)
-        if row is None or not row.kind:
-            return
-        iid = str(row.unit_id)
-        if row.kind == leaders.KIND_AIR_GROUP:
+        if row is not None and row.kind:
+            self._select_unit(row.kind, str(row.unit_id))
+
+    def _select_unit(self, kind, iid):
+        """Select an air group, ship, task force or land unit (a leaders.KIND_*) in its own tab."""
+        if kind == leaders.KIND_AIR_GROUP:
             tab, tree = self.groups_tab, self.group_tree
             filters = ((self.group_search_var, ""), (self.group_side_var, "All"))
             refresh = self.refresh_group_list
-        elif row.kind == leaders.KIND_SHIP:
+        elif kind == leaders.KIND_SHIP:
             tab, tree = self.shiprec_tab, self.shiprec_tree
             filters = ((self.shiprec_search_var, ""), (self.shiprec_side_var, "All"))
             refresh = self.refresh_shiprec_list
-        elif row.kind == leaders.KIND_TF:
+        elif kind == leaders.KIND_TF:
             tab, tree = self.tf_tab, self.tf_tree
             filters = ((self.tf_search_var, ""), (self.tf_side_var, "All"))
             refresh = self.refresh_tf_list
@@ -4648,6 +4693,7 @@ class EditorApp:
         self.refresh_minefield_reports()
         self.refresh_vp_reports()
         self.refresh_alerts()
+        self.refresh_inconsistencies()
 
     @staticmethod
     def _report_values(columns, texts, row):
@@ -5174,6 +5220,70 @@ class EditorApp:
             if self.engine_tree.exists(target):
                 self.engine_tree.selection_set(target)
                 self.engine_tree.see(target)
+
+    def refresh_inconsistencies(self):
+        """Recompute the issues from the save; the filters and sort only re-select from the result."""
+        if self.save is None:
+            return
+        try:
+            self.incon_all = inconsistencies.find_issues(self.save)
+        except (SaveFormatError, IndexError, struct.error):
+            self.incon_all = []
+        self.refresh_incon_list()
+
+    def refresh_incon_list(self):
+        check = self.incon_check_var.get()
+        side = self.incon_side_var.get()
+        future = self.incon_future_var.get()
+        rows = [(k, i) for k, i in enumerate(self.incon_all)
+                if check in (INCON_ALL, i.check) and side in (INCON_ALL, i.side) and (future or not i.future)]
+        if self.incon_sort_col is not None:
+            get = INCON_COLUMN_BY_ID[self.incon_sort_col][4]
+            rows.sort(key=lambda t: (str(get(t[1])).lower(), t[0]), reverse=self.incon_sort_reverse)
+        tree = self.incon_tree
+        tree.delete(*tree.get_children())
+        self.incon_by_iid = {}
+        for k, i in rows:
+            self.incon_by_iid[str(k)] = i
+            tree.insert("", "end", iid=str(k), values=self._report_values(INCON_COLUMNS, {}, i))
+        self.incon_count.set(f"{len(rows)} inconsistenc{'y' if len(rows) == 1 else 'ies'}")
+
+    def sort_incon_by(self, col):
+        self.incon_sort_reverse = (not self.incon_sort_reverse) if col == self.incon_sort_col else False
+        self.incon_sort_col = col
+        self.refresh_incon_list()
+
+    def open_incon(self):
+        """Double-click: open the subject of the issue in the tab where it is listed."""
+        sel = self.incon_tree.selection()
+        issue = self.incon_by_iid.get(sel[0]) if sel else None
+        if issue is None:
+            return
+        kind, iid = issue.subject_kind, str(issue.subject_id)
+        if kind == inconsistencies.KIND_PLACE:
+            self.jump_to_industry_place(self.incon_tree, iid)
+        elif kind == inconsistencies.KIND_LEADER:
+            self._select_leader(issue.subject_id)
+        elif kind == inconsistencies.KIND_LCU:
+            self._select_land_unit(iid)
+        else:
+            self._select_unit({inconsistencies.KIND_GROUP: leaders.KIND_AIR_GROUP,
+                               inconsistencies.KIND_SHIP: leaders.KIND_SHIP,
+                               inconsistencies.KIND_TF: leaders.KIND_TF}[kind], iid)
+
+    def _select_leader(self, leader_id):
+        """Show a leader in the Leaders tab, clearing its filters when they hide him."""
+        iid = str(leader_id)
+        if not self.ldr_tree.exists(iid):
+            self.ldr_search_var.set("")
+            for var in self.ldr_filter_vars.values():
+                var.set("All")
+            self.refresh_ldr_list()
+        if not self.ldr_tree.exists(iid):
+            return
+        self.notebook.select(self.leaders_tab)
+        self.ldr_tree.selection_set(iid)
+        self.ldr_tree.see(iid)
 
     def _industry_places_for(self, side_var, region_var):
         side = side_var.get()
