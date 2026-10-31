@@ -11,12 +11,34 @@ Schema version 1:
   {"version", "date" (YYMMDD int), "turn", "scenario", "source" (file name of the save), "recorded" (ISO time),
    "sides": {"Allied": {metric: int}, "Japanese": {...}}, the metrics listed in SIDE_METRICS,
    "bases": {"<location id>": [side id, supply, fuel, resources, oil]} for every place with any stock,
-   "aircraft": {"<aircraft id>": [side id, pool, air, ground, flak, ops]} for models with a pool or total losses}
+   "aircraft": {"<aircraft id>": [side id, pool, air, ground, flak, ops]} for models with a pool or total losses,
+   and, for the Events view, optional keys (added later; absent in older snapshots):
+   "places": {"<location id>": side id} for every named base, town and minor place,
+   "ships": {"<ship id>": status} for every ship record, 0 = arrived, 1 = not yet arrived, 2 = sunk (days to
+            arrival 19999),
+   "units": [land unit ids that have arrived], sorted; the fragment records of a unit split over several ships
+            (same side and name as a lower id) are left out, so loading and unloading make no events,
+   "groups": [air group ids that have arrived], sorted}
+Readers must accept snapshots without the optional keys and ignore keys they do not know (the first editor build
+with events also stored "leaders" in every snapshot; the leader log below replaced it).
 The side totals cover the places of the Industry report (bases, towns and minor places), so they match WiTPTracker.
 
 A snapshot is written when no file exists for the date, or when the existing one came from the same save file
 (a refresh). Otherwise the existing one is kept, so an edited test copy cannot clobber a real turn, until the user
 asks for a replacement. Files are written atomically. Nothing here writes to a .pws save.
+
+Leader ratings change rarely, so they are not stored in every snapshot. The campaign folder holds one change log,
+leaders.json.gz:
+  {"version": 1, "date" (YYMMDD of the latest recorded turn the log reflects),
+   "ratings": {"<leader id>": hex of the seven rating bytes, in leaders.RATING_NAMES order} at that date,
+   "previous": {"date", "ratings"} the same at the turn before (absent until a second turn is recorded),
+   "changes": [[date, leader id, old hex, new hex], ...]}
+Recording a snapshot for date D updates the log (update_leader_log): with no log it starts one at D without
+changes; with D later than the log's date it appends a change, dated D, for every leader whose ratings differ; with
+D equal to the log's date (a refresh) it replaces the ratings and recomputes the changes of D against "previous";
+with D earlier than the log's date it does nothing, so recording an older turn after a newer one adds no leader
+changes. A snapshot that is kept (not written) leaves the log alone, and so does deleting a turn. import_saves
+applies the saves in date order so a bulk import builds the log correctly.
 """
 
 import datetime
@@ -29,7 +51,9 @@ import tempfile
 import zlib
 from collections import namedtuple
 
-from . import aircraft, bases, industry, losses, minefields, reports, shiprepair, victory
+from . import (
+    aircraft, airgroups, bases, industry, landunits, leaders, losses, minefields, reports, shiprecords,
+    shiprepair, victory)
 from .container import SaveFile, SaveFormatError
 from .fileio import is_pbem
 
@@ -70,6 +94,10 @@ AIRCRAFT_METRICS = {"pool": "Pool", "lost": "Lost (total)", "air": "Lost in air 
 AIRCRAFT_KEYS = ("pool", "air", "ground", "flak", "ops")
 STOCK_KEYS = BASE_KEYS
 ALLOTMENT_KEYS = ("supply", "fuel", "oil")
+# Optional keys that feed the Events view; a snapshot recorded before they existed lacks them.
+EVENT_KEYS = ("places", "ships", "units", "groups")
+LEADER_LOG = "leaders.json.gz"
+SHIP_ARRIVED, SHIP_PENDING, SHIP_SUNK = 0, 1, 2
 LOSS_KINDS = ("air", "ground", "flak", "ops")
 
 RecordResult = namedtuple("RecordResult", "status date source path")
@@ -187,7 +215,83 @@ def build_snapshot(save, source_name, places=None):
             aircraft_entries[str(a.id)] = [a.side_id, pool, *(getattr(row, k) if row else 0 for k in LOSS_KINDS)]
     return {"version": VERSION, "date": date, "turn": turn, "scenario": scenario_name(save), "source": source_name,
             "recorded": datetime.datetime.now().isoformat(timespec="seconds"), "sides": sides,
-            "bases": base_entries, "aircraft": aircraft_entries}
+            "bases": base_entries, "aircraft": aircraft_entries, **event_data(save, places)}
+
+
+def event_data(save, places):
+    """The optional snapshot keys of EVENT_KEYS."""
+    ships = {}
+    for r in shiprecords.list_ship_records(save):
+        days = r.days_to_arrival
+        ships[str(r.id)] = SHIP_ARRIVED if days == 0 else SHIP_SUNK if days == losses.SUNK else SHIP_PENDING
+    first, units = {}, []
+    for u in landunits.list_land_units(save):  # id order, so the first record of a name is the unit itself
+        if first.setdefault((u.side, u.display_name), u.id) == u.id and u.arrived:
+            units.append(u.id)
+    return {"places": {str(p.id): p.base.side_id for p in places}, "ships": ships, "units": units,
+            "groups": [g.id for g in airgroups.list_airgroups(save) if g.arrived]}
+
+
+# ---- the leader change log ------------------------------------------------
+
+def leader_ratings(save):
+    """{"<leader id>": hex of the seven rating bytes} of every named leader."""
+    return {str(r.id): bytes(getattr(r, n) for n in leaders.RATING_NAMES).hex() for r in leaders.list_leaders(save)}
+
+
+def _write_gzip_json(directory, name, data):
+    os.makedirs(directory, exist_ok=True)
+    path = os.path.join(directory, name)
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".tmp-", suffix=SUFFIX)
+    try:
+        with os.fdopen(fd, "wb") as raw:
+            with gzip.GzipFile(fileobj=raw, mode="wb", mtime=0) as gz:
+                gz.write(json.dumps(data, separators=(",", ":")).encode("utf-8"))
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+    return path
+
+
+def read_leader_log(directory):
+    """The leader log of a campaign folder, None when there is none or it cannot be used."""
+    try:
+        with gzip.open(os.path.join(directory, LEADER_LOG), "rb") as f:
+            log = json.loads(f.read().decode("utf-8"))
+    except (OSError, EOFError, zlib.error, ValueError):
+        return None
+    if (not isinstance(log, dict) or log.get("version") != VERSION or not isinstance(log.get("date"), int)
+            or not isinstance(log.get("ratings"), dict) or not isinstance(log.get("changes"), list)):
+        return None
+    return log
+
+
+def _leader_changes(date, old, new):
+    """[date, id, old hex, new hex] for each leader present in both rating maps whose ratings differ."""
+    return [[date, int(i), old[i], hexes] for i, hexes in new.items() if i in old and old[i] != hexes]
+
+
+def update_leader_log(directory, date, ratings):
+    """Fold the ratings of the turn `date` into the campaign's leader log (rules in the module docstring)."""
+    log = read_leader_log(directory)
+    if log is None:
+        log = {"version": VERSION, "date": date, "ratings": ratings, "changes": []}
+    elif date > log["date"]:
+        log["changes"].extend(_leader_changes(date, log["ratings"], ratings))
+        log["previous"] = {"date": log["date"], "ratings": log["ratings"]}
+        log["date"], log["ratings"] = date, ratings
+    elif date == log["date"]:
+        log["changes"] = [c for c in log["changes"] if c[0] != date]
+        if log.get("previous"):
+            log["changes"].extend(_leader_changes(date, log["previous"]["ratings"], ratings))
+        log["ratings"] = ratings
+    else:
+        return
+    _write_gzip_json(directory, LEADER_LOG, log)
 
 
 # ---- files --------------------------------------------------------------
@@ -250,11 +354,12 @@ def delete_snapshot(directory, date):
     os.remove(os.path.join(directory, snapshot_name(date)))
 
 
-def record(save, save_path, replace=False, root=None, places=None):
+def record(save, save_path, replace=False, root=None, places=None, update_log=True):
     """Store the snapshot of an opened save under the rule in the module docstring; returns a RecordResult.
 
-    replace=True overwrites a snapshot that came from another file. Errors (file system, unreadable save)
-    are raised for the caller to show.
+    replace=True overwrites a snapshot that came from another file. A written snapshot also updates the leader log
+    unless update_log is False (import_saves does that itself, in date order). Errors (file system, unreadable
+    save) are raised for the caller to show.
     """
     if is_pbem(save):
         return RecordResult(SKIPPED_PBEM, None, None, None)
@@ -280,12 +385,17 @@ def record(save, save_path, replace=False, root=None, places=None):
             else:
                 return RecordResult(KEPT, date, existing.get("source", "?"), path)
     write_snapshot(directory, build_snapshot(save, source, places))
+    if update_log:
+        update_leader_log(directory, date, leader_ratings(save))
     return RecordResult(status, date, source, path)
 
 
 def import_saves(paths, root=None, progress=None):
-    """Replace the snapshot of each save's date; PBEM and unreadable saves are skipped. Returns an ImportResult."""
-    imported, skipped = [], []
+    """Replace the snapshot of each save's date; PBEM and unreadable saves are skipped. Returns an ImportResult.
+
+    The leader logs are updated afterwards with the imported turns sorted by date, whatever the order of paths.
+    """
+    imported, skipped, ratings = [], [], []
     for path in paths:
         name = os.path.basename(path)
         if progress:
@@ -296,7 +406,9 @@ def import_saves(paths, root=None, progress=None):
             skipped.append((name, f"unreadable: {exc}"))
             continue
         try:
-            result = record(save, path, replace=True, root=root)
+            result = record(save, path, replace=True, root=root, update_log=False)
+            if result.status != SKIPPED_PBEM:
+                ratings.append((result.date, campaign_dir(save, path, root), leader_ratings(save)))
         except (SaveFormatError, KeyError, struct.error, ValueError) as exc:
             skipped.append((name, f"unreadable: {exc}"))
             continue
@@ -304,6 +416,8 @@ def import_saves(paths, root=None, progress=None):
             skipped.append((name, "PBEM"))
         else:
             imported.append((name, result.date))
+    for date, directory, hexes in sorted(ratings, key=lambda t: t[0]):
+        update_leader_log(directory, date, hexes)
     return ImportResult(imported, skipped)
 
 

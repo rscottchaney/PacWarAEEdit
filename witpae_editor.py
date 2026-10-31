@@ -13,7 +13,7 @@ import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from witpae import (aircraft, airgroups, airproduction, alerts, bases, chart, combat, factories, history, inconsistencies, industry, intel, landunits, lcuproduction, lcutargets, leaders, losses, mapview, minefields,
+from witpae import (aircraft, airgroups, airproduction, alerts, bases, chart, combat, events, factories, history, inconsistencies, industry, intel, landunits, lcuproduction, lcutargets, leaders, losses, mapview, minefields,
                     pilotpool, planeart, regions, reports, shipproduction, shipratings, shiprecords, shiprepair, ships,
                     taskforces, victory)
 from witpae.container import SaveFile, SaveFormatError
@@ -829,7 +829,7 @@ def region_choices():
 MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
 HISTORY_SIDE_COLORS = {"Allied": "#2f6fd0", "Japanese": "#d03a2f"}
-HISTORY_VIEWS = ("Sides", "Base", "Aircraft")
+HISTORY_VIEWS = ("Sides", "Base", "Aircraft", "Events")
 HISTORY_BOTH = "Both"
 HISTORY_NONE_TEXT = "-"
 # One table for both views; the view picks the columns it shows.
@@ -838,10 +838,14 @@ HISTORY_COLUMNS = [
     ("allied", "Allied", 110, True, None), ("allied_change", "Allied change", 110, True, None),
     ("japanese", "Japanese", 110, True, None), ("japanese_change", "Japanese change", 120, True, None),
     ("value", "Value", 110, True, None), ("change", "Change", 110, True, None),
+    ("kind", "Type", 140, False, None), ("subject", "Subject", 220, False, None),
+    ("detail", "Detail", 720, False, None),
 ]
 HISTORY_SIDES_COLUMNS = ("date", "turn", "allied", "allied_change", "japanese", "japanese_change")
 HISTORY_BASE_COLUMNS = ("date", "turn", "side", "value", "change")
 HISTORY_AIRCRAFT_COLUMNS = ("date", "turn", "value", "change")
+HISTORY_EVENT_COLUMNS = ("date", "kind", "side", "subject", "detail")
+HISTORY_ALL = "All"
 
 MAP_SCALES = {"12%": 8, "25%": 4, "50%": 2, "100%": 1}  # label -> every step-th pixel of the art
 MAP_OVERLAYS = ("Locations", "Search arcs", "Task forces", "Support", "Supply", "Transport", "Combat")
@@ -5543,19 +5547,43 @@ class EditorApp:
         self.history_aircraft_metric_var = tk.StringVar(value=history.AIRCRAFT_METRICS["pool"])
         self._report_combo(self.history_aircraft_bar, "Metric:", self.history_aircraft_metric_var,
                            history.AIRCRAFT_METRICS.values(), self.refresh_history_view, 18)
+        self.history_events_bar = ttk.Frame(view_bar)
+        self.history_kind_var = tk.StringVar(value=HISTORY_ALL)
+        self._report_combo(self.history_events_bar, "Type:", self.history_kind_var, [HISTORY_ALL, *events.KINDS],
+                           self.refresh_history_view, 20)
+        self.history_event_side_var = tk.StringVar(value=HISTORY_ALL)
+        self._report_combo(self.history_events_bar, "Side:", self.history_event_side_var,
+                           [HISTORY_ALL, "Allied", "Japanese"], self.refresh_history_view, 9)
+        self.history_turns_var = tk.StringVar(value=next(iter(intel.TURN_CHOICES)))
+        self._report_combo(self.history_events_bar, "Turns:", self.history_turns_var, intel.TURN_CHOICES,
+                           self.refresh_history_view, 8)
+        self.history_event_count = tk.StringVar()
+        ttk.Label(self.history_events_bar, textvariable=self.history_event_count).pack(side="left", padx=4)
+        self.history_note = tk.StringVar()
+        ttk.Label(tab, textvariable=self.history_note, wraplength=1100, justify="left").pack(
+            side="top", anchor="w", pady=(4, 0))
         self.history_chart = chart.LineChart(tab)
         self.history_chart.pack(side="top", fill="both", expand=True, pady=(4, 0))
-        table = ttk.Frame(tab)
+        table = self.history_table = ttk.Frame(tab)
         table.pack(side="top", fill="both", expand=True, pady=(4, 0))
-        self.history_tree = self._report_tree(table, HISTORY_COLUMNS, lambda c: None, ("date", "side"), lambda: None)
+        self.history_tree = self._report_tree(table, HISTORY_COLUMNS, lambda c: None,
+                                              ("date", "side", "kind", "subject", "detail"), self.open_history_event)
+        self.history_leader_log = None
+        self.history_events = None  # events.EventResult of the loaded snapshots, built when the Events view needs it
+        self.history_event_rows = {}
         self.history_tree.configure(height=8)
         self._show_history_view()
 
     def _show_history_view(self):
-        bars = dict(zip(HISTORY_VIEWS, (self.history_sides_bar, self.history_base_bar, self.history_aircraft_bar)))
-        for view, bar in bars.items():
+        bars = dict(zip(HISTORY_VIEWS, (self.history_sides_bar, self.history_base_bar, self.history_aircraft_bar,
+                                        self.history_events_bar)))
+        for bar in bars.values():
             bar.pack_forget()
-        bars[self.history_view_var.get()].pack(side="left", padx=(12, 0))
+        view = self.history_view_var.get()
+        bars[view].pack(side="left", padx=(12, 0))
+        self.history_chart.pack_forget()
+        if view != HISTORY_VIEWS[3]:
+            self.history_chart.pack(side="top", fill="both", expand=True, pady=(4, 0), before=self.history_table)
         self.refresh_history_view()
 
     def show_history_base_choices(self):
@@ -5589,6 +5617,8 @@ class EditorApp:
             return
         self.history_dir = history.campaign_dir(self.save, self.path, self.history_root)
         self.history_snaps, self.history_problems = history.load_history(self.history_dir)
+        self.history_leader_log = history.read_leader_log(self.history_dir)
+        self.history_events = None
         self._set_history_choices()
         if self.history_base_var.get() not in self.history_choices:
             self.history_base_var.set(next(iter(self.history_choices), ""))
@@ -5655,7 +5685,7 @@ class EditorApp:
 
     def delete_history_turn(self):
         sel = self.history_tree.selection()
-        if not sel or self.history_dir is None:
+        if not sel or self.history_dir is None or self.history_view_var.get() == HISTORY_VIEWS[3]:
             return
         date = int(sel[0])
         if not messagebox.askyesno("Delete turn", f"Delete the recorded turn of {chart.date_label(date)}?"):
@@ -5696,6 +5726,11 @@ class EditorApp:
         tree = self.history_tree
         tree.delete(*tree.get_children())
         snaps = self.history_snaps
+        self.history_note.set("")
+        if self.history_view_var.get() == HISTORY_VIEWS[3]:
+            tree.configure(displaycolumns=list(HISTORY_EVENT_COLUMNS))
+            self._refresh_history_events()
+            return
         if self.history_view_var.get() == HISTORY_VIEWS[0]:
             key = next(k for k, label in history.SIDE_METRICS.items() if label == self.history_metric_var.get())
             rows = history.side_series(snaps, key)
@@ -5741,6 +5776,57 @@ class EditorApp:
             message = "No turns recorded yet" if not snaps else "No data for this base"
         tree.configure(displaycolumns=list(shown))
         self.history_chart.set_data(series, message)
+
+    def _refresh_history_events(self):
+        """The Events view: the table of events (no chart), filtered by type, side and number of turns."""
+        tree, snaps = self.history_tree, self.history_snaps
+        self.history_event_rows = {}
+        self.history_event_count.set("")
+        if self.save is None:
+            return
+        if len(snaps) < 2:
+            self.history_note.set("Events need at least two recorded turns.")
+            return
+        if self.history_events is None:
+            self.history_events = events.all_events(snaps, events.event_names(self.save), self.history_leader_log)
+        dates = [s["date"] for s in snaps]
+        keep = intel.TURN_CHOICES[self.history_turns_var.get()]
+        shown = None if keep is None else set(dates[-keep:])
+        kind, side = self.history_kind_var.get(), self.history_event_side_var.get()
+        rows = [e for e in self.history_events.events if shown is None or e.date in shown
+                and kind in (HISTORY_ALL, e.kind) and side in (HISTORY_ALL, e.side)]
+        # Newest turn first; within a turn the order of events_between (KINDS, then subject).
+        for n, e in sorted(enumerate(rows), key=lambda t: (-t[1].date, t[0])):
+            iid = str(n)
+            self.history_event_rows[iid] = e
+            tree.insert("", "end", iid=iid, values=self._history_values({
+                "date": chart.date_label(e.date), "kind": e.kind, "side": e.side or HISTORY_NONE_TEXT,
+                "subject": e.subject, "detail": e.detail}))
+        self.history_event_count.set(f"{len(rows)} event{'' if len(rows) == 1 else 's'}")
+        old = events.without_event_data(snaps)
+        if old:
+            self.history_note.set(
+                f"{len(old)} of {len(snaps)} recorded turns ({chart.date_label(old[0])} to {chart.date_label(old[-1])})"
+                " were recorded by an older editor and give no events. Open the same save again to refresh its turn, "
+                "or use Import saves... to replace turns with the saves on disk.")
+
+    def open_history_event(self):
+        """Double-click on an event: show its subject in the tab that lists it."""
+        sel = self.history_tree.selection()
+        e = self.history_event_rows.get(sel[0]) if sel else None
+        if e is None or self.history_view_var.get() != HISTORY_VIEWS[3]:
+            return
+        iid = str(e.subject_id)
+        if e.subject_kind == events.PLACE:
+            self.jump_to_industry_place(self.history_tree, iid)
+        elif e.subject_kind == events.SHIP:
+            self._jump_to_ship(self.history_tree, iid)
+        elif e.subject_kind == events.LAND_UNIT:
+            self._select_land_unit(iid)
+        elif e.subject_kind == events.AIR_GROUP:
+            self._select_unit(leaders.KIND_AIR_GROUP, iid)
+        elif e.subject_kind == events.LEADER:
+            self._select_leader(e.subject_id)
 
     @staticmethod
     def _history_values(by_column):
