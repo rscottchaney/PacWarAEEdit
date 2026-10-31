@@ -770,12 +770,37 @@ to a save.
   Operational losses (all totals, not per turn). One line in the colour of the model's side. Snapshots only store
   models with a pool or losses, so a turn without the model counts as 0 once the model has appeared in the history,
   and is a gap before its first appearance.
+- Events view (ported from the Events tab of WitpStaff): what happened between turns, found by comparing each pair of
+  consecutive snapshots: Base captured (a base, town or minor place changed side, "Allied -> Japanese"), Ship
+  arrived, Ship sunk, Land unit arrived, Air group arrived and Leader skill changed (every changed rating, such as
+  "Naval 54 -> 56, Aggression 60 -> 58"). The bar filters by Type, Side and Turns (Latest, Last 3, Last 7, All: the
+  newest recorded turns) and shows a count; the table (Date, Type, Side, Subject, Detail; no chart) lists the newest
+  turn first. Double-click opens the subject: a place in the Bases tab, a ship in the Ships tab, a land unit, air
+  group or leader in its own tab. Names come from the open save ("ship 123" when it does not know the id); an id
+  found in only one of two snapshots is ignored. The code is in `witpae/events.py`.
+- Event data in a snapshot: optional keys, added later and absent in older snapshots (`"version"` stays 1, so older
+  editors still read the files): `places` (location id -> side id), `ships` (ship id -> 0 arrived, 1 not yet arrived,
+  2 sunk), `units` (ids of arrived land units, without the fragment records of a unit split over several ships) and
+  `groups` (ids of arrived air groups). They add about 38 KB to a gzipped snapshot of a late game (about 7 KB before).
+  A kind of event is skipped for a pair of turns when either snapshot lacks its key. The tab then says how many turns
+  were recorded by an older editor: opening the same save again refreshes its turn, and Import saves... replaces the
+  snapshot of each save's date (whatever file it came from), so import the old saves again to get their events.
+- Leader skill changes are not stored in every snapshot (all ratings would cost about 260 KB a turn). The campaign
+  folder holds one change log, `leaders.json.gz`: the ratings (7 bytes as hex) of every named leader at the latest
+  recorded turn and at the turn before, and a list of changes `[date, leader id, old hex, new hex]`. Recording or
+  refreshing a turn updates it: the first turn starts the log; a later turn appends a change, dated that turn, for
+  each leader whose ratings differ; a refresh of the latest turn recomputes that turn's changes; recording a turn
+  older than the log's date adds no leader changes (so record or import turns in date order; Import saves... sorts
+  by date itself). A snapshot that is kept (not written) leaves the log alone, and Delete turn does not remove the
+  turn's changes from it. The log is about 0.5 MB and is rewritten on each recorded turn. Leader events come from the
+  log, dated as recorded, and obey the Turns filter by date.
 - Files that cannot be read (corrupt, or another schema version) are skipped and named on the status line. Auto-record
   replaces a corrupt file for its own date but keeps one of another schema version. The snapshot has `"version": 1`; a future change of layout will raise it, and older
   editors then skip those files. A metric added later (such as "Mines laid") does not raise the version: snapshots
   recorded before it lack the key and show a gap for it.
 
-The code is in `witpae/history.py` (snapshots and files) and `witpae/chart.py` (the line chart).
+The code is in `witpae/history.py` (snapshots and files), `witpae/events.py` (events) and `witpae/chart.py` (the line
+chart).
 
 ## Intel
 

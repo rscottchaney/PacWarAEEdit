@@ -3,6 +3,7 @@ import json
 import os
 import tempfile
 import unittest
+from unittest import mock
 
 from witpae import bases, chart, history, industry, losses, shiprepair
 from witpae.container import SaveFile
@@ -97,6 +98,30 @@ class SnapshotTests(unittest.TestCase):
     def test_json_serialisable(self):
         self.assertEqual(json.loads(json.dumps(self.snap)), self.snap)
 
+    def test_event_keys(self):
+        s = self.snap
+        self.assertEqual(history.VERSION, 1)
+        self.assertTrue(all(k in s for k in history.EVENT_KEYS))
+        self.assertEqual(s["places"]["584"], 1)  # Pearl Harbor, Allied
+        self.assertEqual(s["places"]["222"], 0)  # Akita, Japanese
+        self.assertEqual(s["ships"]["3002"], history.SHIP_ARRIVED)  # Lexington
+        self.assertEqual(s["ships"]["3152"], history.SHIP_SUNK)
+        self.assertIn(history.SHIP_PENDING, s["ships"].values())
+        self.assertEqual(s["units"], sorted(s["units"]))
+        self.assertEqual(s["groups"], sorted(s["groups"]))
+        self.assertTrue(s["units"] and s["groups"])
+        self.assertNotIn("leaders", s)  # the ratings live in the campaign's leader log
+        ratings = history.leader_ratings(self.save)
+        self.assertTrue(ratings and all(len(v) == 14 for v in ratings.values()))  # seven bytes as hex
+
+    def test_units_leave_out_fragments_and_unarrived(self):
+        from witpae import landunits
+        arrived = {u.id: (u.side, u.display_name) for u in landunits.list_land_units(self.save) if u.arrived}
+        self.assertEqual(set(self.snap["units"]) - set(arrived), set())
+        keys = [arrived[i] for i in self.snap["units"]]
+        self.assertEqual(len(keys), len(set(keys)))  # one record per side and name
+        self.assertLess(len(self.snap["units"]), len(arrived))  # the sample has fragment records
+
 
 class PathTests(unittest.TestCase):
     def test_slug(self):
@@ -157,6 +182,63 @@ class FileTests(unittest.TestCase):
         history.write_snapshot(self.folder, dict(snap, turn=9))
         self.assertEqual(history.read_snapshot(path)["turn"], 9)
         self.assertEqual(os.listdir(self.folder), ["19411210.json.gz"])
+
+    def test_snapshot_without_the_event_keys_still_reads(self):
+        snap = history.build_snapshot(self.save, "a.pws", self.places)
+        old = {k: v for k, v in snap.items() if k not in history.EVENT_KEYS}
+        path = history.write_snapshot(self.folder, old)
+        self.assertEqual(history.read_snapshot(path), old)
+        self.assertEqual(self.record("a.pws").status, history.REFRESHED)  # same source: refreshed with the new keys
+        self.assertIn("places", history.read_snapshot(path))
+
+    def test_snapshot_with_a_leaders_key_still_reads(self):
+        snap = dict(history.build_snapshot(self.save, "a.pws", self.places), leaders={"1": "00" * 7})
+        self.assertEqual(history.read_snapshot(history.write_snapshot(self.folder, snap)), snap)
+
+    def test_record_creates_the_leader_log_and_a_kept_snapshot_leaves_it(self):
+        log_path = os.path.join(self.folder, history.LEADER_LOG)
+        self.assertEqual(self.record("a.pws").status, history.RECORDED)
+        log = history.read_leader_log(self.folder)
+        self.assertEqual((log["date"], log["changes"]), (411210, []))
+        self.assertEqual(log["ratings"], history.leader_ratings(self.save))
+        self.assertEqual(sorted(os.listdir(self.folder)), ["19411210.json.gz", history.LEADER_LOG])
+        sentinel = dict(log, ratings={"1": "00" * 7})
+        history.update_leader_log(self.tmp, 411209, {})  # not the campaign folder: nothing to compare with
+        history._write_gzip_json(self.folder, history.LEADER_LOG, sentinel)
+        with open(log_path, "rb") as f:
+            before = f.read()
+        self.assertEqual(self.record("b.pws").status, history.KEPT)
+        with open(log_path, "rb") as f:
+            self.assertEqual(f.read(), before)
+        self.assertEqual(self.record("a.pws").status, history.REFRESHED)  # same date as the log: ratings replaced
+        self.assertEqual(history.read_leader_log(self.folder)["ratings"], history.leader_ratings(self.save))
+
+    def test_leader_log_rules(self):
+        a, b, c = {"1": "01" * 7, "2": "02" * 7}, {"1": "03" + "01" * 6, "2": "02" * 7, "3": "09" * 7}, {"1": "04" * 7}
+        history.update_leader_log(self.folder, 411210, a)
+        self.assertEqual(history.read_leader_log(self.folder)["changes"], [])
+        history.update_leader_log(self.folder, 411212, b)  # appended, dated by the new turn; leader 3 is new
+        log = history.read_leader_log(self.folder)
+        self.assertEqual(log["changes"], [[411212, 1, "01" * 7, "03" + "01" * 6]])
+        self.assertEqual((log["date"], log["ratings"], log["previous"]), (411212, b, {"date": 411210, "ratings": a}))
+        history.update_leader_log(self.folder, 411211, c)  # an older turn after a newer one: nothing
+        self.assertEqual(history.read_leader_log(self.folder), log)
+        history.update_leader_log(self.folder, 411212, c)  # refresh of the latest turn: recomputed
+        log = history.read_leader_log(self.folder)
+        self.assertEqual(log["changes"], [[411212, 1, "01" * 7, "04" * 7]])
+        self.assertEqual((log["date"], log["ratings"], log["previous"]["date"]), (411212, c, 411210))
+        history.update_leader_log(self.folder, 411212, a)  # refreshed back: no change left
+        self.assertEqual(history.read_leader_log(self.folder)["changes"], [])
+        history.update_leader_log(self.folder, 411213, b)
+        self.assertEqual([c[0] for c in history.read_leader_log(self.folder)["changes"]], [411213])
+        self.assertEqual(os.listdir(self.folder), [history.LEADER_LOG])  # no temporary file left
+
+    def test_unreadable_leader_log_is_none(self):
+        os.makedirs(self.folder)
+        self.assertIsNone(history.read_leader_log(self.folder))
+        with open(os.path.join(self.folder, history.LEADER_LOG), "wb") as f:
+            f.write(b"junk")
+        self.assertIsNone(history.read_leader_log(self.folder))
 
     def test_failed_write_leaves_old_file_and_no_temporary_file(self):
         snap = history.build_snapshot(self.save, "a.pws", self.places)
@@ -219,6 +301,27 @@ class FileTests(unittest.TestCase):
                          [("pbem.pws", "PBEM"), ("bad.pws", "unreadable"), ("missing.pws", "unreadable")])
         self.assertEqual(seen, ["going2_411210.pws", "pbem.pws", "bad.pws", "missing.pws"])
         self.assertEqual(history.read_snapshot(self.path)["source"], "going2_411210.pws")  # replaced a.pws
+        self.assertEqual(history.read_leader_log(self.folder)["date"], 411210)
+
+    def test_import_applies_the_leader_log_in_date_order(self):
+        calls = []
+        real = history.update_leader_log
+        paths = [os.path.join(self.tmp, n) for n in ("late.pws", "early.pws")]
+        dates = {paths[0]: 411212, paths[1]: 411211}
+        loaded = {}
+        real_load = SaveFile.load
+
+        def load(path):
+            save = real_load(SAVE_015)
+            loaded[id(save)] = dates[path]
+            return save
+
+        with mock.patch.object(history.SaveFile, "load", side_effect=load), \
+                mock.patch.object(history, "game_date", side_effect=lambda s: (loaded[id(s)], 1)), \
+                mock.patch.object(history, "update_leader_log", side_effect=lambda *a: calls.append(a[1]) or real(*a)):
+            result = history.import_saves(paths, root=self.root)
+        self.assertEqual([d for _n, d in result.imported], [411212, 411211])
+        self.assertEqual(calls, [411211, 411212])
 
     def test_load_history_orders_and_skips_bad_files(self):
         base = history.build_snapshot(self.save, "a.pws", self.places)

@@ -2397,7 +2397,7 @@ class GuiSmokeTests(unittest.TestCase):
         tabs = [app.notebook.tab(t, "text") for t in app.notebook.tabs()]
         self.assertEqual(tabs[tabs.index("Reports") + 1], "History")
         folder = os.path.join(self.history_root, "grand-campaign")
-        self.assertEqual(os.listdir(folder), ["19411210.json.gz"])
+        self.assertEqual(os.listdir(folder), ["19411210.json.gz", "leaders.json.gz"])
         self.assertEqual(app.history_dir, folder)
         self.assertIn("10 Dec 41 recorded", app.history_status.get())
         self.assertIn("grand-campaign", app.history_info.get())
@@ -2463,6 +2463,68 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertFalse(app.history_base_box.cget("values"))
         app.history_filter_var.set("pearl")
         self.assertTrue(app.history_base_box.cget("values"))
+
+    def test_history_events_view(self):
+        import witpae_editor
+        from witpae import history
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        folder = os.path.join(self.history_root, "grand-campaign")
+        snap = history.read_snapshot(os.path.join(folder, "19411210.json.gz"))
+        # An older turn without the event keys, and a later one where Pearl Harbor falls and the Lexington sinks.
+        history.write_snapshot(folder, dict({k: v for k, v in snap.items() if k not in history.EVENT_KEYS},
+                                            date=411209, turn=3))
+        history.write_snapshot(folder, dict(snap, date=411211, turn=5, places=dict(snap["places"], **{"584": 0}),
+                                            ships=dict(snap["ships"], **{"3002": history.SHIP_SUNK})))
+        history._write_gzip_json(folder, history.LEADER_LOG, {
+            "version": 1, "date": 411211, "ratings": {}, "changes": [[411211, 27701, "30" * 7, "31" + "30" * 6]]})
+        app.load_history_view()
+        app.history_view_var.set("Events")
+        app._show_history_view()
+        self.root.update()
+        tree = app.history_tree
+        self.assertEqual(list(tree["displaycolumns"]), ["date", "kind", "side", "subject", "detail"])
+        self.assertEqual(app.history_chart.winfo_manager(), "")  # no chart in this view
+        self.assertEqual(app.history_event_count.get(), "3 events")
+        self.assertEqual([tree.set(i, "kind") for i in tree.get_children()],
+                         ["Base captured", "Ship sunk", "Leader skill changed"])
+        self.assertEqual(tree.set("2", "detail"), "Leadership 48 -> 49")
+        self.assertEqual(tree.set("0", "detail"), "Allied -> Japanese")
+        self.assertEqual((tree.set("0", "date"), tree.set("0", "side"), tree.set("0", "subject")),
+                         ("11 Dec 41", "Japanese", "Pearl Harbor"))
+        self.assertIn("1 of 3 recorded turns", app.history_note.get())
+        self.assertIn("older editor", app.history_note.get())
+        app.history_kind_var.set("Ship sunk")
+        app.refresh_history_view()
+        self.assertEqual(app.history_event_count.get(), "1 event")
+        app.history_kind_var.set("All")
+        app.history_event_side_var.set("Japanese")
+        app.refresh_history_view()
+        self.assertEqual(app.history_event_count.get(), "1 event")
+        app.history_event_side_var.set("All")
+        app.history_turns_var.set("Last 7")
+        app.refresh_history_view()
+        self.assertEqual(app.history_event_count.get(), "3 events")  # the turn without keys adds none
+        # Double-click opens the subject.
+        tree.selection_set("0")
+        app.open_history_event()
+        self.assertEqual(app.notebook.select(), str(app.bases_tab))
+        self.assertEqual(app.tree.selection(), ("584",))
+        app.notebook.select(app.history_tab)
+        tree.selection_set("1")
+        app.open_history_event()
+        self.assertEqual(app.notebook.select(), str(app.shiprec_tab))
+        self.assertEqual(app.shiprec_tree.selection(), ("3002",))
+        app.notebook.select(app.history_tab)
+        tree.selection_set("2")
+        app.open_history_event()
+        self.assertEqual(app.notebook.select(), str(app.leaders_tab))
+        self.assertEqual(app.ldr_tree.selection(), ("27701",))
+        # Other views bring the chart back.
+        app.history_view_var.set("Sides")
+        app._show_history_view()
+        self.assertEqual(app.history_chart.winfo_manager(), "pack")
+        self.assertEqual(app.history_note.get(), "")
 
     def test_history_aircraft_view(self):
         import witpae_editor
@@ -2584,7 +2646,7 @@ class GuiSmokeTests(unittest.TestCase):
         with mock.patch.object(witpae_editor.messagebox, "askyesno", return_value=True):
             app.delete_history_turn()
         self.assertEqual(tree.get_children(), ())
-        self.assertEqual(os.listdir(app.history_dir), [])
+        self.assertEqual(os.listdir(app.history_dir), ["leaders.json.gz"])  # deleting a turn leaves the leader log
         self.assertIn("deleted", app.history_status.get())
 
 
