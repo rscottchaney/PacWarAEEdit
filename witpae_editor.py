@@ -13,7 +13,7 @@ import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from witpae import (aircraft, airgroups, airproduction, alerts, bases, chart, combat, factories, history, industry, intel, landunits, lcuproduction, leaders, losses, mapview, minefields,
+from witpae import (aircraft, airgroups, airproduction, alerts, bases, chart, combat, factories, history, industry, intel, landunits, lcuproduction, lcutargets, leaders, losses, mapview, minefields,
                     pilotpool, planeart, regions, reports, shipproduction, shiprecords, shiprepair, ships, taskforces, victory)
 from witpae.container import SaveFile, SaveFormatError
 from witpae.fileio import is_pbem, save_with_backup
@@ -309,6 +309,38 @@ LCU_NOTE = (
     "charge; Allied units are fed from their device pools, so production is only shown for the Japanese. Days to "
     "arrival is the i16 at offset 564 of the land unit and the load cost the i16 at 28 of the device record: not "
     "yet checked in the game.")
+
+LCUT_ALL = "All"
+LCUT_TARGETS = ("All", "Enemy bases", "Own bases")
+LCUT_TARGET_COLUMNS = [
+    ("name", "Target", 170, False, lambda s: s.name),
+    ("owner", "Owner", 75, False, lambda s: s.side),
+    ("units", "Units", 60, True, lambda s: s.units),
+    ("preparing", "Preparing", 75, True, lambda s: s.preparing),
+    ("marching", "Marching", 75, True, lambda s: s.marching),
+    ("aboard", "Aboard", 65, True, lambda s: s.aboard),
+    ("ready", "Fully prepared", 95, True, lambda s: s.ready),
+    ("nearest", "Nearest (hexes)", 100, True, lambda s: -1 if s.nearest is None else s.nearest),
+]
+LCUT_TARGET_COLUMN_BY_ID = {c[0]: c for c in LCUT_TARGET_COLUMNS}
+LCUT_TARGET_TEXT = {"nearest": lambda v: "-" if v < 0 else _num(v)}
+LCUT_UNIT_COLUMNS = [
+    ("name", "Unit", 220, False, lambda r: r.name),
+    ("side", "Side", 75, False, lambda r: r.side),
+    ("status", "Status", 100, False, lambda r: r.status),
+    ("parts", "Parts", 50, True, lambda r: r.parts),
+    ("location", "Location", 190, False, lambda r: r.location),
+    ("prep", "Prep %", 65, True, lambda r: r.prep),
+    ("distance", "Distance", 70, True, lambda r: -1 if r.distance is None else r.distance),
+]
+LCUT_UNIT_TEXT = {"distance": lambda v: "-" if v < 0 else _num(v)}
+LCUT_NOTE = (
+    "The target is the unit's objective in its save record: a march destination or a prep target. Units already at "
+    "their target are not listed. A unit loaded on several ships is stored as one part per ship and shown as one "
+    "row (Parts), with the lowest prep % and distance of its parts. Prep % rises daily while a unit stays put and is "
+    "frozen while it is aboard a ship. Aboard ship means loaded on the named transport; its distance is measured from the ship's hex. Distance is a "
+    "straight line over the hexes. The offsets (prep 104, aboard 1115, ship 666) are read from saves and not yet "
+    "checked on game screens.")
 
 LOSSES_ALL = "All"
 LOSSES_VIEWS = ("Ships sunk", "Aircraft")
@@ -933,6 +965,10 @@ class EditorApp:
         self.lcu_unit_sort_reverse = True
         self.lcu_device_sort_col = "armament"
         self.lcu_device_sort_reverse = True
+        self.lcut_rows = []
+        self.lcut_shown = []
+        self.lcut_sort_col = None
+        self.lcut_sort_reverse = False
         self.losses_sunk_all = []
         self.losses_aircraft_all = []
         self.losses_summary = []
@@ -1161,6 +1197,7 @@ class EditorApp:
 
         self._build_production_report()
         self._build_lcu_report()
+        self._build_lcu_targets_report()
         self._build_industry_reports()
         self._build_air_reports()
         self._build_compare_report()
@@ -1245,6 +1282,32 @@ class EditorApp:
         self.lcu_device_tree = self._report_tree(self.lcu_device_frame, LCU_DEVICE_COLUMNS,
                                                  self.sort_lcu_devices_by, ("name", "type", "kind"), lambda: None)
         self._show_lcu_view()
+
+    def _build_lcu_targets_report(self):
+        tab = ttk.Frame(self.reports_notebook, padding=4)
+        self.reports_notebook.add(tab, text="LCU targets")
+        ttk.Label(tab, text=LCUT_NOTE, wraplength=1100, justify="left").pack(side="bottom", anchor="w", pady=(4, 0))
+        bar = ttk.Frame(tab)
+        bar.pack(side="top", fill="x")
+        self.lcut_side_var = tk.StringVar(value=LCUT_ALL)
+        self._report_combo(bar, "Side:", self.lcut_side_var, [LCUT_ALL, "Allied", "Japanese"],
+                           self.refresh_lcu_targets, 9)
+        self.lcut_target_var = tk.StringVar(value=LCUT_TARGETS[0])
+        self._report_combo(bar, "Targets:", self.lcut_target_var, LCUT_TARGETS, self.show_lcu_targets, 12)
+        self.lcut_status_var = tk.StringVar(value=LCUT_ALL)
+        self._report_combo(bar, "Status:", self.lcut_status_var, [LCUT_ALL, *lcutargets.STATUSES],
+                           self.show_lcu_targets, 12)
+        self.lcut_count = tk.StringVar()
+        ttk.Label(bar, textvariable=self.lcut_count).pack(side="left", padx=8)
+        low = ttk.LabelFrame(tab, text="Units of the selected target (double-click to open the unit)", padding=2)
+        low.pack(side="bottom", fill="both", expand=True, pady=(4, 0))
+        self.lcut_unit_tree = self._report_tree(low, LCUT_UNIT_COLUMNS, lambda c: None,
+                                                ("name", "side", "status", "location"), self.jump_to_lcu_target_unit)
+        top = ttk.Frame(tab)
+        top.pack(side="top", fill="both", expand=True, pady=(4, 0))
+        self.lcut_tree = self._report_tree(top, LCUT_TARGET_COLUMNS, self.sort_lcu_targets_by, ("name", "owner"),
+                                           lambda: self.jump_to_industry_place(self.lcut_tree))
+        self.lcut_tree.bind("<<TreeviewSelect>>", lambda e: self.show_lcu_target_units())
 
     def _show_lcu_view(self):
         units = self.lcu_view_var.get() == LCU_VIEWS[0]
@@ -4416,6 +4479,7 @@ class EditorApp:
         self.refresh_upgrade_list()
         self.refresh_production_reports()
         self.refresh_lcu_reports()
+        self.refresh_lcu_targets()
         self.refresh_industry_report()
         self.refresh_factory_report()
         self.refresh_raw_list()
@@ -4564,18 +4628,72 @@ class EditorApp:
         self.lcu_device_sort_col = col
         self.refresh_lcu_list()
 
-    def jump_to_lcu_unit(self):
-        sel = self.lcu_unit_tree.selection()
-        if not sel:
-            return
-        iid = sel[0]
+    def refresh_lcu_targets(self):
+        """Recompute the rows from the save for the chosen side; the other filters only re-select."""
+        try:
+            self.lcut_rows = lcutargets.target_rows(self.save, self.lcut_side_var.get())
+        except (SaveFormatError, IndexError):
+            self.lcut_rows = []
+        self.show_lcu_targets()
+
+    def show_lcu_targets(self):
+        kind, status = self.lcut_target_var.get(), self.lcut_status_var.get()
+        rows = [r for r in self.lcut_rows if status in (LCUT_ALL, r.status)
+                and (kind == LCUT_TARGETS[0] or r.enemy == (kind == LCUT_TARGETS[1]))]
+        self.lcut_shown = lcutargets.group_parts(rows)
+        summaries = lcutargets.target_summaries(rows)
+        if self.lcut_sort_col is not None:
+            summaries.sort(key=lambda s: self._industry_sort_key(LCUT_TARGET_COLUMN_BY_ID, self.lcut_sort_col, s,
+                                                                 s.target_id), reverse=self.lcut_sort_reverse)
+        tree = self.lcut_tree
+        selected = tree.selection()
+        tree.delete(*tree.get_children())
+        for s in summaries:
+            tree.insert("", "end", iid=str(s.target_id),
+                        values=self._report_values(LCUT_TARGET_COLUMNS, LCUT_TARGET_TEXT, s))
+        keep = [i for i in selected if tree.exists(i)]
+        if keep:
+            tree.selection_set(keep)
+        self.show_lcu_target_units()
+        units = sum(s.units for s in summaries)
+        self.lcut_count.set(f"{len(summaries)} target{'' if len(summaries) == 1 else 's'}, "
+                            f"{units} unit{'' if units == 1 else 's'} ({len(rows)} records)")
+
+    def show_lcu_target_units(self):
+        sel = self.lcut_tree.selection()
+        tree = self.lcut_unit_tree
+        tree.delete(*tree.get_children())
+        for r in self.lcut_shown:
+            if not sel or str(r.target_id) == sel[0]:
+                tree.insert("", "end", iid=str(r.unit_id),
+                            values=self._report_values(LCUT_UNIT_COLUMNS, LCUT_UNIT_TEXT, r))
+
+    def sort_lcu_targets_by(self, col):
+        self.lcut_sort_reverse = (not self.lcut_sort_reverse) if col == self.lcut_sort_col else False
+        self.lcut_sort_col = col
+        self.show_lcu_targets()
+
+    def jump_to_lcu_target_unit(self):
+        sel = self.lcut_unit_tree.selection()
+        if sel:
+            self._select_land_unit(sel[0])
+
+    def _select_land_unit(self, iid):
+        """Show a land unit in the Land Units tab, clearing its filters when they hide it."""
         if not self.unit_tree.exists(iid):
             self.unit_search_var.set("")
             self.unit_side_var.set("All")
             self.refresh_unit_list()
+        if not self.unit_tree.exists(iid):
+            return
         self.notebook.select(self.units_tab)
         self.unit_tree.selection_set(iid)
         self.unit_tree.see(iid)
+
+    def jump_to_lcu_unit(self):
+        sel = self.lcu_unit_tree.selection()
+        if sel:
+            self._select_land_unit(sel[0])
 
     def refresh_losses_reports(self):
         """Recompute the rows and the summary from the save; the side, view and search only re-select."""

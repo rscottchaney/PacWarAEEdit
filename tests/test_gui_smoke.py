@@ -1588,6 +1588,61 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertEqual(app.unit_tree.selection(), (unit_id,))
         self.assertEqual(app.unit_search_var.get(), "")
 
+    def test_lcu_targets_report(self):
+        import witpae_editor
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        app.notebook.select(app.reports_tab)
+        self.root.update()
+        tabs = [app.reports_notebook.tab(t, "text") for t in app.reports_notebook.tabs()]
+        self.assertEqual(tabs.index("LCU targets"), tabs.index("LCU production") + 1)
+        top, low = app.lcut_tree, app.lcut_unit_tree
+        self.assertEqual(len(top.get_children()), 103)
+        self.assertEqual(len(low.get_children()), 400)
+        self.assertEqual(app.lcut_count.get(), "103 targets, 398 units (584 records)")
+        # The first row is the enemy target with the most units; selecting it narrows the unit table.
+        first = top.get_children()[0]
+        self.assertEqual((top.set(first, "name"), top.set(first, "owner"), top.set(first, "units")),
+                         ("Vigan", "Allied", "18"))
+        top.selection_set(first)
+        self.root.update()
+        self.assertEqual(len(low.get_children()), 18)
+        self.assertIn("Parts", [low.heading(c, "text") for c in low["columns"]])
+        # Filters.
+        app.lcut_side_var.set("Allied")
+        app.refresh_lcu_targets()
+        self.assertEqual(app.lcut_count.get(), "54 targets, 161 units (177 records)")
+        app.lcut_side_var.set("All")
+        app.refresh_lcu_targets()
+        app.lcut_target_var.set("Own bases")
+        app.show_lcu_targets()
+        self.assertEqual(app.lcut_count.get(), "61 targets, 238 units (326 records)")
+        app.lcut_target_var.set("All")
+        app.lcut_status_var.set("On the march")
+        app.show_lcu_targets()
+        self.assertEqual(app.lcut_count.get(), "7 targets, 10 units (10 records)")
+        app.lcut_status_var.set("All")
+        app.show_lcu_targets()
+        # Sorting the target table.
+        app.sort_lcu_targets_by("units")
+        values = [int(top.set(i, "units")) for i in top.get_children()]
+        self.assertEqual(values, sorted(values))
+        # Double-click target: the Bases tab; double-click unit: the Land Units tab with its filters cleared.
+        unit_id = low.get_children()[0]
+        app.unit_search_var.set("zzz")
+        app.unit_side_var.set("Allied")
+        low.selection_set(unit_id)
+        app.jump_to_lcu_target_unit()
+        self.root.update()
+        self.assertEqual(app.notebook.select(), str(app.units_tab))
+        self.assertEqual(app.unit_tree.selection(), (unit_id,))
+        self.assertEqual(app.unit_search_var.get(), "")
+        app.notebook.select(app.reports_tab)
+        top.selection_set(first)
+        app.jump_to_industry_place(top)
+        self.assertEqual(app.notebook.select(), str(app.bases_tab))
+        self.assertEqual(app.tree.selection(), (first,))
+
     def test_losses_report(self):
         import witpae_editor
         app = witpae_editor.EditorApp(self.root)

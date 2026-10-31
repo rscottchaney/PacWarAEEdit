@@ -193,13 +193,17 @@ def group_hex(save, group):
         return bases.place_hex(save, loc)
     if loc < SHIP_LOCATION_BASE:
         return None
-    ship = loc - SHIP_LOCATION_BASE
-    if not taskforces._ship_exists(save, ship):
+    return ship_hex(save, loc - SHIP_LOCATION_BASE)
+
+
+def ship_hex(save, ship_id):
+    """(x, y) of a ship: its task force's hex, else its port's, else None (also for an unknown ship)."""
+    if not taskforces._ship_exists(save, ship_id):
         return None
-    tf = taskforces._ship(save, ship, shiprecords.TASK_FORCE_OFFSET)
+    tf = taskforces._ship(save, ship_id, shiprecords.TASK_FORCE_OFFSET)
     if tf and taskforces.is_task_force(save, tf):
         return bases.place_hex(save, tf)
-    port = taskforces._ship(save, ship, shiprecords.BASE_OFFSET)
+    port = taskforces._ship(save, ship_id, shiprecords.BASE_OFFSET)
     return bases.place_hex(save, port) if bases.is_place(save, port) else None
 
 
