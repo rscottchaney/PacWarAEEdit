@@ -2443,7 +2443,9 @@ class GuiSmokeTests(unittest.TestCase):
                 counts[overlay] = len(app.map_canvas.find_withtag("overlay"))
                 self.assertTrue(app.map_info.get().startswith(
                     {"Locations": "1052", "Search arcs": "173", "Task forces": "236",
-                     "Support": "664 hexes with land units (359 short", "Combat": "1"}[overlay]
+                     "Support": "664 hexes with land units (359 short",
+                     "Supply": "665 hexes with supply (10 lacking, 10 with units short, 2 spoiling)",
+                     "Combat": "1"}[overlay]
                 ), (overlay, app.map_info.get()))
             self.assertTrue(all(counts.values()), counts)
             self.assertEqual(str(app.map_side_box.cget("state")), "disabled")  # Side does not apply to combat
@@ -2505,6 +2507,28 @@ class GuiSmokeTests(unittest.TestCase):
                          if (m.side, m.x, m.y) == (short.side, short.x, short.y))
             self.assertGreater(after.support, short.support)
             self.assertIn(f"support {after.support}, needed {after.needed}", app.map_detail.get("1.0", "end"))
+            # Supply: a lacking hex lists the nearest supply, and a Supplies edit through apply_unit refreshes it.
+            app.map_overlay_var.set("Supply")
+            app._map_overlay_changed()
+            self.assertEqual(len(app.map_canvas.find_withtag("overlay")), 665 + 10 + 2)  # bars, rings, triangles
+            lacking = next(m for m in mapview.supply_marks(app.save) if m.available < m.required and m.units)
+            app.show_map_hex(lacking.x, lacking.y)
+            text = app.map_detail.get("1.0", "end")
+            self.assertIn("Supply:", text)
+            self.assertIn("Nearest supply (straight line):", text)
+            self.assertIn("short", text)
+            app.notebook.select(app.units_tab)
+            self.root.update()
+            u = app.units[lacking.units[0].id]
+            app.unit_tree.selection_set(str(u.id))
+            self.root.update()
+            app.map_stale = False
+            app.unit_vars["supplies"].set(str(u.get("supplies") + 1))
+            app.apply_unit()
+            self.assertTrue(app.map_stale)
+            self.assertTrue(all(k[0] != "supply" for k in app.map_cache))
+            app.notebook.select(app.map_tab)
+            self.root.update()
             app.show_map_hex(0, 0)
             self.assertIn("Nothing here", app.map_detail.get("1.0", "end"))
             app.map_find_var.set("no such place")

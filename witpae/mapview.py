@@ -23,13 +23,22 @@ Support uses the editor's estimate from current equipment, the same one the Land
 per non-support element; Support and Motorized Support supply it; Aviation and Naval Support neither supply nor need
 it. That estimate reflects unsaved edits, but it is not the game's stored per-unit value and matches it on most
 units, not all. Units are placed by their own record hex; those at (0,0) are left out.
+
+Supply compares, per side and hex, the supply available with the supply required, as WitpStaff does. A base's
+requirement already includes that of the land units based there (their location is the base), so those units' own
+stock is not added; units in the hex but not based there (on the march, or at location 0) add both their supplies and
+their requirement. A hex with no base of its side sums its units. Supply carried on ships is not counted. A hex is
+shown when something is required there, when a unit is short of supplies, or when its base spoils supply (supply over
+the limit of reports.spoilage_limits); a hex that only holds supply that nothing needs is left out. The bar is
+quadratic like WitpStaff's: a surplus of 100000 is 1.5 hexes (45000 = 1), a lack of 10000 is 1.5 hexes (4400 = 1). The
+nearest supply is a straight line over the hexes and ignores terrain, sea and enemy territory.
 """
 
 import math
 import os
 from collections import namedtuple
 
-from . import aircraft, airgroups, bases, landunits, planeart, regions, shiprecords, taskforces
+from . import aircraft, airgroups, bases, landunits, planeart, regions, reports, shiprecords, taskforces
 
 COLUMNS, ROWS = 7, 6
 STYLES = {"Hexes": "WPEH", "No hexes": "WPEN"}
@@ -44,6 +53,8 @@ TaskForceMark = namedtuple("TaskForceMark", "id name side x y mission ships dest
 CombatMark = namedtuple("CombatMark", "date kind phase place x y title action")
 UnitSupport = namedtuple("UnitSupport", "id name side x y support needed")
 SupportMark = namedtuple("SupportMark", "side x y support needed units")
+UnitSupply = namedtuple("UnitSupply", "id name side x y supplies required short at_base")
+SupplyMark = namedtuple("SupplyMark", "side x y base available required short_units spoiling units")
 
 
 # ---- hexes ---------------------------------------------------------------
@@ -240,18 +251,23 @@ def combat_marks(actions, kind="All"):
             for a in actions if a.x is not None and a.y is not None and kind in ("All", a.kind)]
 
 
+def _units_on_map(save, side):
+    """(land unit, x, y) of the arrived units of a side that are on the map, by the unit's own record hex."""
+    for u in landunits.list_land_units(save):
+        if not u.arrived or not _side_ok(u.side, side):
+            continue
+        x, y = u._i16(bases.X_OFFSET), u._i16(bases.Y_OFFSET)
+        if (x, y) != (0, 0):  # (0,0) is not on the map
+            yield u, x, y
+
+
 def unit_support(save, side="All"):
     """UnitSupports of the arrived land units that are on the map, by the unit's own record hex.
 
     Not the location's hex: units on the march and field units at location 0 are really in their hex.
     """
     out = []
-    for u in landunits.list_land_units(save):
-        if not u.arrived or not _side_ok(u.side, side):
-            continue
-        x, y = u._i16(bases.X_OFFSET), u._i16(bases.Y_OFFSET)
-        if (x, y) == (0, 0):  # not on the map
-            continue
+    for u, x, y in _units_on_map(save, side):
         support, needed = u.support_estimate()
         out.append(UnitSupport(u.id, u.display_name, u.side, x, y, support, needed))
     return out
@@ -278,15 +294,87 @@ def support_bar(diff):
     return min(1.5, math.sqrt(abs(diff) / 230)) if diff else 0
 
 
-INDEX_CATEGORIES = ("Places", "Land units", "Support", "Task forces", "Air groups searching", "Combat")
+SUPPLY_SURPLUS_SCALE = 44444  # a surplus of 100000 is 1.5 hexes
+SUPPLY_LACK_SCALE = 4444  # a lack of 10000 is 1.5 hexes
+
+
+def supply_marks(save, side="All"):
+    """SupplyMarks per (side, hex) with a base, a town or land units, sorted by x, y, side.
+
+    With a base (or town) of the side in the hex, available is its supply plus the supplies of the hex's units that
+    are not based there, and required its requirement plus theirs; units based there are already in the base's
+    requirement. Without one, both are sums over the units. Two places of one side in a hex are summed. A hex is kept
+    when required > 0, a unit is short, or the base spoils supply; one that only holds unneeded supply is left out.
+    """
+    groups = {}
+    for b in bases.list_bases(save, include_towns=True):
+        if _side_ok(b.side, side):
+            groups.setdefault((b.side, b.x, b.y), ([], []))[0].append(b)
+    for u, x, y in _units_on_map(save, side):
+        groups.setdefault((u.side, x, y), ([], []))[1].append(u)
+    spoiling = {id(r.base) for r in reports.spoilage_rows([b for bs, _ in groups.values() for b in bs])
+                if r.supply_over > 0}
+    out = []
+    for (s, x, y), (places, land) in sorted(groups.items(), key=lambda kv: (kv[0][1], kv[0][2], kv[0][0])):
+        ids = {b.id for b in places}
+        available = sum(b.get("supply") for b in places)
+        required = sum(b.get("supply_required") for b in places)
+        units = []
+        for u in land:
+            at_base = u.location_id in ids
+            if not at_base:
+                available += u.get("supplies")
+                required += u.supplies_required
+            units.append(UnitSupply(u.id, u.display_name, u.side, x, y, u.get("supplies"), u.supplies_required,
+                                    u.supplies_short, at_base))
+        short_units = sum(u.short for u in units)
+        spoils = any(id(b) in spoiling for b in places)
+        if required > 0 or short_units or spoils:
+            out.append(SupplyMark(s, x, y, places[0] if places else None, available, required, short_units, spoils,
+                                  units))
+    return out
+
+
+def supply_bar(diff):
+    """Bar length in hexes for available minus required supply, quadratic as in WitpStaff and asymmetric, max 1.5."""
+    if diff > 0:
+        return min(1.5, math.sqrt(diff / SUPPLY_SURPLUS_SCALE))
+    return min(1.5, math.sqrt(-diff / SUPPLY_LACK_SCALE))
+
+
+def hex_distance(a, b):
+    """Number of hexes between (x, y) pairs a and b on the offset grid (odd rows shifted half a hex right)."""
+    def cube(x, y):
+        return x - (y - (y & 1)) // 2, y
+    (q1, r1), (q2, r2) = cube(*a), cube(*b)
+    dq, dr = q1 - q2, r1 - r2
+    return max(abs(dq), abs(dr), abs(dq + dr))
+
+
+def nearest_supply(save, side, x, y, count=3, minimum=20000):
+    """Up to count (base, surplus, distance) of the side's bases and towns with more than minimum spare supply.
+
+    Nearest first by straight-line hex_distance, which ignores terrain, sea and enemy territory (as in WitpStaff).
+    The hex (x, y) itself is excluded.
+    """
+    found = []
+    for b in bases.list_bases(save, include_towns=True):
+        surplus = b.get("supply") - b.get("supply_required")
+        if b.side == side and surplus > minimum and (b.x, b.y) != (x, y):
+            found.append((b, surplus, hex_distance((x, y), (b.x, b.y))))
+    found.sort(key=lambda t: (t[2], -t[1]))
+    return found[:count]
+
+
+INDEX_CATEGORIES = ("Places", "Land units", "Support", "Supply", "Task forces", "Air groups searching", "Combat")
 
 
 def hex_index(save, actions):
     """{(x, y): {category: [mark, ...]}} of everything the overlays can show, for the click report.
 
     Places are bases and towns, Land units and Support are the arrived land units on the map and the totals of their
-    hexes (both sides), Air groups searching are SearchArcs of both kinds (a group on both patrols is listed
-    twice), Combat is every action with a hex.
+    hexes (both sides), Supply is the SupplyMarks of both sides, Air groups searching are SearchArcs of both kinds
+    (a group on both patrols is listed twice), Combat is every action with a hex.
     """
     index = {}
 
@@ -297,6 +385,7 @@ def hex_index(save, actions):
     add("Places", location_marks(save, include_towns=True))
     add("Land units", unit_support(save))
     add("Support", support_marks(save))
+    add("Supply", supply_marks(save))
     add("Task forces", task_force_marks(save))
     add("Air groups searching", search_arcs(save, "Naval") + search_arcs(save, "ASW"))
     add("Combat", combat_marks(actions))
