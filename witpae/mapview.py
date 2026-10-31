@@ -32,13 +32,28 @@ shown when something is required there, when a unit is short of supplies, or whe
 the limit of reports.spoilage_limits); a hex that only holds supply that nothing needs is left out. The bar is
 quadratic like WitpStaff's: a surplus of 100000 is 1.5 hexes (45000 = 1), a lack of 10000 is 1.5 hexes (4400 = 1). The
 nearest supply is a straight line over the hexes and ignores terrain, sea and enemy territory.
+
+Transport ports WitpStaff's naval transport map: per port (a base or town with port size > 0), the shipping
+capacity in harbour against what waits there to be shipped. Rules are from the game manual (6.3.2, task force
+loading). A land unit needs troop space for its squads (device types 23 and 24, load x count) and cargo space for
+all other equipment by load cost: light (load 4 or less) 1x, medium (5 to 8) 2x, heavy (9 and up) 3x; vehicles
+(types 22 and 25, which includes Motorized Support) are always heavy. Capacity comes from the ship class (troop,
+cargo and fuel/oil), counted for arrived ships only: a ship is in harbour when docked at the port or in a task force
+whose hex is the port's hex (a TF at sea in that hex counts, which is close enough). Carriers, SSX, AE, AKE, AO, AGC,
+LCI(G), LCI(M), LCI(R) and LSM(R) never use their troop or cargo space, so only their liquid capacity counts. Space
+already taken by cargo is not known and is ignored. Troops mode: waiting are the land units based at the port that
+are neither embarked nor on the march and have a target other than the port; WitpStaff warns that such units may not
+really want ships and so does this heuristic. Bulk mode: waiting are the port's resources, oil, fuel and supply
+surplus (supply over supply required).
 """
 
 import math
 import os
+import struct
 from collections import namedtuple
 
-from . import aircraft, airgroups, bases, landunits, planeart, regions, reports, shiprecords, taskforces
+from . import (aircraft, airgroups, bases, landunits, lcuproduction, planeart, regions, reports, shiprecords, ships,
+               taskforces)
 
 COLUMNS, ROWS = 7, 6
 STYLES = {"Hexes": "WPEH", "No hexes": "WPEN"}
@@ -55,6 +70,8 @@ UnitSupport = namedtuple("UnitSupport", "id name side x y support needed")
 SupportMark = namedtuple("SupportMark", "side x y support needed units")
 UnitSupply = namedtuple("UnitSupply", "id name side x y supplies required short at_base")
 SupplyMark = namedtuple("SupplyMark", "side x y base available required short_units spoiling units")
+TransportUnit = namedtuple("TransportUnit", "id name troop cargo target")
+TransportMark = namedtuple("TransportMark", "side x y base mode available need units ships stock")
 
 
 # ---- hexes ---------------------------------------------------------------
@@ -370,14 +387,155 @@ def nearest_supply(save, side, x, y, count=3, minimum=20000):
     return found[:count]
 
 
-INDEX_CATEGORIES = ("Places", "Land units", "Support", "Supply", "Task forces", "Air groups searching", "Combat")
+# Loads and capacities are in the same units (the game's load screen sets one against the other). Measured on the
+# sample save: waiting loads are 150 to 17500 (median 3300) and port capacity has a median of 30000 and up to
+# 180000, so at 2000 three quarters of the capacity bars were maxed; 20000 leaves a third.
+TRANSPORT_TROOP_SCALE = 20000  # a load of 20000 is 1 hex (45000 or more is 1.5)
+TRANSPORT_BULK_SCALE = 50000  # a bulk of 50000 is 1 hex (112500 or more is 1.5); 7% of stocks and 10% of ships max
+TRANSPORT_MODES = ("Troops", "Bulk")
+# Ship types that never use their troop or cargo space (it is not for loading, or is magazine space).
+NO_TROOP_CARGO_TYPES = frozenset({"CVB", "CV", "CVL", "CVE", "SSX", "AE", "AKE", "AO", "AGC", "LCI(G)", "LCI(M)",
+                                  "LCI(R)", "LSM(R)"})
+LIGHT_LOAD, MEDIUM_LOAD = 4, 8  # equipment load cost limits; heavier is heavy
+SQUAD_TYPES = lcuproduction.SQUAD_TYPES
+HEAVY_TYPES = lcuproduction.VEHICLE_TYPES  # AFV and Vehicle (Motorized Support) are always heavy
+
+
+def equipment_cargo(device_type, load, count):
+    """Cargo space used by count devices: load x count, doubled when medium, tripled when heavy."""
+    if device_type in HEAVY_TYPES or load > MEDIUM_LOAD:
+        factor = 3
+    else:
+        factor = 1 if load <= LIGHT_LOAD else 2
+    return factor * load * count
+
+
+def unit_load(save, unit, devices=None):
+    """(troop, cargo) shipping space a land unit needs for its current equipment slots.
+
+    Squads (types 23 Squad and 24 Engineer) need troop space of load x count; other devices need cargo space by
+    equipment_cargo. devices is an lcuproduction._Devices cache to share between calls.
+    """
+    devices = devices or lcuproduction._Devices(save)
+    troop = cargo = 0
+    for k in range(landunits.SLOTS):
+        device_id = unit._i16(landunits.DEVICE_OFFSET + 2 * k)
+        count = unit._i16(landunits.COUNT_OFFSET + 2 * k)
+        d = devices.get(device_id) if device_id and count > 0 else None
+        if d is None:
+            continue
+        if d.type in SQUAD_TYPES:
+            troop += d.load * count
+        else:
+            cargo += equipment_cargo(d.type, d.load, count)
+    return troop, cargo
+
+
+def ship_capacity(save, rec, cache=None):
+    """(troop, cargo, liquid) capacity of a ship record's class; troop and cargo are 0 for NO_TROOP_CARGO_TYPES."""
+    cid = rec.class_id
+    if cache is not None and cid in cache:
+        return cache[cid]
+    start = rec._class_start()
+    if start is None:
+        caps = (0, 0, 0)
+    else:
+        data = save[ships.SHIP_SECTION].data
+        troop, cargo, liquid = (struct.unpack_from("<h", data, start + ships.FIELD_BY_NAME[n].offset)[0]
+                                for n in ("troop_capacity", "bulk_cargo", "liquid_cargo"))
+        caps = (0, 0, liquid) if rec.type in NO_TROOP_CARGO_TYPES else (troop, cargo, liquid)
+    if cache is not None:
+        cache[cid] = caps
+    return caps
+
+
+def harbour_ships(save, side="All"):
+    """(records, docked, in_hex) of the arrived ships of a side (sunk ships are not arrived): {ship id: record},
+    {place id: {ship id}} of ships docked at a place and {(x, y): {ship id}} of ships in task forces by TF hex."""
+    recs = {r.id: r for r in shiprecords.list_ship_records(save) if r.arrived and _side_ok(r.side, side)}
+    docked, in_hex = {}, {}
+    for r in recs.values():
+        if bases.is_place(save, r.base_id):
+            docked.setdefault(r.base_id, set()).add(r.id)
+    for tf in taskforces.list_task_forces(save):
+        in_hex.setdefault(tf.hex, set()).update(i for i in tf.ships if i in recs)
+    return recs, docked, in_hex
+
+
+def transport_marks(save, mode="Troops", side="All"):
+    """TransportMarks per port (a base or town with port size > 0), sorted by x, y, side; none when both are 0.
+
+    available is (troop, cargo, liquid) capacity of the arrived ships of the port's side in harbour (docked there,
+    or in a task force in its hex, even at sea), per ship_capacity, and ships their number. Troops mode: need is the
+    troop plus cargo load of the units waiting (units at the port, not embarked or on the march, targeting another
+    place; they may not really want ships) and the bar compares it with troop plus cargo capacity. Bulk mode: need
+    is the stock (resources, oil, fuel, supply surplus) and the bar compares it with cargo plus liquid capacity.
+    Space already used by loaded cargo is not known and is ignored.
+    """
+    from . import lcutargets  # imports this module
+    if mode not in TRANSPORT_MODES:
+        raise ValueError(f"unknown transport mode {mode!r}")
+    recs, docked, in_hex = harbour_ships(save, side)
+    waiting = {}
+    if mode == "Troops":
+        preparing = {r.unit_id: r for r in lcutargets.target_rows(save, side) if r.status == lcutargets.PREPARING}
+        devices = lcuproduction._Devices(save)
+        for u in landunits.list_land_units(save):
+            row = preparing.get(u.id)
+            if row is not None and u.location_id > 0:
+                troop, cargo = unit_load(save, u, devices)
+                if troop or cargo:
+                    waiting.setdefault((u.side, u.location_id), []).append(
+                        TransportUnit(u.id, u.display_name, troop, cargo, row.target_name))
+    caps = {}
+    out = []
+    for b in bases.list_bases(save, include_towns=True):
+        if not _side_ok(b.side, side) or b.get("port") <= 0:
+            continue
+        ids = {i for i in docked.get(b.id, set()) | in_hex.get((b.x, b.y), set()) if recs[i].side == b.side}
+        troop = cargo = liquid = 0
+        for i in ids:
+            t, c, li = ship_capacity(save, recs[i], caps)
+            troop, cargo, liquid = troop + t, cargo + c, liquid + li
+        if mode == "Troops":
+            units = waiting.get((b.side, b.id), [])
+            stock = ()
+            need = sum(u.troop + u.cargo for u in units)
+        else:
+            units = []
+            stock = (b.get("resources"), b.get("oil"), b.get("fuel"),
+                     max(0, b.get("supply") - b.get("supply_required")))
+            need = sum(stock)
+        available = (troop, cargo, liquid)
+        if not any(available) and not need:
+            continue
+        out.append(TransportMark(b.side, b.x, b.y, b, mode, available, need, units, len(ids), stock))
+    out.sort(key=lambda m: (m.x, m.y, m.side))
+    return out
+
+
+def transport_capacity(mark):
+    """The capacity a mark's bar shows: troop plus cargo in Troops mode, cargo plus liquid in Bulk mode."""
+    troop, cargo, liquid = mark.available
+    return troop + cargo if mark.mode == "Troops" else cargo + liquid
+
+
+def transport_bar(value, mode="Troops"):
+    """Bar length in hexes for a load (Troops) or bulk amount: quadratic like the others, capped at 1.5."""
+    scale = TRANSPORT_TROOP_SCALE if mode == "Troops" else TRANSPORT_BULK_SCALE
+    return min(1.5, math.sqrt(max(0, value) / scale))
+
+
+INDEX_CATEGORIES = ("Places", "Land units", "Support", "Supply", "Transport", "Task forces", "Air groups searching",
+                    "Combat")
 
 
 def hex_index(save, actions):
     """{(x, y): {category: [mark, ...]}} of everything the overlays can show, for the click report.
 
     Places are bases and towns, Land units and Support are the arrived land units on the map and the totals of their
-    hexes (both sides), Supply is the SupplyMarks of both sides, Air groups searching are SearchArcs of both kinds
+    hexes (both sides), Supply is the SupplyMarks of both sides, Transport the marks of both
+    modes and sides, Air groups searching are SearchArcs of both kinds
     (a group on both patrols is listed twice), Combat is every action with a hex.
     """
     index = {}
@@ -390,6 +548,7 @@ def hex_index(save, actions):
     add("Land units", unit_support(save))
     add("Support", support_marks(save))
     add("Supply", supply_marks(save))
+    add("Transport", transport_marks(save, "Troops") + transport_marks(save, "Bulk"))
     add("Task forces", task_force_marks(save))
     add("Air groups searching", search_arcs(save, "Naval") + search_arcs(save, "ASW"))
     add("Combat", combat_marks(actions))

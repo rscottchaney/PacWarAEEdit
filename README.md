@@ -829,10 +829,28 @@ is read-only: nothing is written to the save or to the art.
   marks units short of supplies, and a pink triangle beside the bar a base that spoils supply. Clicking a hex that
   lacks supply or has units short also lists the nearest bases and towns of that side with more than 20000 spare,
   by straight-line distance in hexes (terrain, sea and the enemy are ignored). Supply carried on ships is not counted.
+- Transport: ports WitpStaff's naval transport view, per port (a base or town with port size above 0) two bars side
+  by side: green the shipping capacity in harbour, red what waits there to be shipped, on one scale so they compare
+  directly; the Mode filter picks Troops or Bulk. Capacity is that of the ship class (troop, cargo and fuel/oil),
+  for arrived ships of the port's side that are docked there or in a task force in the port's hex (a task force at
+  sea in that hex counts as in harbour). Carriers (CVB, CV, CVL, CVE), SSX, AE, AKE, AO, AGC, LCI(G), LCI(M), LCI(R)
+  and LSM(R) never use their troop or cargo space, so only their liquid capacity counts. Capacity already taken by
+  loaded cargo is not known and is ignored. Troops: the need is that of the land units at the port that are not
+  embarked or on the march and have a target other than the port, from their current equipment as the manual
+  (6.3.2) loads it: squads (Squad and Engineer devices) take troop space of load x count, other equipment cargo
+  space of load x count, doubled for medium (load 5 to 8) and tripled for heavy (9 and up); vehicles, AFVs and
+  Motorized Support are always heavy. Such a unit may not really want ships (WitpStaff warns of the same), so the
+  red bar is a heuristic. The green bar adds troop and cargo capacity. Bulk: the need is the port's resources, oil
+  and fuel plus its supply surplus (supply over what is required, never below 0) against cargo plus fuel/oil
+  capacity. The length is quadratic like the others: Troops 20000 is 1 hex and 45000 or more 1.5 (loads and
+  capacities are in the same units, but a busy port holds far more space than its units need),
+  Bulk 50000 is 1 hex and 112500 or more 1.5. Clicking a hex lists, for both modes, the ships and capacity, the
+  units waiting with their troop and cargo load and target, and the bulk stocks.
 - Combat: a diamond per action of the combat reports that has a hex, filtered by Kind (Submarine and ASW are the
   tracker's enemy subs) and Turns (Latest, Last 3, Last 7 or All).
 - Click a hex to ring it and list, below the map, the places, land units (with their support and need), support
-  totals, supply, task forces, air groups searching from it and combat actions in it, whatever overlay is shown.
+  totals, supply, transport, task forces, air groups searching from it and combat actions in it, whatever overlay
+  is shown.
 - The hex of a pixel is `x * 42 - 6` (plus 21 on odd rows) by `y * 38 - 18` at full size; Pearl Harbor lands on Oahu.
 
 The code is in `witpae/mapview.py` (art, hexes and the overlay data) and the Map section of `witpae_editor.py`.
