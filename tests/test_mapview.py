@@ -3,7 +3,7 @@ import struct
 import tempfile
 import unittest
 
-from witpae import airgroups, bases, combat, landunits, mapview
+from witpae import airgroups, bases, combat, landunits, mapview, reports
 from witpae.container import SaveFile
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
@@ -254,7 +254,9 @@ class OverlayTests(unittest.TestCase):
         self.assertTrue(set(here) <= set(mapview.INDEX_CATEGORIES))
         self.assertIn("Land units", here)
         self.assertIn("Support", here)
-        self.assertEqual(mapview.INDEX_CATEGORIES[:4], ("Places", "Land units", "Support", "Task forces"))
+        self.assertEqual(mapview.INDEX_CATEGORIES[:5],
+                         ("Places", "Land units", "Support", "Supply", "Task forces"))
+        self.assertIn("Supply", here)
         self.assertEqual({m.side for m in here["Support"]}, {"Allied"})
 
     def test_support_bar(self):
@@ -301,6 +303,107 @@ class OverlayTests(unittest.TestCase):
         self.assertTrue(allied)
         self.assertEqual({m.side for m in allied}, {"Allied"})
         self.assertEqual({m.side for m in mapview.support_marks(self.save, "Japanese")}, {"Japanese"})
+
+    def test_supply_bar(self):
+        self.assertEqual(mapview.supply_bar(0), 0)
+        self.assertAlmostEqual(mapview.supply_bar(2500), 0.2372, places=3)  # about 1/4 hex
+        self.assertAlmostEqual(mapview.supply_bar(11000), 0.4975, places=3)  # about 1/2 hex
+        self.assertAlmostEqual(mapview.supply_bar(44444), 1.0)
+        self.assertEqual(mapview.supply_bar(100000), 1.5)
+        self.assertEqual(mapview.supply_bar(5000000), 1.5)
+        self.assertAlmostEqual(mapview.supply_bar(-4444), 1.0)
+        self.assertAlmostEqual(mapview.supply_bar(-10000), 1.5, places=2)
+        self.assertEqual(mapview.supply_bar(-10000000), 1.5)
+        self.assertGreater(mapview.supply_bar(-1000), mapview.supply_bar(1000))  # a lack shows longer
+
+    def test_hex_distance(self):
+        self.assertEqual(mapview.hex_distance((5, 5), (5, 5)), 0)
+        # Odd rows are shifted half a hex right, so (5,5) touches x 5 and 6 in the rows above and below.
+        odd = {(4, 5), (6, 5), (5, 4), (6, 4), (5, 6), (6, 6)}
+        # (5,4) is on an even row: it touches x 4 and 5 in the rows above and below.
+        even = {(4, 4), (6, 4), (4, 3), (5, 3), (4, 5), (5, 5)}
+        for origin, ring in (((5, 5), odd), ((5, 4), even)):
+            near = {(nx, ny) for nx in range(origin[0] - 3, origin[0] + 4) for ny in range(origin[1] - 3, origin[1] + 4)
+                    if mapview.hex_distance(origin, (nx, ny)) == 1}
+            self.assertEqual(near, ring)
+        # Four rows up lets x slide by 2 for free, so (4,4) is 4 away from (0,0) and (10,0) is 10 along the row.
+        self.assertEqual(mapview.hex_distance((0, 0), (0, 4)), 4)
+        self.assertEqual(mapview.hex_distance((0, 0), (2, 4)), 4)
+        self.assertEqual(mapview.hex_distance((0, 0), (3, 4)), 5)
+        self.assertEqual(mapview.hex_distance((0, 0), (10, 0)), 10)
+        self.assertEqual(mapview.hex_distance((3, 7), (9, 2)), mapview.hex_distance((9, 2), (3, 7)))
+
+    def test_supply_marks(self):
+        marks = mapview.supply_marks(self.save)
+        self.assertEqual(len(marks), 665)
+        self.assertEqual(sum(m.available < m.required for m in marks), 10)
+        self.assertEqual(sum(m.short_units > 0 for m in marks), 10)
+        self.assertEqual(sum(m.spoiling for m in marks), 2)
+        self.assertEqual(marks, sorted(marks, key=lambda m: (m.x, m.y, m.side)))
+        by_key = {(m.side, m.x, m.y): m for m in marks}
+        # Pearl Harbor, worked out from the raw fields: its units are based there, so only the base counts.
+        pearl = by_key[("Allied", 180, 107)]
+        base = next(b for b in bases.list_bases(self.save, include_towns=True) if (b.x, b.y) == (180, 107))
+        here = [u for u in landunits.list_land_units(self.save)
+                if u.arrived and (u._i16(bases.X_OFFSET), u._i16(bases.Y_OFFSET)) == (180, 107) and u.side == "Allied"]
+        away = [u for u in here if u.location_id != base.id]
+        self.assertEqual(pearl.base.id, base.id)
+        self.assertEqual(len(here), 21)
+        self.assertEqual(pearl.available, base.get("supply") + sum(u.get("supplies") for u in away))
+        self.assertEqual(pearl.required, base.get("supply_required") + sum(u.supplies_required for u in away))
+        self.assertEqual((pearl.available, pearl.required), (982531, 7053))
+        self.assertEqual(sum(u.at_base for u in pearl.units), len(here) - len(away))
+        self.assertFalse(pearl.spoiling)
+        # Every mark meets the rule for being listed.
+        self.assertTrue(all(m.required > 0 or m.short_units or m.spoiling for m in marks))
+
+    def test_supply_marks_do_not_double_count_units_at_the_base(self):
+        marks = mapview.supply_marks(self.save)
+        for m in marks:
+            loose = [u for u in m.units if not u.at_base]
+            self.assertEqual(m.available, (m.base.get("supply") if m.base else 0) + sum(u.supplies for u in loose))
+            self.assertEqual(m.required, (m.base.get("supply_required") if m.base else 0)
+                             + sum(u.required for u in loose))
+            if m.base is None:
+                self.assertFalse(any(u.at_base for u in m.units))
+        based = next(m for m in marks if any(u.at_base and u.supplies for u in m.units))
+        self.assertLess(based.available, based.base.get("supply") + sum(u.supplies for u in based.units))
+
+    def test_supply_marks_without_a_base(self):
+        loose = [m for m in mapview.supply_marks(self.save) if m.base is None]
+        self.assertTrue(loose)
+        units = {u.id: u for u in landunits.list_land_units(self.save)}
+        mark = next(m for m in loose if m.required > 0)
+        self.assertEqual(mark.available, sum(units[u.id].get("supplies") for u in mark.units))
+        self.assertEqual(mark.required, sum(units[u.id].supplies_required for u in mark.units))
+        self.assertTrue(any(units[u.id].location_id == 0 for m in loose for u in m.units))
+
+    def test_supply_marks_side_and_spoiling(self):
+        allied = mapview.supply_marks(self.save, "Allied")
+        japanese = mapview.supply_marks(self.save, "Japanese")
+        self.assertEqual({m.side for m in allied}, {"Allied"})
+        self.assertEqual({m.side for m in japanese}, {"Japanese"})
+        self.assertEqual(len(allied) + len(japanese), len(mapview.supply_marks(self.save)))
+        spoiling = [m for m in mapview.supply_marks(self.save) if m.spoiling]
+        self.assertEqual({m.base.name for m in spoiling}, {"Delhi", "Changchun"})
+        for m in spoiling:
+            limit = reports.spoilage_limits(m.base.get("port"), m.base.get("airfield"))[0]
+            self.assertGreater(m.base.get("supply"), limit)
+
+    def test_nearest_supply(self):
+        found = mapview.nearest_supply(self.save, "Allied", 180, 107)
+        self.assertEqual([(b.name, s, d) for b, s, d in found],
+                         [("Lahaina", 41359, 2), ("Cristobal", 130481, 51), ("San Francisco", 294803, 56)])
+        for side in ("Allied", "Japanese"):
+            found = mapview.nearest_supply(self.save, side, 100, 60)
+            self.assertTrue(0 < len(found) <= 3)
+            self.assertTrue(all(b.side == side and s > 20000 and (b.x, b.y) != (100, 60) for b, s, _d in found))
+            self.assertEqual([d for _b, _s, d in found], sorted(d for _b, _s, d in found))
+            self.assertTrue(all(d == mapview.hex_distance((100, 60), (b.x, b.y)) for b, _s, d in found))
+        # The hex itself is never listed, though Pearl Harbor has a large surplus.
+        found = mapview.nearest_supply(self.save, "Allied", 180, 107)
+        self.assertNotIn((180, 107), [(b.x, b.y) for b, _s, _d in found])
+        self.assertEqual(len(mapview.nearest_supply(self.save, "Allied", 180, 107, count=1)), 1)
 
 
 if __name__ == "__main__":

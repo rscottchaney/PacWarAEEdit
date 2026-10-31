@@ -763,10 +763,19 @@ is read-only: nothing is written to the save or to the art.
   length is quadratic in the difference, as in WitpStaff: 15 squads = 1/4 hex, 60 = 1/2, 230 = 1, 500 or more = 1.5.
   It is the editor's estimate from current equipment, as on the Land Units tab, so unsaved edits show, and not the
   game's stored value. Units that are not on the map (hex 0,0) or have not arrived are left out.
+- Supply: one bar per hex with a base, town or land units, as in WitpStaff: green when the supply available covers
+  the supply required, red when it does not. A base counts its stock against its requirement, which already includes
+  the land units based there; units in the hex that are not based there add their own supplies and requirement. A
+  hex with no base sums its units. A hex shows when something is required there, a unit is short of supplies or the
+  base spoils supply. The length is quadratic and asymmetric: a surplus of 2500 is 1/4 hex, 11000 is 1/2, 45000 is 1
+  and 100000 or more is 1.5; a lack is steeper, 10000 or more being 1.5. A dark red circle, larger with more of them,
+  marks units short of supplies, and a pink triangle beside the bar a base that spoils supply. Clicking a hex that
+  lacks supply or has units short also lists the nearest bases and towns of that side with more than 20000 spare,
+  by straight-line distance in hexes (terrain, sea and the enemy are ignored). Supply carried on ships is not counted.
 - Combat: a diamond per action of the combat reports that has a hex, filtered by Kind (Submarine and ASW are the
   tracker's enemy subs) and Turns (Latest, Last 3, Last 7 or All).
 - Click a hex to ring it and list, below the map, the places, land units (with their support and need), support
-  totals, task forces, air groups searching from it and combat actions in it, whatever overlay is shown.
+  totals, supply, task forces, air groups searching from it and combat actions in it, whatever overlay is shown.
 - The hex of a pixel is `x * 42 - 6` (plus 21 on odd rows) by `y * 38 - 18` at full size; Pearl Harbor lands on Oahu.
 
 The code is in `witpae/mapview.py` (art, hexes and the overlay data) and the Map section of `witpae_editor.py`.

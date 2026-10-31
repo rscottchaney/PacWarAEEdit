@@ -741,7 +741,7 @@ HISTORY_BASE_COLUMNS = ("date", "turn", "side", "value", "change")
 HISTORY_AIRCRAFT_COLUMNS = ("date", "turn", "value", "change")
 
 MAP_SCALES = {"12%": 8, "25%": 4, "50%": 2, "100%": 1}  # label -> every step-th pixel of the art
-MAP_OVERLAYS = ("Locations", "Search arcs", "Task forces", "Support", "Combat")
+MAP_OVERLAYS = ("Locations", "Search arcs", "Task forces", "Support", "Supply", "Combat")
 MAP_SIDES = ("All", "Allied", "Japanese")
 MAP_TOWNS = ("Bases", "Bases and towns")
 MAP_ARC_KINDS = ("Naval", "ASW")
@@ -750,6 +750,8 @@ MAP_OTHER_COLOR = "#777777"
 MAP_COMBAT_COLOR = "#e08a00"
 MAP_SUPPORT_OK = "#2e9e44"
 MAP_SUPPORT_SHORT = "#d43c3c"
+MAP_SUPPLY_SHORT_RING = "#8b0000"
+MAP_SPOIL_COLOR = "#ff9a9a"
 MAP_PLAIN_COLOR = "#c9d6e3"
 MAP_CLICK_PIXELS = 3  # a press that moves more than this is a drag of the map, not a click
 
@@ -2816,6 +2818,7 @@ class EditorApp:
         if before != values or flags_before != flags or building_before != building:
             self.edited.add(base.id)
             self.dirty = True
+            self._map_data_changed()
         self.refresh_list()
         self.show_detail(base)
 
@@ -4170,6 +4173,7 @@ class EditorApp:
         if before != values:
             self.units_edited.add(u.id)
             self.dirty = True
+            self._map_data_changed()
         self.refresh_unit_list()
         self.show_unit(u)
 
@@ -5579,6 +5583,7 @@ class EditorApp:
         self._report_combo(arcs, "Arc:", self.map_arc_mode_var, MAP_ARC_MODES, self.refresh_map, 8)
         self.map_filter_frames["Task forces"] = ttk.Frame(self.map_filters)
         self.map_filter_frames["Support"] = ttk.Frame(self.map_filters)
+        self.map_filter_frames["Supply"] = ttk.Frame(self.map_filters)
         cmb = self.map_filter_frames["Combat"] = ttk.Frame(self.map_filters)
         self.map_combat_kind_var = tk.StringVar(value=INTEL_ALL)
         self._report_combo(cmb, "Kind:", self.map_combat_kind_var, [INTEL_ALL, *combat.KINDS], self.refresh_map, 17)
@@ -5652,9 +5657,10 @@ class EditorApp:
             self.refresh_map()
 
     def _map_data_changed(self):
-        """Drop the support overlay and the click index after an edit that moves or re-equips units."""
+        """Drop the support and supply overlays and the click index after an edit that moves or re-equips units, or
+        changes supplies."""
         self.map_index = None
-        for key in [k for k in self.map_cache if k[0] == "support"]:
+        for key in [k for k in self.map_cache if k[0] in ("support", "supply")]:
             del self.map_cache[key]
         self.map_stale = True
         if self._map_visible():
@@ -5784,6 +5790,29 @@ class EditorApp:
                                    outline="black", tags="overlay")
             short = sum(m.support < m.needed for m in marks)
             summary = f"{len(marks)} hexes with land units ({short} short of support, estimate)"
+        elif overlay == "Supply":
+            marks = self._map_data(("supply", side), lambda: mapview.supply_marks(self.save, side))
+            width = max(3, mapview.HEX_W * scale / 4)
+            for m in marks:
+                x, y = point(m.x, m.y)
+                length = max(2, mapview.supply_bar(m.available - m.required) * mapview.HEX_H * scale)
+                x += {"Allied": -width, "Japanese": width}.get(m.side, 0)  # two sides in one hex stay apart
+                if m.short_units:
+                    r = max(3, min(mapview.HEX_W / 2, 3 + 2 * m.short_units) * scale)
+                    c.create_oval(x - r, y - r, x + r, y + r, outline=MAP_SUPPLY_SHORT_RING, width=2, tags="overlay")
+                c.create_rectangle(x - width / 2, y - length, x + width / 2, y,
+                                   fill=MAP_SUPPORT_OK if m.available >= m.required else MAP_SUPPORT_SHORT,
+                                   outline="black", tags="overlay")
+                if m.spoiling:  # a warning sign beside the bar
+                    t = max(3, width)
+                    tx = x + width / 2 + t
+                    c.create_polygon(tx, y - 2 * t, tx - t, y, tx + t, y, fill=MAP_SPOIL_COLOR, outline="black",
+                                     tags="overlay")
+            lacking = sum(m.available < m.required for m in marks)
+            with_short = sum(m.short_units > 0 for m in marks)
+            spoiling = sum(m.spoiling for m in marks)
+            summary = (f"{len(marks)} hexes with supply ({lacking} lacking, {with_short} with units short, "
+                       f"{spoiling} spoiling)")
         else:
             kind = self.map_combat_kind_var.get()
             turns = intel.TURN_CHOICES[self.map_combat_turns_var.get()]
@@ -5857,6 +5886,15 @@ class EditorApp:
             diff = m.support - m.needed
             gap = f"{abs(diff)} {'short' if diff < 0 else 'spare'}" if diff else "enough"
             return f"{m.side}: support {m.support}, needed {m.needed} ({gap})"
+        if category == "Supply":
+            diff = m.available - m.required
+            gap = f"{-diff} short" if diff < 0 else f"{diff} spare" if diff else "enough"
+            notes = ""
+            if m.short_units:
+                notes += f", {m.short_units} unit{'s' if m.short_units != 1 else ''} short"
+            if m.spoiling:
+                notes += ", base spoiling"
+            return f"{m.side}: available {m.available}, required {m.required} ({gap}){notes}"
         return f"{chart.date_label(m.date)} {m.kind}: {m.title}"
 
     def show_map_hex(self, x, y):
@@ -5877,6 +5915,16 @@ class EditorApp:
                 lines.extend(f"  {self._map_item_text(category, m)}" for m in contents[category])
         if not contents:
             lines.append("Nothing here")
+        needy = [m for m in contents.get("Supply", ()) if m.available < m.required or m.short_units]
+        if needy:
+            lines.append("Nearest supply (straight line):")
+            for m in needy:
+                found = mapview.nearest_supply(self.save, m.side, x, y)
+                if len(needy) > 1:
+                    lines.append(f"  {m.side}:")
+                if not found:
+                    lines.append("  none with more than 20000 spare")
+                lines.extend(f"  {b.name} ({surplus} spare, {dist} hexes)" for b, surplus, dist in found)
         self._set_map_detail("\n".join(lines))
 
     def find_map_place(self):
