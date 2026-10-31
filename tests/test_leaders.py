@@ -8,6 +8,7 @@ from witpae.container import SaveFile
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 SAVE_015 = os.path.join(DATA_DIR, "going2_411210.pws")
 SIZE = airgroups.LEADER_RECORD_SIZE
+TOP_CARRIER_TF = (7816, "Towers, John Henry")
 
 
 class LabelTests(unittest.TestCase):
@@ -33,6 +34,22 @@ class LabelTests(unittest.TestCase):
     def test_side(self):
         self.assertEqual([leaders.side_of(n) for n in (1, 2, 4, 5, 9)],
                          ["Japanese", "Japanese", "Allied", "Allied", "Allied"])
+
+    def test_weighted_rating(self):
+        row = leaders.LeaderRow(1, "x", "Allied", 4, "US", 8, "LGEN", "Army", 2, "Large Ground Unit",
+                                10, 20, 30, 40, 50, 60, 70, 0, 0, "", 0, "", 0, "")
+        self.assertEqual(leaders.weighted_rating(row, {}), 0)
+        self.assertEqual(leaders.weighted_rating(row, {"air": 2, "aggression": -1}), 2 * 40 - 70)
+        self.assertEqual(leaders.weighted_rating(row, {"leadership": 5, "naval": -5, "bogus": 9}), 50 - 150)
+
+    def test_presets_are_valid(self):
+        self.assertEqual(len(leaders.PRESETS), 10)
+        types = set(leaders.TYPES.values()) | {"All"}
+        for name, (weights, type_text, branch) in leaders.PRESETS.items():
+            self.assertTrue(set(weights) <= set(leaders.RATING_NAMES), name)
+            self.assertTrue(all(leaders.WEIGHT_MIN <= v <= leaders.WEIGHT_MAX for v in weights.values()), name)
+            self.assertIn(type_text, types, name)
+            self.assertIn(branch, leaders.BRANCHES + ("All",), name)
 
 
 @unittest.skipUnless(os.path.exists(SAVE_015), "sample save missing")
@@ -61,6 +78,13 @@ class LeaderTests(unittest.TestCase):
         self.assertEqual((r.leadership, r.inspiration, r.naval, r.air, r.land, r.admin, r.aggression),
                          (63, 66, 35, 44, 66, 46, 74))
         self.assertEqual((r.political, r.delay, r.kind, r.commands), (7, 22, "", ""))
+
+    def test_preset_top_leader(self):
+        weights, type_text, branch = leaders.PRESETS["Carrier TF"]
+        shown = leaders.filter_leaders(self.rows.values(), "All", branch, type_text)
+        ranked = sorted(shown, key=lambda r: (-leaders.weighted_rating(r, weights), r.id))
+        self.assertEqual((ranked[0].id, ranked[0].name), TOP_CARRIER_TF)
+        self.assertGreater(leaders.weighted_rating(ranked[0], weights), leaders.weighted_rating(ranked[1], weights))
 
     def test_types_and_branches_counted(self):
         counts = {}
