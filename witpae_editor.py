@@ -14,7 +14,8 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from witpae import (aircraft, airgroups, airproduction, alerts, bases, chart, combat, factories, history, industry, intel, landunits, lcuproduction, lcutargets, leaders, losses, mapview, minefields,
-                    pilotpool, planeart, regions, reports, shipproduction, shiprecords, shiprepair, ships, taskforces, victory)
+                    pilotpool, planeart, regions, reports, shipproduction, shipratings, shiprecords, shiprepair, ships,
+                    taskforces, victory)
 from witpae.container import SaveFile, SaveFormatError
 from witpae.fileio import is_pbem, save_with_backup
 
@@ -184,6 +185,55 @@ UPGRADE_COLUMN_BY_ID = {c[0]: c for c in UPGRADE_COLUMNS}
 UPGRADE_TEXT = {"date": lambda v: f"{v[1]}/{v[0]:02d}", "due": _due_text}
 # "Due within" choices: label -> months, None for all.
 UPGRADE_DUE = {"Now": 0, "1 month": 1, "3 months": 3, "6 months": 6, "12 months": 12, "All": None}
+
+
+def _num_text(value):
+    return f"{value:g}"
+
+
+def _main_gun_text(r):
+    if not r.main_gun:
+        return "-"
+    return f"{r.main_gun} x{r.main_num} ({r.main_salvoes} salvoes)"
+
+
+# The getters give the sort value; RATING_TEXT builds the text from the whole row.
+RATING_COLUMNS = [
+    ("name", "Class", 130, False, lambda r: r.name),
+    ("type", "Type", 55, False, lambda r: r.type),
+    ("side", "Side", 60, False, lambda r: r.side),
+    ("date", "Date", 55, True, lambda r: (r.date[1], r.date[0])),
+    ("speed", "Speed", 45, True, lambda r: r.speed),
+    ("endurance", "Endurance", 65, True, lambda r: r.endurance),
+    ("durability", "Durability", 62, True, lambda r: r.durability),
+    ("belt", "Belt", 40, True, lambda r: r.belt),
+    ("deck", "Deck", 40, True, lambda r: r.deck),
+    ("main", "Main guns", 205, True, lambda r: (r.main_effect, r.main_num)),
+    ("low_aa", "Low AA", 60, True, lambda r: r.low_aa),
+    ("high_aa", "High AA (ceiling)", 105, True, lambda r: r.aa_ceiling),
+    ("asw", "ASW (devices)", 100, True, lambda r: r.asw_rating),
+    ("torps", "Torpedoes (tubes)", 100, True, lambda r: r.torp_total),
+    ("specials", "Specials", 135, False, lambda r: r.specials),
+    ("abs", "A/B/S", 60, True, lambda r: (r.available, r.building, r.sunk)),
+]
+RATING_COLUMN_BY_ID = {c[0]: c for c in RATING_COLUMNS}
+RATING_TEXT = {
+    "date": lambda r: aircraft.format_date(*r.date),
+    "main": _main_gun_text,
+    "low_aa": lambda r: _num_text(r.low_aa),
+    "high_aa": lambda r: f"{_num_text(r.high_aa)} ({r.aa_ceiling})" if r.aa_ceiling else _num_text(r.high_aa),
+    "asw": lambda r: f"{_num_text(r.asw_rating)} ({r.asw_count})",
+    "torps": lambda r: f"{r.torp_total} ({r.torp_tubes} tubes)" if r.torp_tubes else "-",
+    "abs": lambda r: f"{r.available}/{r.building}/{r.sunk}",
+}
+RATING_ALL = "All"
+RATING_SHOW = ["With ships", "All stages"]
+RATING_NOTE = ("Per class record (refit stage), after WitpStaff. Main guns: the Navy/DP gun with the highest effect, "
+               "all guns of that effect counted, and the lowest ammo (salvoes). Low/High AA: sum of effect x num over "
+               "Flak, DP gun and AA rocket slots with a ceiling below/from 20000, halved as the game displays it; "
+               "High AA sorts by the highest "
+               "ceiling. ASW rating: sum of effect x accuracy / 100 x num (devices in brackets). Torps: num x ammo. "
+               "A/B/S: ships available / building or not arrived / sunk. Device offsets: ae-editor's field map.")
 
 
 PRODUCTION_COLUMNS = [
@@ -954,6 +1004,9 @@ class EditorApp:
         self.upgrades_all = []
         self.upgrade_sort_col = "due"
         self.upgrade_sort_reverse = False
+        self.ratings_all = []
+        self.rating_sort_col = "name"
+        self.rating_sort_reverse = False
         self.production_all = []
         self.production_summary = []
         self.production_sort_col = "delay"
@@ -1195,6 +1248,7 @@ class EditorApp:
                                               ("ship", "type", "side", "class", "target", "change", "location"),
                                               self.jump_to_upgrade_ship)
 
+        self._build_ratings_report()
         self._build_production_report()
         self._build_lcu_report()
         self._build_lcu_targets_report()
@@ -1317,6 +1371,29 @@ class EditorApp:
         shown.pack(side="top", fill="both", expand=True, pady=(4, 0))
         self.lcu_status_box.configure(state="readonly" if units else "disabled")
         self.refresh_lcu_list()
+
+    def _build_ratings_report(self):
+        rat = ttk.Frame(self.reports_notebook, padding=4)
+        self.reports_notebook.add(rat, text="Ship class ratings")
+        bar = ttk.Frame(rat)
+        bar.pack(side="top", fill="x")
+        ttk.Label(bar, text="Search:").pack(side="left")
+        self.rating_search_var = tk.StringVar()
+        self.rating_search_var.trace_add("write", lambda *a: self.refresh_rating_list())
+        ttk.Entry(bar, textvariable=self.rating_search_var, width=20).pack(side="left", padx=(4, 8))
+        self.rating_type_var = tk.StringVar(value=RATING_ALL)
+        self.rating_type_box = self._report_combo(bar, "Type:", self.rating_type_var, [RATING_ALL],
+                                                  self.refresh_rating_list, 8)
+        self.rating_side_var = tk.StringVar(value=RATING_ALL)
+        self._report_combo(bar, "Side:", self.rating_side_var, [RATING_ALL, "Allied", "Japanese"],
+                           self.refresh_rating_list, 9)
+        self.rating_show_var = tk.StringVar(value=RATING_SHOW[0])
+        self._report_combo(bar, "Show:", self.rating_show_var, RATING_SHOW, self.refresh_rating_list, 10)
+        self.rating_count = tk.StringVar()
+        ttk.Label(bar, textvariable=self.rating_count).pack(side="left", padx=8)
+        ttk.Label(rat, text=RATING_NOTE, wraplength=1100, justify="left").pack(side="bottom", anchor="w", pady=(4, 0))
+        self.rating_tree = self._report_tree(rat, RATING_COLUMNS, self.sort_ratings_by,
+                                             ("name", "type", "side", "specials"), self.jump_to_rating_class)
 
     def _report_combo(self, bar, label, var, values, command, width):
         ttk.Label(bar, text=label).pack(side="left")
@@ -1757,7 +1834,7 @@ class EditorApp:
             row += 1
 
     def _build_ships_tab(self):
-        tab = ttk.Frame(self.notebook, padding=4)
+        tab = self.ships_tab = ttk.Frame(self.notebook, padding=4)
         self.notebook.add(tab, text="Ship Classes")
         left = ttk.Frame(tab)
         left.pack(side="left", fill="both", expand=True)
@@ -4477,6 +4554,7 @@ class EditorApp:
         self.spoilage_all = reports.spoilage_rows(b for b in self.bases.values() if b.kind != "Minor")
         self.refresh_spoilage_list()
         self.refresh_upgrade_list()
+        self.refresh_rating_reports()
         self.refresh_production_reports()
         self.refresh_lcu_reports()
         self.refresh_lcu_targets()
@@ -4540,6 +4618,42 @@ class EditorApp:
         self.upgrade_sort_reverse = (not self.upgrade_sort_reverse) if col == self.upgrade_sort_col else False
         self.upgrade_sort_col = col
         self.refresh_upgrade_list()
+
+    def refresh_rating_reports(self):
+        try:
+            self.ratings_all = shipratings.class_ratings(self.save)
+        except (SaveFormatError, IndexError, KeyError):
+            self.ratings_all = []
+        types = sorted({r.type for r in self.ratings_all})
+        self.rating_type_box.configure(values=[RATING_ALL, *types])
+        if self.rating_type_var.get() not in types:
+            self.rating_type_var.set(RATING_ALL)
+        self.refresh_rating_list()
+
+    def _rating_sort_key(self, r):
+        _cid, _h, _w, numeric, get = RATING_COLUMN_BY_ID[self.rating_sort_col]
+        v = get(r)
+        return (v if numeric else str(v).lower(), r.name.lower(), r.class_id)
+
+    def refresh_rating_list(self):
+        self.rating_tree.delete(*self.rating_tree.get_children())
+        needle = self.rating_search_var.get().strip().lower()
+        kind, side = self.rating_type_var.get(), self.rating_side_var.get()
+        with_ships = self.rating_show_var.get() == RATING_SHOW[0]
+        rows = [r for r in self.ratings_all
+                if needle in r.name.lower() and (kind == RATING_ALL or r.type == kind)
+                and (side == RATING_ALL or r.side == side)
+                and (not with_ships or r.available + r.building + r.sunk > 0)]
+        rows.sort(key=self._rating_sort_key, reverse=self.rating_sort_reverse)
+        for r in rows:
+            self.rating_tree.insert("", "end", iid=str(r.class_id), values=[
+                RATING_TEXT[cid](r) if cid in RATING_TEXT else get(r) for cid, _h, _w, _n, get in RATING_COLUMNS])
+        self.rating_count.set(f"{len(rows)} class record{'' if len(rows) == 1 else 's'}")
+
+    def sort_ratings_by(self, col):
+        self.rating_sort_reverse = (not self.rating_sort_reverse) if col == self.rating_sort_col else False
+        self.rating_sort_col = col
+        self.refresh_rating_list()
 
     def refresh_production_reports(self):
         """Recompute the rows and the yard summary from the save; the filters only re-select from the rows."""
@@ -5156,6 +5270,17 @@ class EditorApp:
 
     def jump_to_upgrade_ship(self):
         self._jump_to_ship(self.upgrade_tree)
+
+    def jump_to_rating_class(self):
+        sel = self.rating_tree.selection()
+        if not sel:
+            return
+        iid = sel[0]
+        if not self.ship_tree.exists(iid):
+            self.ship_search_var.set("")
+        self.notebook.select(self.ships_tab)
+        self.ship_tree.selection_set(iid)
+        self.ship_tree.see(iid)
 
     def jump_to_production_ship(self):
         self._jump_to_ship(self.production_tree)
