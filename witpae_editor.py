@@ -826,7 +826,7 @@ HISTORY_BASE_COLUMNS = ("date", "turn", "side", "value", "change")
 HISTORY_AIRCRAFT_COLUMNS = ("date", "turn", "value", "change")
 
 MAP_SCALES = {"12%": 8, "25%": 4, "50%": 2, "100%": 1}  # label -> every step-th pixel of the art
-MAP_OVERLAYS = ("Locations", "Search arcs", "Task forces", "Support", "Supply", "Combat")
+MAP_OVERLAYS = ("Locations", "Search arcs", "Task forces", "Support", "Supply", "Transport", "Combat")
 MAP_SIDES = ("All", "Allied", "Japanese")
 MAP_TOWNS = ("Bases", "Bases and towns")
 MAP_ARC_KINDS = ("Naval", "ASW")
@@ -837,6 +837,7 @@ MAP_SUPPORT_OK = "#2e9e44"
 MAP_SUPPORT_SHORT = "#d43c3c"
 MAP_SUPPLY_SHORT_RING = "#8b0000"
 MAP_SPOIL_COLOR = "#ff9a9a"
+MAP_TRANSPORT_MODES = mapview.TRANSPORT_MODES
 MAP_PLAIN_COLOR = "#c9d6e3"
 MAP_CLICK_PIXELS = 3  # a press that moves more than this is a drag of the map, not a click
 
@@ -5906,6 +5907,9 @@ class EditorApp:
         self.map_filter_frames["Task forces"] = ttk.Frame(self.map_filters)
         self.map_filter_frames["Support"] = ttk.Frame(self.map_filters)
         self.map_filter_frames["Supply"] = ttk.Frame(self.map_filters)
+        trn = self.map_filter_frames["Transport"] = ttk.Frame(self.map_filters)
+        self.map_transport_mode_var = tk.StringVar(value=MAP_TRANSPORT_MODES[0])
+        self._report_combo(trn, "Mode:", self.map_transport_mode_var, MAP_TRANSPORT_MODES, self.refresh_map, 8)
         cmb = self.map_filter_frames["Combat"] = ttk.Frame(self.map_filters)
         self.map_combat_kind_var = tk.StringVar(value=INTEL_ALL)
         self._report_combo(cmb, "Kind:", self.map_combat_kind_var, [INTEL_ALL, *combat.KINDS], self.refresh_map, 17)
@@ -5979,10 +5983,10 @@ class EditorApp:
             self.refresh_map()
 
     def _map_data_changed(self):
-        """Drop the support and supply overlays and the click index after an edit that moves or re-equips units, or
-        changes supplies."""
+        """Drop the support, supply and transport overlays and the click index after an edit that moves or re-equips
+        units, or changes supplies."""
         self.map_index = None
-        for key in [k for k in self.map_cache if k[0] in ("support", "supply")]:
+        for key in [k for k in self.map_cache if k[0] in ("support", "supply", "transport")]:
             del self.map_cache[key]
         self.map_stale = True
         if self._map_visible():
@@ -6135,6 +6139,21 @@ class EditorApp:
             spoiling = sum(m.spoiling for m in marks)
             summary = (f"{len(marks)} hexes with supply ({lacking} lacking, {with_short} with units short, "
                        f"{spoiling} spoiling)")
+        elif overlay == "Transport":
+            mode = self.map_transport_mode_var.get()
+            marks = self._map_data(("transport", mode, side), lambda: mapview.transport_marks(self.save, mode, side))
+            width = max(3, mapview.HEX_W * scale / 4)
+            for m in marks:
+                x, y = point(m.x, m.y)
+                x += {"Allied": -width, "Japanese": width}.get(m.side, 0) * 2  # two sides in one hex stay apart
+                for dx, value, color in ((-width / 2, mapview.transport_capacity(m), MAP_SUPPORT_OK),
+                                         (width / 2, m.need, MAP_SUPPORT_SHORT)):
+                    length = max(2, mapview.transport_bar(value, mode) * mapview.HEX_H * scale) if value else 0
+                    if length:
+                        c.create_rectangle(x + dx - width / 2, y - length, x + dx + width / 2, y, fill=color,
+                                           outline="black", tags="overlay")
+            short = sum(m.need > mapview.transport_capacity(m) for m in marks)
+            summary = f"{len(marks)} ports ({short} with more waiting than ships can carry)"
         else:
             kind = self.map_combat_kind_var.get()
             turns = intel.TURN_CHOICES[self.map_combat_turns_var.get()]
@@ -6217,6 +6236,14 @@ class EditorApp:
             if m.spoiling:
                 notes += ", base spoiling"
             return f"{m.side}: available {m.available}, required {m.required} ({gap}){notes}"
+        if category == "Transport":
+            troop, cargo, liquid = m.available
+            text = f"{m.side} {m.base.name}: {m.ships} ships, troop {troop}, cargo {cargo}, liquid {liquid}"
+            if m.mode == "Troops":
+                units = "; ".join(f"{u.name} troop {u.troop}, cargo {u.cargo} to {u.target}" for u in m.units)
+                return f"{text}; waiting (troops): {units or 'none'}"
+            resources, oil, fuel, spare = m.stock
+            return f"{text}; waiting (bulk): resources {resources}, oil {oil}, fuel {fuel}, supply surplus {spare}"
         return f"{chart.date_label(m.date)} {m.kind}: {m.title}"
 
     def show_map_hex(self, x, y):

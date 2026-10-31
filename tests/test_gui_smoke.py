@@ -2565,6 +2565,7 @@ class GuiSmokeTests(unittest.TestCase):
                     {"Locations": "1052", "Search arcs": "173", "Task forces": "236",
                      "Support": "664 hexes with land units (359 short",
                      "Supply": "665 hexes with supply (10 lacking, 10 with units short, 2 spoiling)",
+                     "Transport": "154 ports (21 with more waiting than ships can carry)",
                      "Combat": "1"}[overlay]
                 ), (overlay, app.map_info.get()))
             self.assertTrue(all(counts.values()), counts)
@@ -2647,6 +2648,35 @@ class GuiSmokeTests(unittest.TestCase):
             app.apply_unit()
             self.assertTrue(app.map_stale)
             self.assertTrue(all(k[0] != "supply" for k in app.map_cache))
+            app.notebook.select(app.map_tab)
+            self.root.update()
+            # Transport: two bars per port, the Mode switch and the click report.
+            app.map_overlay_var.set("Transport")
+            app._map_overlay_changed()
+            self.assertTrue(app.map_info.get().startswith("154 ports (21 with more waiting"))
+            ports = mapview.transport_marks(app.save)
+            self.assertEqual(len(app.map_canvas.find_withtag("overlay")),
+                             sum((mapview.transport_capacity(m) > 0) + (m.need > 0) for m in ports))
+            app.map_transport_mode_var.set("Bulk")
+            app.refresh_map()
+            self.assertTrue(app.map_info.get().startswith("551 ports (485 with more waiting"))
+            pearl = next(m for m in ports if m.base.name == "Pearl Harbor")
+            app.show_map_hex(pearl.x, pearl.y)
+            text = app.map_detail.get("1.0", "end")
+            self.assertIn("Transport:", text)
+            self.assertIn(f"Allied Pearl Harbor: {pearl.ships} ships, troop {pearl.available[0]}", text)
+            self.assertIn("waiting (bulk): resources", text)
+            self.assertIn("waiting (troops):", text)
+            busy = next(m for m in ports if m.units)
+            app.show_map_hex(busy.x, busy.y)
+            self.assertIn(f"{busy.units[0].name} troop {busy.units[0].troop}, cargo {busy.units[0].cargo} to "
+                          f"{busy.units[0].target}", app.map_detail.get("1.0", "end"))
+            app.map_transport_mode_var.set("Troops")
+            app.notebook.select(app.units_tab)
+            self.root.update()
+            app.map_stale = False
+            app._map_data_changed()
+            self.assertTrue(all(k[0] != "transport" for k in app.map_cache))
             app.notebook.select(app.map_tab)
             self.root.update()
             app.show_map_hex(0, 0)

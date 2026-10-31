@@ -3,7 +3,8 @@ import struct
 import tempfile
 import unittest
 
-from witpae import airgroups, bases, combat, landunits, mapview, reports
+from witpae import (airgroups, bases, combat, landunits, lcuproduction, mapview, reports, shiprecords, ships,
+                    taskforces)
 from witpae.container import SaveFile
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
@@ -254,9 +255,11 @@ class OverlayTests(unittest.TestCase):
         self.assertTrue(set(here) <= set(mapview.INDEX_CATEGORIES))
         self.assertIn("Land units", here)
         self.assertIn("Support", here)
-        self.assertEqual(mapview.INDEX_CATEGORIES[:5],
-                         ("Places", "Land units", "Support", "Supply", "Task forces"))
+        self.assertEqual(mapview.INDEX_CATEGORIES[:6],
+                         ("Places", "Land units", "Support", "Supply", "Transport", "Task forces"))
         self.assertIn("Supply", here)
+        self.assertIn("Transport", here)
+        self.assertEqual({m.mode for m in here["Transport"]}, {"Troops", "Bulk"})
         self.assertEqual({m.side for m in here["Support"]}, {"Allied"})
 
     def test_support_bar(self):
@@ -404,6 +407,174 @@ class OverlayTests(unittest.TestCase):
         found = mapview.nearest_supply(self.save, "Allied", 180, 107)
         self.assertNotIn((180, 107), [(b.x, b.y) for b, _s, _d in found])
         self.assertEqual(len(mapview.nearest_supply(self.save, "Allied", 180, 107, count=1)), 1)
+
+    # ---- transport ----------------------------------------------------------
+
+    def _unit(self, name):
+        return next(u for u in landunits.list_land_units(self.save) if u.arrived and u.display_name == name)
+
+    def test_equipment_cargo_multipliers(self):
+        self.assertEqual(mapview.equipment_cargo(19, 4, 10), 40)  # light: load 4 or less, 1x
+        self.assertEqual(mapview.equipment_cargo(19, 1, 3), 3)
+        self.assertEqual(mapview.equipment_cargo(19, 5, 10), 100)  # medium: 5 to 8, 2x
+        self.assertEqual(mapview.equipment_cargo(19, 8, 1), 16)
+        self.assertEqual(mapview.equipment_cargo(19, 9, 2), 54)  # heavy: 9 and up, 3x
+        self.assertEqual(mapview.equipment_cargo(17, 63, 1), 189)
+        self.assertEqual(mapview.equipment_cargo(25, 5, 2), 30)  # vehicles are heavy whatever their load
+        self.assertEqual(mapview.equipment_cargo(22, 1, 2), 6)
+
+    def test_motorized_support_is_a_heavy_vehicle(self):
+        d = lcuproduction.read_device(self.save, 253)
+        self.assertEqual((d.name, d.type, d.load), ("Motorized Support", 25, 15))
+        self.assertEqual(mapview.equipment_cargo(d.type, d.load, 2), 90)
+
+    def test_unit_load_by_hand(self):
+        class Slots:
+            def __init__(self, slots):
+                self.slots = slots
+
+            def _i16(self, pos):
+                if pos >= landunits.COUNT_OFFSET:
+                    k, field = (pos - landunits.COUNT_OFFSET) // 2, 1
+                else:
+                    k, field = (pos - landunits.DEVICE_OFFSET) // 2, 0
+                return self.slots[k][field] if k < len(self.slots) else 0
+
+        class Devices:
+            table = {1: lcuproduction.Device(1, "squad", 23, 10), 2: lcuproduction.Device(2, "eng", 24, 12),
+                     3: lcuproduction.Device(3, "light", 19, 4), 4: lcuproduction.Device(4, "medium", 19, 6),
+                     5: lcuproduction.Device(5, "heavy", 17, 20), 6: lcuproduction.Device(6, "truck", 25, 5),
+                     7: lcuproduction.Device(7, "tank", 22, 3)}
+
+            def get(self, device_id):
+                return self.table.get(device_id)
+
+        # Unknown device 9, a zero count and a negative count add nothing.
+        unit = Slots([(1, 10), (2, 3), (3, 7), (4, 2), (5, 1), (6, 4), (7, 2), (9, 5), (3, 0), (3, -4)])
+        self.assertEqual(mapview.unit_load(self.save, unit, Devices()),
+                         (10 * 10 + 12 * 3, 7 * 4 + 2 * 6 * 2 + 3 * 20 + 3 * 5 * 4 + 3 * 3 * 2))
+
+    def test_unit_load_of_a_division(self):
+        unit = self._unit("19th Div")
+        devices = lcuproduction._Devices(self.save)
+        troop = cargo = 0
+        types = set()
+        for k in range(landunits.SLOTS):
+            device_id, count = unit._i16(136 + 2 * k), unit._i16(176 + 2 * k)
+            dev = devices.get(device_id) if device_id else None
+            if dev is None or count <= 0:
+                continue
+            types.add(dev.type)
+            if dev.type in (23, 24):
+                troop += dev.load * count
+            elif dev.type in (22, 25) or dev.load > 8:
+                cargo += 3 * dev.load * count
+            else:
+                cargo += (2 if dev.load > 4 else 1) * dev.load * count
+        self.assertEqual(mapview.unit_load(self.save, unit), (troop, cargo))
+        self.assertEqual((troop, cargo), (11845, 3291))
+        self.assertIn(23, types)
+        self.assertTrue(types & {17, 18, 19})  # guns
+        self.assertTrue(types & {22, 25})  # vehicles
+
+    def test_ship_capacity_by_type(self):
+        recs = [r for r in shiprecords.list_ship_records(self.save) if r.arrived]
+        data = self.save[ships.SHIP_SECTION].data
+        seen = {}
+        for r in recs:
+            seen.setdefault(r.type, r)
+        excluded = [t for t in mapview.NO_TROOP_CARGO_TYPES if t in seen]
+        self.assertTrue(excluded)
+        for t in excluded:
+            troop, cargo, liquid = mapview.ship_capacity(self.save, seen[t])
+            self.assertEqual((troop, cargo), (0, 0), t)
+            self.assertEqual(liquid, struct.unpack_from("<h", data, seen[t]._class_start() + 54)[0], t)
+        # Types that load keep the class values.
+        r = seen["AK"]
+        start = r._class_start()
+        caps = tuple(struct.unpack_from("<h", data, start + o)[0] for o in (50, 52, 54))
+        self.assertGreater(caps[1], 0)
+        self.assertEqual(mapview.ship_capacity(self.save, r), caps)
+
+    def _harbour(self, port):
+        """(troop, cargo, liquid), ship count of the arrived ships docked at a port or in a TF in its hex."""
+        base = next(b for b in bases.list_bases(self.save, include_towns=True) if b.id == port)
+        data = self.save[ships.SHIP_SECTION].data
+        total, count = [0, 0, 0], 0
+        for r in shiprecords.list_ship_records(self.save):
+            if not r.arrived or r.side != base.side:
+                continue
+            tf = r.task_force
+            in_tf = (tf and taskforces.is_task_force(self.save, tf)
+                     and bases.place_hex(self.save, tf) == (base.x, base.y))
+            if r.base_id == port or in_tf:
+                count += 1
+                caps = [struct.unpack_from("<h", data, r._class_start() + o)[0] for o in (50, 52, 54)]
+                if r.type in mapview.NO_TROOP_CARGO_TYPES:
+                    caps[:2] = [0, 0]
+                total = [a + b for a, b in zip(total, caps)]
+        return tuple(total), count
+
+    def test_pearl_harbor_harbour_capacity(self):
+        expected, count = self._harbour(PEARL)
+        self.assertGreater(count, 10)
+        for mode in mapview.TRANSPORT_MODES:
+            pearl = next(m for m in mapview.transport_marks(self.save, mode) if m.base.id == PEARL)
+            self.assertEqual((pearl.available, pearl.ships), (expected, count), mode)
+        self.assertEqual((expected, count), ((900, 56765, 24770), 121))
+        troops = next(m for m in mapview.transport_marks(self.save, "Troops") if m.base.id == PEARL)
+        self.assertEqual(mapview.transport_capacity(troops), 900 + 56765)
+        bulk = next(m for m in mapview.transport_marks(self.save, "Bulk") if m.base.id == PEARL)
+        self.assertEqual(mapview.transport_capacity(bulk), 56765 + 24770)
+        base = bulk.base
+        self.assertEqual(bulk.stock, (base.get("resources"), base.get("oil"), base.get("fuel"),
+                                      max(0, base.get("supply") - base.get("supply_required"))))
+        self.assertEqual(bulk.need, sum(bulk.stock))
+        self.assertEqual(bulk.units, [])
+
+    def test_transport_marks_troops(self):
+        marks = mapview.transport_marks(self.save, "Troops")
+        self.assertEqual((len(marks), sum(m.need > 0 for m in marks), sum(bool(m.units) for m in marks)),
+                         (154, 41, 41))
+        self.assertEqual(sum(m.need > mapview.transport_capacity(m) for m in marks), 21)
+        self.assertEqual(marks, sorted(marks, key=lambda m: (m.x, m.y, m.side)))
+        self.assertTrue(all(m.base.get("port") > 0 and (any(m.available) or m.need) for m in marks))
+        pesca = next(m for m in marks if m.base.name == "Pescadores")
+        self.assertEqual((len(pesca.units), pesca.need), (12, 17488))
+        self.assertEqual(pesca.need, sum(u.troop + u.cargo for u in pesca.units))
+        unit = next(u for u in pesca.units if u.name == "47th Infantry Rgt")
+        raw = self._unit("47th Infantry Rgt")
+        self.assertEqual((unit.troop, unit.cargo), mapview.unit_load(self.save, raw))
+        self.assertEqual(unit.target, "Vigan")
+        self.assertEqual(raw.location_id, pesca.base.id)
+        self.assertEqual({m.mode for m in marks}, {"Troops"})
+
+    def test_transport_marks_bulk(self):
+        marks = mapview.transport_marks(self.save, "Bulk")
+        self.assertEqual((len(marks), sum(m.need > mapview.transport_capacity(m) for m in marks)), (551, 485))
+        self.assertTrue(all(m.units == [] and m.need == sum(m.stock) for m in marks))
+        with self.assertRaises(ValueError):
+            mapview.transport_marks(self.save, "Air")
+
+    def test_transport_marks_side(self):
+        for mode, counts in (("Troops", (82, 72)), ("Bulk", (378, 173))):
+            allied = mapview.transport_marks(self.save, mode, "Allied")
+            japanese = mapview.transport_marks(self.save, mode, "Japanese")
+            self.assertEqual((len(allied), len(japanese)), counts)
+            self.assertEqual({m.side for m in allied}, {"Allied"})
+            self.assertEqual({m.side for m in japanese}, {"Japanese"})
+            self.assertEqual(len(allied) + len(japanese), len(mapview.transport_marks(self.save, mode)))
+
+    def test_transport_bar(self):
+        self.assertEqual(mapview.transport_bar(0, "Troops"), 0)
+        self.assertAlmostEqual(mapview.transport_bar(mapview.TRANSPORT_TROOP_SCALE, "Troops"), 1.0)
+        self.assertAlmostEqual(mapview.transport_bar(mapview.TRANSPORT_TROOP_SCALE / 4, "Troops"), 0.5)
+        self.assertEqual(mapview.transport_bar(10 ** 6, "Troops"), 1.5)
+        self.assertAlmostEqual(mapview.transport_bar(mapview.TRANSPORT_BULK_SCALE, "Bulk"), 1.0)
+        self.assertAlmostEqual(mapview.transport_bar(mapview.TRANSPORT_BULK_SCALE / 4, "Bulk"), 0.5)
+        self.assertEqual(mapview.transport_bar(10 ** 7, "Bulk"), 1.5)
+        self.assertEqual(mapview.transport_bar(-5, "Bulk"), 0)
+        self.assertGreater(mapview.transport_bar(20000, "Troops"), mapview.transport_bar(20000, "Bulk"))
 
 
 if __name__ == "__main__":
