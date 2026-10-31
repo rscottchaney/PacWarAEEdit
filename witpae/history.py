@@ -18,7 +18,9 @@ Schema version 1:
             arrival 19999),
    "units": [land unit ids that have arrived], sorted; the fragment records of a unit split over several ships
             (same side and name as a lower id) are left out, so loading and unloading make no events,
-   "groups": [air group ids that have arrived], sorted}
+   "groups": [air group ids that have arrived], sorted,
+   and, for the Ship track on the Map tab, optionally (also absent in older snapshots, and not one of EVENT_KEYS):
+   "ship_hexes": {"<ship id>": [x, y]} for every arrived ship that has a hex (its task force's, else its port's)}
 Readers must accept snapshots without the optional keys and ignore keys they do not know (the first editor build
 with events also stored "leaders" in every snapshot; the leader log below replaced it).
 The side totals cover the places of the Industry report (bases, towns and minor places), so they match WiTPTracker.
@@ -52,7 +54,7 @@ import zlib
 from collections import namedtuple
 
 from . import (
-    aircraft, airgroups, bases, industry, landunits, leaders, losses, minefields, reports, shiprecords,
+    aircraft, airgroups, bases, industry, landunits, leaders, losses, mapview, minefields, reports, shiprecords,
     shiprepair, victory)
 from .container import SaveFile, SaveFormatError
 from .fileio import is_pbem
@@ -215,7 +217,8 @@ def build_snapshot(save, source_name, places=None):
             aircraft_entries[str(a.id)] = [a.side_id, pool, *(getattr(row, k) if row else 0 for k in LOSS_KINDS)]
     return {"version": VERSION, "date": date, "turn": turn, "scenario": scenario_name(save), "source": source_name,
             "recorded": datetime.datetime.now().isoformat(timespec="seconds"), "sides": sides,
-            "bases": base_entries, "aircraft": aircraft_entries, **event_data(save, places)}
+            "bases": base_entries, "aircraft": aircraft_entries, **event_data(save, places),
+            "ship_hexes": ship_hexes(save)}
 
 
 def event_data(save, places):
@@ -230,6 +233,17 @@ def event_data(save, places):
             units.append(u.id)
     return {"places": {str(p.id): p.base.side_id for p in places}, "ships": ships, "units": units,
             "groups": [g.id for g in airgroups.list_airgroups(save) if g.arrived]}
+
+
+def ship_hexes(save):
+    """{"<ship id>": [x, y]} of every arrived ship that has a hex (mapview.ship_hex)."""
+    out = {}
+    for r in shiprecords.list_ship_records(save):
+        if r.arrived:
+            hex_ = mapview.ship_hex(save, r.id)
+            if hex_ is not None:
+                out[str(r.id)] = list(hex_)
+    return out
 
 
 # ---- the leader change log ------------------------------------------------
@@ -509,3 +523,18 @@ def aircraft_series(snaps, aircraft_id, metric):
             value = entry[index]
         out.append((s["date"], s["turn"], side, value))
     return out
+
+
+def ship_track(snaps, ship_id):
+    """[(date, x, y)] in date order over the snapshots that hold the ship's hex."""
+    out = []
+    for s in sorted(snaps, key=lambda s: s["date"]):
+        pos = (s.get("ship_hexes") or {}).get(str(ship_id))
+        if pos:
+            out.append((s["date"], pos[0], pos[1]))
+    return out
+
+
+def ships_with_track(snaps):
+    """Ids of the ships whose hex is recorded in any snapshot."""
+    return {int(k) for s in snaps for k in s.get("ship_hexes") or ()}

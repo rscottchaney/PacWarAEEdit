@@ -114,6 +114,18 @@ class SnapshotTests(unittest.TestCase):
         ratings = history.leader_ratings(self.save)
         self.assertTrue(ratings and all(len(v) == 14 for v in ratings.values()))  # seven bytes as hex
 
+    def test_ship_hexes(self):
+        from witpae import mapview, shiprecords
+        hexes = self.snap["ship_hexes"]
+        self.assertEqual(hexes["3002"], [154, 104])  # Lexington, in a task force at sea
+        self.assertEqual(tuple(hexes["3002"]), mapview.ship_hex(self.save, 3002))
+        records = {r.id: r for r in shiprecords.list_ship_records(self.save)}
+        self.assertEqual(set(map(int, hexes)) - {i for i, r in records.items() if r.arrived}, set())
+        self.assertNotIn("3152", hexes)  # sunk
+        self.assertTrue(all(tuple(v) == mapview.ship_hex(self.save, int(k)) for k, v in hexes.items()))
+        self.assertGreater(len(hexes), 1000)
+        self.assertNotIn("ship_hexes", history.EVENT_KEYS)
+
     def test_units_leave_out_fragments_and_unarrived(self):
         from witpae import landunits
         arrived = {u.id: (u.side, u.display_name) for u in landunits.list_land_units(self.save) if u.arrived}
@@ -190,6 +202,13 @@ class FileTests(unittest.TestCase):
         self.assertEqual(history.read_snapshot(path), old)
         self.assertEqual(self.record("a.pws").status, history.REFRESHED)  # same source: refreshed with the new keys
         self.assertIn("places", history.read_snapshot(path))
+
+    def test_snapshot_without_ship_hexes_still_reads(self):
+        snap = history.build_snapshot(self.save, "a.pws", self.places)
+        old = {k: v for k, v in snap.items() if k != "ship_hexes"}
+        self.assertEqual(history.read_snapshot(history.write_snapshot(self.folder, old)), old)
+        self.assertEqual(history.ship_track([old], 3002), [])
+        self.assertEqual(history.ships_with_track([old]), set())
 
     def test_snapshot_with_a_leaders_key_still_reads(self):
         snap = dict(history.build_snapshot(self.save, "a.pws", self.places), leaders={"1": "00" * 7})
@@ -452,6 +471,26 @@ class ChartMathTests(unittest.TestCase):
         ticks = chart.x_ticks(0, 1500, 800)
         self.assertEqual((ticks[0], ticks[-1]), (0, 1500))
         self.assertLessEqual(len(ticks), 6)
+
+
+class ShipTrackTests(unittest.TestCase):
+    SNAPS = [
+        {"date": 411212, "ship_hexes": {"1": [5, 6]}},
+        {"date": 411210, "ship_hexes": {"1": [1, 2], "2": [9, 9]}},
+        {"date": 411211},  # recorded by an older editor
+        {"date": 411213, "ship_hexes": {"2": [8, 8]}},  # ship 1 missing: a gap
+        {"date": 411214, "ship_hexes": {"1": [5, 6], "2": [8, 8]}},
+    ]
+
+    def test_ship_track_is_in_date_order_and_skips_gaps(self):
+        self.assertEqual(history.ship_track(self.SNAPS, 1), [(411210, 1, 2), (411212, 5, 6), (411214, 5, 6)])
+        self.assertEqual(history.ship_track(self.SNAPS, 2), [(411210, 9, 9), (411213, 8, 8), (411214, 8, 8)])
+        self.assertEqual(history.ship_track(self.SNAPS, 3), [])
+        self.assertEqual(history.ship_track([], 1), [])
+
+    def test_ships_with_track(self):
+        self.assertEqual(history.ships_with_track(self.SNAPS), {1, 2})
+        self.assertEqual(history.ships_with_track([{"date": 1}]), set())
 
 
 if __name__ == "__main__":

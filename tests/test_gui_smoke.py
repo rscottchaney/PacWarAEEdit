@@ -2701,9 +2701,11 @@ class GuiSmokeTests(unittest.TestCase):
                      "Support": "664 hexes with land units (359 short",
                      "Supply": "665 hexes with supply (10 lacking, 10 with units short, 2 spoiling)",
                      "Transport": "154 ports (21 with more waiting than ships can carry)",
+                     "Ship track": "Type a ship name",
                      "Combat": "1"}[overlay]
                 ), (overlay, app.map_info.get()))
-            self.assertTrue(all(counts.values()), counts)
+            self.assertTrue(all(n for overlay, n in counts.items() if overlay != "Ship track"), counts)
+            self.assertEqual(counts["Ship track"], 0)  # no ship chosen yet
             self.assertEqual(str(app.map_side_box.cget("state")), "disabled")  # Side does not apply to combat
             app.map_overlay_var.set("Search arcs")
             app._map_overlay_changed()
@@ -2822,6 +2824,71 @@ class GuiSmokeTests(unittest.TestCase):
             # Opening another save clears what was drawn.
             app.load(path)
             self.assertEqual(app.map_canvas.find_withtag("pick"), ())
+
+    def test_map_ship_track(self):
+        from unittest import mock
+        import witpae_editor
+        from witpae import history
+        with mock.patch.object(witpae_editor.EditorApp, "_art_dirs", lambda self: []):
+            app = witpae_editor.EditorApp(self.root)
+            self.assertTrue(app.load(SAVE_015))
+            self.assertIn("Ship track", witpae_editor.MAP_OVERLAYS)
+            self.assertLess(witpae_editor.MAP_OVERLAYS.index("Ship track"), witpae_editor.MAP_OVERLAYS.index("Combat"))
+            folder = os.path.join(self.history_root, "grand-campaign")
+            snap = history.read_snapshot(os.path.join(folder, "19411210.json.gz"))
+            self.assertEqual(snap["ship_hexes"]["3002"], [154, 104])
+            # No positions recorded: the message.
+            history.write_snapshot(folder, {k: v for k, v in snap.items() if k != "ship_hexes"})
+            app.load_history_view()
+            app.map_overlay_var.set("Ship track")
+            app._map_overlay_changed(draw=False)
+            app.notebook.select(app.map_tab)
+            self.root.update()
+            self.assertTrue(app.map_info.get().endswith(
+                "No ship positions recorded yet: open or import saves to record them."))
+            # Three turns: it moves, then stays.
+            for date in (411211, 411212):
+                moved = dict(snap["ship_hexes"], **{"3002": [155, 104]})
+                history.write_snapshot(folder, dict(snap, date=date, ship_hexes=moved))
+            history.write_snapshot(folder, snap)
+            app.load_history_view()  # a reload redraws the visible map
+            self.assertIn("Type a ship name", app.map_info.get())
+            app.map_track_turns_var.set("All")
+            app.map_ship_var.set("lexing")
+            app.find_map_ship()
+            self.root.update()
+            self.assertEqual(app.map_track_ship, 3002)
+            self.assertEqual(app.map_ship_var.get(), "Lexington")
+            self.assertTrue(app.map_info.get().endswith("Lexington: 3 turns recorded, 1 moves"))
+            # One arrow, one dot for the turn it stayed, the hollow circle on the latest position.
+            kinds = sorted(app.map_canvas.type(i) for i in app.map_canvas.find_withtag("overlay"))
+            self.assertEqual(kinds, ["line", "oval", "oval"])
+            text = app.map_detail.get("1.0", "end")
+            self.assertTrue(text.startswith("Hex 155,104"))
+            self.assertIn("Ship track:\n  Lexington: 11 Dec 41, 12 Dec 41", text)
+            app.show_map_hex(154, 104)
+            self.assertIn("Lexington: 10 Dec 41\n", app.map_detail.get("1.0", "end"))
+            app.show_map_hex(1, 1)
+            self.assertNotIn("Ship track:", app.map_detail.get("1.0", "end"))
+            app.map_track_turns_var.set("Latest")
+            app.refresh_map()
+            self.assertTrue(app.map_info.get().endswith("Lexington: 1 turns recorded, 0 moves"))
+            app.map_ship_var.set("no such ship")
+            app.find_map_ship()
+            self.assertIn("No ship matches", app.map_info.get())
+            # The Ships tab button.
+            app.load(SAVE_015)
+            self.assertIsNone(app.map_track_ship)
+            app.notebook.select(app.shiprec_tab)
+            app.shiprec_tree.selection_set("3002")
+            self.root.update()
+            app.map_overlay_var.set("Locations")
+            app.show_shiprec_track()
+            self.root.update()
+            self.assertEqual(app.notebook.select(), str(app.map_tab))
+            self.assertEqual(app.map_overlay_var.get(), "Ship track")
+            self.assertEqual(app.map_track_ship, 3002)
+            self.assertIn("Lexington: ", app.map_info.get())
 
     def test_map_tab_without_art(self):
         from types import SimpleNamespace
