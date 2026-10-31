@@ -785,6 +785,11 @@ to a save.
   A kind of event is skipped for a pair of turns when either snapshot lacks its key. The tab then says how many turns
   were recorded by an older editor: opening the same save again refreshes its turn, and Import saves... replaces the
   snapshot of each save's date (whatever file it came from), so import the old saves again to get their events.
+- Ship positions in a snapshot: the optional key `ship_hexes` (ship id -> `[x, y]`, the task force's hex or else the
+  port's, for every arrived ship that has one), used by the Map tab's Ship track overlay. It is not an event key, so
+  snapshots without it are not reported as recorded by an older editor. It adds about 11 KB to a gzipped snapshot of a
+  late game (about 3,000 ships; 45 KB before). Turns recorded earlier have no positions until the save is opened or
+  imported again.
 - Leader skill changes are not stored in every snapshot (all ratings would cost about 260 KB a turn). The campaign
   folder holds one change log, `leaders.json.gz`: the ratings (7 bytes as hex) of every named leader at the latest
   recorded turn and at the turn before, and a list of changes `[date, leader id, old hex, new hex]`. Recording or
@@ -902,6 +907,16 @@ is read-only: nothing is written to the save or to the art.
   capacities are in the same units, but a busy port holds far more space than its units need),
   Bulk 50000 is 1 hex and 112500 or more 1.5. Clicking a hex lists, for both modes, the ships and capacity, the
   units waiting with their troop and cargo load and target, and the bulk stocks.
+- Ship track (ported from the Ship History tab of WitpStaff): where one ship has been over the recorded turns of the
+  History tab. The Ship box and Find match the ship by name over the ships of the open save (exact name, then one
+  starting with the text, then one containing it; ships that have a recorded track come first) and centre the map on
+  its latest position; the Ships tab's Track on map button opens the overlay for the selected ship. Turns (Latest,
+  Last 3, Last 7, All) keeps the newest recorded turns. The track is drawn in the ship's side colour: an arrow
+  between two consecutive positions that differ, a small dot for each turn it stayed in the same hex (repeated dots
+  spread around the hex, so a long stay shows as a cluster) and a larger hollow circle on the latest position. The
+  summary reads "<name>: <n> turns recorded, <m> moves". Clicking a hex lists the dates the shown ship was in it.
+  Positions exist only for turns recorded by this version of the editor; open or import saves to record them. A turn
+  where the ship is missing (not yet arrived, or sunk) leaves a gap, and the arrow joins the positions on either side.
 - Combat: a diamond per action of the combat reports that has a hex, filtered by Kind (Submarine and ASW are the
   tracker's enemy subs) and Turns (Latest, Last 3, Last 7 or All).
 - Click a hex to ring it and list, below the map, the places, land units (with their support and need), support

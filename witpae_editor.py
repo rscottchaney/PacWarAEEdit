@@ -7,6 +7,7 @@ All data logic lives in the witpae package; this file only wires widgets.
 
 import base64
 import datetime
+import math
 import os
 import struct
 import sys
@@ -848,7 +849,7 @@ HISTORY_EVENT_COLUMNS = ("date", "kind", "side", "subject", "detail")
 HISTORY_ALL = "All"
 
 MAP_SCALES = {"12%": 8, "25%": 4, "50%": 2, "100%": 1}  # label -> every step-th pixel of the art
-MAP_OVERLAYS = ("Locations", "Search arcs", "Task forces", "Support", "Supply", "Transport", "Combat")
+MAP_OVERLAYS = ("Locations", "Search arcs", "Task forces", "Support", "Supply", "Transport", "Ship track", "Combat")
 MAP_SIDES = ("All", "Allied", "Japanese")
 MAP_TOWNS = ("Bases", "Bases and towns")
 MAP_ARC_KINDS = ("Naval", "ASW")
@@ -2004,6 +2005,7 @@ class EditorApp:
         buttons.grid(row=row, column=0, columnspan=2, pady=6)
         ttk.Button(buttons, text="Apply", command=self.apply_shiprec).pack(side="left", padx=4)
         ttk.Button(buttons, text="Repair all", command=self.repair_shiprec).pack(side="left", padx=4)
+        ttk.Button(buttons, text="Track on map", command=self.show_shiprec_track).pack(side="left", padx=4)
         row += 1
         self.shiprec_info = {}
         for name, label in (("class", "Class (read-only)"), ("nation", "Nation (read-only)"),
@@ -5619,6 +5621,9 @@ class EditorApp:
         self.history_snaps, self.history_problems = history.load_history(self.history_dir)
         self.history_leader_log = history.read_leader_log(self.history_dir)
         self.history_events = None
+        self.map_stale = True  # the Ship track overlay reads the snapshots
+        if self._map_visible():
+            self.refresh_map()
         self._set_history_choices()
         if self.history_base_var.get() not in self.history_choices:
             self.history_base_var.set(next(iter(self.history_choices), ""))
@@ -6067,6 +6072,7 @@ class EditorApp:
         self.map_cache = {}  # overlay data of the open save, by the arguments of its builder
         self.map_index = None
         self.map_places = None
+        self.map_track_ship = None  # id of the ship whose history the Ship track overlay shows
         self.map_stale = True  # the open save has not been drawn yet
         self.map_message = ""
         self.map_press = None
@@ -6112,6 +6118,16 @@ class EditorApp:
         self.map_combat_turns_var = tk.StringVar(value=next(iter(intel.TURN_CHOICES)))
         self._report_combo(cmb, "Turns:", self.map_combat_turns_var, intel.TURN_CHOICES, self.refresh_map, 8)
 
+        trk = self.map_filter_frames["Ship track"] = ttk.Frame(self.map_filters)
+        ttk.Label(trk, text="Ship:").pack(side="left")
+        self.map_ship_var = tk.StringVar()
+        ship = ttk.Entry(trk, textvariable=self.map_ship_var, width=22)
+        ship.pack(side="left", padx=(4, 2))
+        ship.bind("<Return>", lambda e: self.find_map_ship())
+        ttk.Button(trk, text="Find", command=self.find_map_ship).pack(side="left", padx=(0, 8))
+        self.map_track_turns_var = tk.StringVar(value="All")  # a track needs more than the latest turn
+        self._report_combo(trk, "Turns:", self.map_track_turns_var, intel.TURN_CHOICES, self.refresh_map, 8)
+
         self.map_info = tk.StringVar(value="Open a save to see the map")
         ttk.Label(tab, textvariable=self.map_info).pack(side="bottom", anchor="w", pady=(4, 0))
         dframe = ttk.Frame(tab)
@@ -6155,7 +6171,7 @@ class EditorApp:
             frame.pack_forget()
             if name == overlay:
                 frame.pack(side="left")
-        self.map_side_box.configure(state="disabled" if overlay == "Combat" else "readonly")
+        self.map_side_box.configure(state="disabled" if overlay in ("Combat", "Ship track") else "readonly")
         if draw:
             self.refresh_map()
 
@@ -6171,6 +6187,8 @@ class EditorApp:
         self.map_cache = {}
         self.map_index = None
         self.map_places = None
+        self.map_track_ship = None
+        self.map_ship_var.set("")
         self.map_shown = None  # the art folder depends on the save's folder
         self.map_stale = True
         self.map_canvas.delete("overlay", "pick")
@@ -6350,6 +6368,8 @@ class EditorApp:
                                            outline="black", tags="overlay")
             short = sum(m.need > mapview.transport_capacity(m) for m in marks)
             summary = f"{len(marks)} ports ({short} with more waiting than ships can carry)"
+        elif overlay == "Ship track":
+            summary = self._draw_ship_track(c, point, scale)
         else:
             kind = self.map_combat_kind_var.get()
             turns = intel.TURN_CHOICES[self.map_combat_turns_var.get()]
@@ -6360,6 +6380,44 @@ class EditorApp:
                                  tags="overlay")
             summary = f"{len(marks)} combat actions"
         self.map_info.set(f"{self.map_message}  {summary}".strip() if self.map_message else summary)
+
+    def _map_shown_track(self):
+        """(ship record, [(date, x, y)]) of the Ship track overlay, the Turns filter applied; None without a ship."""
+        rec = self.shiprecs.get(self.map_track_ship)
+        if rec is None:
+            return None
+        dates = sorted({s["date"] for s in self.history_snaps if s.get("ship_hexes")})
+        turns = intel.TURN_CHOICES[self.map_track_turns_var.get()]
+        keep = set(dates if turns is None else dates[-turns:])
+        return rec, [t for t in history.ship_track(self.history_snaps, rec.id) if t[0] in keep]
+
+    def _draw_ship_track(self, c, point, scale):
+        """Draw the shown ship's track in its side colour and return the summary text."""
+        if not any(s.get("ship_hexes") for s in self.history_snaps):
+            return "No ship positions recorded yet: open or import saves to record them."
+        shown = self._map_shown_track()
+        if shown is None:
+            return "Type a ship name and press Find to see where it has been."
+        rec, track = shown
+        color = self._map_color(rec.side)
+        moves, stays = 0, {}  # stays: dots drawn so far in each hex
+        for (_d0, x0, y0), (_d1, x1, y1) in zip(track, track[1:]):
+            if (x0, y0) != (x1, y1):
+                moves += 1
+                (ax, ay), (bx, by) = point(x0, y0), point(x1, y1)
+                c.create_line(ax, ay, bx, by, fill=color, width=2, arrow="last", arrowshape=(10, 12, 4),
+                              tags="overlay")
+                continue
+            k = stays[x1, y1] = stays.get((x1, y1), 0) + 1
+            px, py = point(x1, y1)
+            spread = min(mapview.HEX_W / 2, 6 * math.sqrt(k)) * scale  # a long stay becomes a cluster
+            px, py = px + spread * math.cos(2.4 * k), py + spread * math.sin(2.4 * k)  # golden-angle spiral
+            c.create_oval(px - 2, py - 2, px + 2, py + 2, fill=color, outline="black", tags="overlay")
+        if track:
+            px, py = point(track[-1][1], track[-1][2])
+            r = max(5, mapview.HEX_W / 2 * scale)
+            c.create_oval(px - r, py - r, px + r, py + r, outline=color, width=3, tags="overlay")
+        return f"{rec.name}: {len(track)} turns recorded, {moves} moves"
 
     def zoom_map(self, event, direction):
         """Step the Scale one choice in (direction 1) or out (-1), keeping the map point under the mouse in place."""
@@ -6442,6 +6500,14 @@ class EditorApp:
             return f"{text}; waiting (bulk): resources {resources}, oil {oil}, fuel {fuel}, supply surplus {spare}"
         return f"{chart.date_label(m.date)} {m.kind}: {m.title}"
 
+    def _map_track_visits(self, x, y):
+        """(ship name, dates) of the shown track's positions in hex (x, y); None off the Ship track overlay."""
+        if self.map_overlay_var.get() != "Ship track":
+            return None
+        shown = self._map_shown_track()
+        dates = [d for d, tx, ty in shown[1] if (tx, ty) == (x, y)] if shown else []
+        return (shown[0].name, dates) if dates else None
+
     def show_map_hex(self, x, y):
         """Mark hex (x, y) and list what is in it: places, land units, support, task forces, air groups searching from
         it, combat."""
@@ -6458,7 +6524,11 @@ class EditorApp:
             if category in contents:
                 lines.append(f"{category}:")
                 lines.extend(f"  {self._map_item_text(category, m)}" for m in contents[category])
-        if not contents:
+        visits = self._map_track_visits(x, y)
+        if visits:
+            lines.append("Ship track:")
+            lines.append(f"  {visits[0]}: " + ", ".join(chart.date_label(d) for d in visits[1]))
+        if not contents and not visits:
             lines.append("Nothing here")
         needy = [m for m in contents.get("Supply", ()) if m.available < m.required or m.short_units]
         if needy:
@@ -6486,15 +6556,52 @@ class EditorApp:
         if match is None:
             self.map_info.set(f"No base or town matches {needle!r}")
             return
+        self._centre_map_on(match.x, match.y)
+        self.show_map_hex(match.x, match.y)
+
+    def _centre_map_on(self, x, y):
         if self.map_stale:
             self.refresh_map()
         c = self.map_canvas
         scale = 1 / self._map_step()
-        px, py = mapview.hex_to_pixel(match.x, match.y)
+        px, py = mapview.hex_to_pixel(x, y)
         width, height = self.map_size
         c.xview_moveto((px * scale - c.winfo_width() / 2) / width)
         c.yview_moveto((py * scale - c.winfo_height() / 2) / height)
-        self.show_map_hex(match.x, match.y)
+
+    def find_map_ship(self):
+        """Show the track of the ship whose name matches the Ship box (exact, then prefix, then contains), preferring
+        ships that have a recorded track, and centre the map on its latest position."""
+        needle = self.map_ship_var.get().strip().lower()
+        if self.save is None or not needle:
+            return
+        tracked = history.ships_with_track(self.history_snaps)
+        candidates = sorted(self.shiprecs.values(), key=lambda r: (r.id not in tracked, r.id))
+        match = (next((r for r in candidates if r.name.lower() == needle), None)
+                 or next((r for r in candidates if r.name.lower().startswith(needle)), None)
+                 or next((r for r in candidates if needle in r.name.lower()), None))
+        if match is None:
+            self.map_info.set(f"No ship matches {needle!r}")
+            return
+        self._show_ship_track(match.id)
+
+    def _show_ship_track(self, ship_id):
+        self.map_track_ship = ship_id
+        self.map_ship_var.set(self.shiprecs[ship_id].name)
+        self.refresh_map()
+        shown = self._map_shown_track()
+        if shown and shown[1]:
+            self._centre_map_on(*shown[1][-1][1:])
+            self.show_map_hex(*shown[1][-1][1:])
+
+    def show_shiprec_track(self):
+        """The Ships tab's Track on map button: the Map tab's Ship track overlay with the selected ship."""
+        if self.shiprec_current is None:
+            return
+        self.map_overlay_var.set("Ship track")
+        self._map_overlay_changed(draw=False)
+        self.notebook.select(self.map_tab)
+        self._show_ship_track(self.shiprec_current)
 
     def apply_title(self):
         if self.save is None:
