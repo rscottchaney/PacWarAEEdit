@@ -322,6 +322,32 @@ tab), aircraft model (Aircraft tab), engine (Engines report) or minefields (Mine
   Engines report).
 - The code is in `witpae/alerts.py`.
 
+### Ship class ratings
+
+The "Ship class ratings" sub-tab (after Ship upgrades) is read-only. It ports WitpStaff's Ship Classes tab (manual
+4.6) to help pick CV escorts: one sortable row per ship class record (a refit stage), with Type, Side, Date, Speed,
+Endurance, Durability, Belt, Deck and the ratings below. The bar has a name Search, a Type filter, a Side filter,
+Show ("With ships", the default, lists the stages that have at least one ship in the game; "All stages") and a count.
+Double-click a row to open the class in the Ship Classes tab.
+
+- Main guns: the Navy Gun or DP Gun device with the highest effect, the total num over every Navy/DP slot of that effect
+  (mounts of equal effect merge, so Benson shows x5) and the smallest ammo of those slots as "(N salvoes)". The name
+  is that of the device with the most guns among them. Sorts by effect, then num.
+- Low AA / High AA: the sum of effect x num over Flak, DP Gun and AA Rocket slots, with a ceiling below / from 20000,
+  halved as the game displays it. High AA also shows the highest ceiling of those slots and sorts by it.
+- ASW (devices): WoOS' ASW rating, the sum of effect x accuracy / 100 x num over ASW devices (all depth charge racks,
+  K-guns and mortars are type 20), with the number of devices in brackets. Sorts by the rating.
+- Torpedoes (tubes): the sum of num x ammo over Torpedo slots (ammo is the shots per tube carried: Kagero 8 tubes x 2 =
+  16), with the tubes in brackets.
+- Specials: the radar (types 6, 8, 9, 10) and AA rocket (11) devices; every ship radar in the sample save is type 10.
+- A/B/S: ships of the class record that are available (arrived), building or not yet arrived, and sunk (days to
+  arrival 19999). Side is that of the class's ships, else from the class's nation as for ships.
+
+Device offsets (type u8 at 26, effect i16 at 32, accuracy u8 at 36, ceiling u16 at 48) come from ae-editor's field map
+and were matched against scenario data. The ceiling must be read unsigned (the 5in/38 DP gun is 37200). Lexington
+(#674) shows 8in/55 Mk 9 Gun x8 (12 salvoes), Low AA 500 and High AA 324 (27400); Kagero (#1472) 12.7cm/50 3YT T. B.
+x6 (18 salvoes), torpedoes 16. The code is in `witpae/shipratings.py`.
+
 ### Ship production
 
 Japan only. The "Ship production" sub-tab (after Ship upgrades) is read-only and follows the game manual

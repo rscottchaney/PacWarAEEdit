@@ -198,6 +198,10 @@ class Ship:
         if isinstance(slot, bool) or not isinstance(slot, int) or slot not in self.weapon_slots():
             raise ValueError(f"slot {slot!r} is empty or does not exist")
 
+    def device_id(self, slot):
+        """Id of the device in a slot, 0 when the slot is empty."""
+        return self._i16(DEVICE_OFFSET + 2 * slot)
+
     def get_weapon(self, slot):
         """Dict with name, num, face (code), mount, armor and ammo of a non-empty slot."""
         self._check_slot(slot)

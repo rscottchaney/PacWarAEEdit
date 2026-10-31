@@ -1167,6 +1167,43 @@ class GuiSmokeTests(unittest.TestCase):
         self.root.update()
         self.assertEqual(app.notebook.select(), str(app.bases_tab))
         self.assertEqual(app.tree.selection(), ("731",))
+        # Ship class ratings follow Ship upgrades; classes with ships by default.
+        tabs = [app.reports_notebook.tab(t, "text") for t in app.reports_notebook.tabs()]
+        self.assertEqual(tabs[tabs.index("Ship upgrades") + 1], "Ship class ratings")
+        self.assertEqual(len(app.rating_tree.get_children()), 861)
+        self.assertEqual(app.rating_count.get(), "861 class records")
+        self.assertEqual(app.rating_tree.set("674", "main"), "8in/55 Mk 9 Gun x8 (12 salvoes)")
+        self.assertEqual(app.rating_tree.set("674", "high_aa"), "324 (27400)")
+        self.assertEqual(app.rating_tree.set("1472", "torps"), "16 (8 tubes)")
+        self.assertEqual(app.rating_tree.set("1472", "abs"), "18/0/0")
+        self.assertNotIn("526", app.rating_tree.get_children())
+        app.rating_show_var.set("All stages")
+        app.refresh_rating_list()
+        self.assertEqual(len(app.rating_tree.get_children()), 1721)
+        self.assertEqual(app.rating_tree.set("526", "asw"), "252 (8)")
+        app.rating_show_var.set("With ships")
+        app.rating_type_var.set("CV")
+        app.refresh_rating_list()
+        self.assertEqual(len(app.rating_tree.get_children()), 22)
+        app.rating_side_var.set("Japanese")
+        app.refresh_rating_list()
+        self.assertEqual(len(app.rating_tree.get_children()), 10)
+        app.rating_side_var.set("All")
+        app.sort_ratings_by("high_aa")  # sorts by ceiling, ascending first
+        ceilings = {r.class_id: r.aa_ceiling for r in app.ratings_all}
+        order = [ceilings[int(i)] for i in app.rating_tree.get_children()]
+        self.assertEqual(order, sorted(order))
+        self.assertGreater(order[-1], order[0])
+        app.rating_search_var.set("lexing")
+        self.assertEqual(app.rating_tree.get_children(), ("674",))
+        # Double-click opens the class in Ship Classes, clearing that tab's search when it hides the row.
+        app.ship_search_var.set("zzz")
+        app.rating_tree.selection_set("674")
+        app.jump_to_rating_class()
+        self.root.update()
+        self.assertEqual(app.notebook.select(), str(app.ships_tab))
+        self.assertEqual(app.ship_tree.selection(), ("674",))
+        app.notebook.select(app.reports_tab)
         # Edits are picked up when the Reports tab is shown again.
         app.bases[731].set("fuel", 0)
         app.notebook.select(app.reports_tab)
