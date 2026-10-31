@@ -754,7 +754,7 @@ class GuiSmokeTests(unittest.TestCase):
 
     def test_leaders_tab(self):
         from unittest import mock
-        from witpae import airgroups
+        from witpae import airgroups, leaders
         import witpae_editor
         app = witpae_editor.EditorApp(self.root)
         self.assertTrue(app.load(SAVE_015))
@@ -774,6 +774,34 @@ class GuiSmokeTests(unittest.TestCase):
         app.refresh_ldr_list()
         self.assertEqual(len(app.ldr_tree.get_children()), 396)
         app.ldr_filter_vars["type"].set("All")
+        # Rating: blank until a weight is set; a preset sets the filters and ranks the first row highest.
+        app.refresh_ldr_list()
+        self.assertEqual(app.ldr_tree.set("27701", "rating"), "")
+        app.ldr_preset_var.set("Carrier TF")
+        app.choose_ldr_preset()
+        self.assertEqual((app.ldr_filter_vars["type"].get(), app.ldr_filter_vars["branch"].get()),
+                         ("Task Force", "Navy"))
+        self.assertEqual(app.ldr_filter_vars["side"].get(), "All")
+        ids = app.ldr_tree.get_children()
+        ratings = [int(app.ldr_tree.set(i, "rating")) for i in ids]
+        self.assertEqual(ratings, sorted(ratings, reverse=True))
+        self.assertEqual(ids[0], "7816")
+        self.assertEqual(ratings[0], max(leaders.weighted_rating(app.ldr_rows[int(i)], app.ldr_weights) for i in ids))
+        # Changing a weight reorders; text that is not an integer in range is ignored.
+        app.ldr_weight_vars["air"].set("-5")
+        self.assertEqual(app.ldr_weights["air"], -5)
+        self.assertNotEqual(app.ldr_tree.get_children()[0], "7816")
+        for text in ("x", "", "-", "9", "2.5"):
+            app.ldr_weight_vars["naval"].set(text)
+        self.assertEqual(app.ldr_weights["naval"], 1)
+        app.clear_ldr_weights()
+        self.assertEqual(set(app.ldr_weights.values()), {0})
+        self.assertEqual(app.ldr_preset_var.get(), "(none)")
+        self.assertEqual(app.ldr_filter_vars["type"].get(), "Task Force")
+        self.assertEqual({app.ldr_tree.set(i, "rating") for i in app.ldr_tree.get_children()}, {""})
+        app.ldr_filter_vars["type"].set("All")
+        app.ldr_filter_vars["branch"].set("All")
+        app.refresh_ldr_list()
         app.ldr_search_var.set("19th TS")  # matches the Commands column
         app.refresh_ldr_list()
         self.assertIn("27701", app.ldr_tree.get_children())

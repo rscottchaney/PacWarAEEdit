@@ -122,6 +122,8 @@ LEADER_COLUMNS = [
     ("nation", "Nation", 55, False, lambda r: r.nation),
     ("rank", "Rank", 50, False, lambda r: r.rank),
     ("type", "Type", 110, False, lambda r: r.type),
+    # Needs the current weights, so the app computes it (see EditorApp._ldr_value); the getter is a placeholder.
+    ("rating", "Rating", 60, True, lambda r: 0),
     ("leadership", "Leadership", 70, True, lambda r: r.leadership),
     ("inspiration", "Inspiration", 70, True, lambda r: r.inspiration),
     ("naval", "Naval", 45, True, lambda r: r.naval),
@@ -134,6 +136,7 @@ LEADER_COLUMNS = [
     ("commands", "Commands", 150, False, lambda r: r.commands),
 ]
 LEADER_COLUMN_BY_ID = {c[0]: c for c in LEADER_COLUMNS}
+LEADER_COLUMN_INDEX = {c[0]: i for i, c in enumerate(LEADER_COLUMNS)}
 
 # Report rows are the namedtuples of witpae.reports. Over values, dates and due months sort
 # on the raw getter value and are shown through the *_TEXT formatters.
@@ -978,6 +981,8 @@ class EditorApp:
         self.ldr_edited = set()
         self.ldr_sort_col = "id"
         self.ldr_sort_reverse = False
+        self._ldr_setting_weights = False
+        self.ldr_weights = {name: 0 for name in leaders.RATING_NAMES}
         self.ldr_vars = {}
         self.ldr_current = None
         self.ldr_search_job = None
@@ -2488,6 +2493,24 @@ class EditorApp:
             box.bind("<<ComboboxSelected>>", lambda e: self.refresh_ldr_list())
         self.ldr_count = tk.StringVar()
         ttk.Label(bar, textvariable=self.ldr_count).pack(side="right")
+
+        rbar = ttk.Frame(left)
+        rbar.pack(side="top", fill="x", pady=(4, 0))
+        ttk.Label(rbar, text="Rating:").pack(side="left")
+        ttk.Label(rbar, text="Preset:").pack(side="left", padx=(4, 0))
+        self.ldr_preset_var = tk.StringVar(value="(none)")
+        box = ttk.Combobox(rbar, textvariable=self.ldr_preset_var, values=["(none)"] + list(leaders.PRESETS),
+                           state="readonly", width=17)
+        box.pack(side="left", padx=4)
+        box.bind("<<ComboboxSelected>>", lambda e: self.choose_ldr_preset())
+        self.ldr_weight_vars = {}
+        for name, label in zip(leaders.RATING_NAMES, ("Ldr", "Insp", "Naval", "Air", "Land", "Admin", "Aggr")):
+            ttk.Label(rbar, text=label).pack(side="left", padx=(6, 0))
+            var = self.ldr_weight_vars[name] = tk.StringVar(value="0")
+            ttk.Spinbox(rbar, textvariable=var, from_=leaders.WEIGHT_MIN, to=leaders.WEIGHT_MAX, width=3,
+                        command=self._ldr_weights_changed).pack(side="left", padx=2)
+            var.trace_add("write", lambda *a: self._ldr_weights_changed())
+        ttk.Button(rbar, text="Clear", command=self.clear_ldr_weights).pack(side="left", padx=8)
 
         self.ldr_tree = ttk.Treeview(left, columns=[c[0] for c in LEADER_COLUMNS], show="headings",
                                      selectmode="browse", height=8)
@@ -4415,10 +4438,66 @@ class EditorApp:
             self.root.after_cancel(self.ldr_search_job)
         self.ldr_search_job = self.root.after(250, self.refresh_ldr_list)
 
+    def _ldr_value(self, cid, r):
+        """A leader's cell value; the Rating column uses the current weights."""
+        if cid == "rating":
+            return leaders.weighted_rating(r, self.ldr_weights)
+        return LEADER_COLUMN_BY_ID[cid][4](r)
+
+    def _ldr_weights_changed(self):
+        """Read the weight boxes (ignoring text that is not an integer in range), then rank by Rating."""
+        if self._ldr_setting_weights:
+            return
+        changed = False
+        for name, var in self.ldr_weight_vars.items():
+            try:
+                v = int(var.get())
+            except ValueError:
+                continue
+            if leaders.WEIGHT_MIN <= v <= leaders.WEIGHT_MAX and v != self.ldr_weights[name]:
+                self.ldr_weights[name] = v
+                changed = True
+        if changed:
+            self.ldr_sort_col, self.ldr_sort_reverse = "rating", True
+            self.refresh_ldr_list()
+
+    def _set_ldr_weights(self, weights):
+        self._ldr_setting_weights = True
+        try:
+            for name, var in self.ldr_weight_vars.items():
+                self.ldr_weights[name] = weights.get(name, 0)
+                var.set(str(self.ldr_weights[name]))
+        finally:
+            self._ldr_setting_weights = False
+        self.ldr_sort_col, self.ldr_sort_reverse = "rating", True
+
+    def choose_ldr_preset(self):
+        """Set the weights and the type and branch filters from a preset; "(none)" clears the weights only."""
+        preset = leaders.PRESETS.get(self.ldr_preset_var.get())
+        if preset is None:
+            self.clear_ldr_weights()
+            return
+        weights, type_text, branch = preset
+        self.ldr_filter_vars["type"].set(type_text)
+        self.ldr_filter_vars["branch"].set(branch)
+        self._set_ldr_weights(weights)
+        self.refresh_ldr_list()
+
+    def clear_ldr_weights(self):
+        self.ldr_preset_var.set("(none)")
+        self._set_ldr_weights({})
+        self.refresh_ldr_list()
+
     def _ldr_sort_key(self, r):
-        _cid, _h, _w, numeric, get = LEADER_COLUMN_BY_ID[self.ldr_sort_col]
-        v = get(r)
+        _cid, _h, _w, numeric, _get = LEADER_COLUMN_BY_ID[self.ldr_sort_col]
+        v = self._ldr_value(self.ldr_sort_col, r)
         return (v if numeric else str(v).lower(), r.id)
+
+    def _ldr_row_values(self, r):
+        values = [self._ldr_value(c[0], r) for c in LEADER_COLUMNS]
+        if not any(self.ldr_weights.values()):
+            values[LEADER_COLUMN_INDEX["rating"]] = ""
+        return values
 
     def refresh_ldr_list(self):
         if self.ldr_search_job is not None:
@@ -4434,7 +4513,7 @@ class EditorApp:
             tags = ("edited",) if r.id in self.ldr_edited else ()
             if r.delay > 0:
                 tags += ("pending",)
-            self.ldr_tree.insert("", "end", iid=str(r.id), values=[get(r) for *_, get in LEADER_COLUMNS], tags=tags)
+            self.ldr_tree.insert("", "end", iid=str(r.id), values=self._ldr_row_values(r), tags=tags)
         self.ldr_count.set(f"{len(rows)} of {len(self.ldr_rows)} leaders")
         if selected is not None and self.ldr_tree.exists(str(selected)):
             self.ldr_tree.selection_set(str(selected))

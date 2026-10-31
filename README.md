@@ -246,7 +246,13 @@ The Leaders tab lists every named leader (section 0x15, 50000 records of 180
 bytes; the ID is the leader id that air groups, ships and land units refer to).
 Filters: Side, Branch (Army, Navy, Air, from the rank), Type, Assigned, and a
 Search box that matches the name or the unit the leader commands. All columns
-sort. Leaders who are not yet available (delay above 0 days) are dimmed. Select a leader to edit the ratings (same Apply, validation and row
+sort. The Rating bar under the filters ranks leaders by a weighted sum of the seven ratings: set a
+weight from -5 to 5 for each rating (changing one sorts the Rating column, highest first; the column is blank
+while every weight is 0), or pick a preset (Submarine, Battleship, Fighter group, Bomber group, Training group,
+Carrier TF, Surface combat TF, Bombardment TF, Land HQ, Air HQ), which sets the weights and the Type and Branch
+filters. Clear zeroes the weights and leaves the filters. The presets and the weight range are ported from the
+Leaders tab of WitpStaff (its leader-prefs.csv "good at" multipliers). Leaders who are not yet available (delay
+above 0 days) are dimmed. Select a leader to edit the ratings (same Apply, validation and row
 highlight as the other tabs); double-click one that commands a unit to jump to
 that unit in its tab (Air Groups, Ships, Task Forces or Land Units), with that
 tab's filters cleared. Edits in the Air Groups commander box and in this tab

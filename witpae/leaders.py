@@ -26,6 +26,12 @@ point at a type-5 leader) and location records (u16 at 128,
 used records count. A leader named by several units is listed with the first
 (air groups, then ships, then locations in id order) and a count of the others.
 Rank codes outside 0..53 and types outside 0..6 show their number.
+
+The user-weighted rating (`weighted_rating`) and the `PRESETS` are ported from the
+Leaders tab of WitpStaff, whose leader-prefs.csv holds the "good at" multipliers
+(-5..5) per kind of command. Its WitP-era ratings map to AE as Air -> air, Sea ->
+naval, Land -> land, Skill -> leadership, Administration -> admin, Agressiveness
+-> aggression, Inspiration -> inspiration; its minimum rank and side are dropped.
 """
 
 import struct
@@ -55,6 +61,22 @@ RANKS = ("WO 2LT 1LT CPT MAJ LTC COL MGEN LGEN GEN PO2 PO1 CPO WO ENS LTJG LT LC
 TYPES = {0: "None", 1: "Headquarters", 2: "Large Ground Unit", 3: "Small Ground Unit", 4: "Task Force",
          5: "Ship", 6: "Air Group"}
 BRANCHES = ("Army", "Navy", "Air")
+RATING_NAMES = tuple(f.name for f in LEADER_FIELDS)
+WEIGHT_MIN, WEIGHT_MAX = -5, 5
+# name -> (weights, type label or "All", branch or "All"); from WitpStaff's leader-prefs.csv.
+PRESETS = {
+    "Submarine": ({"naval": 5, "leadership": 1, "aggression": -4}, "Ship", "Navy"),
+    "Battleship": ({"naval": 5, "admin": 1, "aggression": 2}, "Ship", "Navy"),
+    "Fighter group": ({"air": 5, "leadership": 2, "aggression": 4, "inspiration": 2}, "Air Group", "All"),
+    "Bomber group": ({"air": 5, "leadership": 2, "admin": 2, "aggression": -4, "inspiration": 5}, "Air Group", "All"),
+    "Training group": ({"air": 2, "leadership": 5, "admin": 2, "aggression": -3, "inspiration": 3}, "Air Group",
+                       "All"),
+    "Carrier TF": ({"air": 5, "naval": 1, "aggression": -4, "inspiration": 4}, "Task Force", "Navy"),
+    "Surface combat TF": ({"naval": 5, "aggression": 2}, "Task Force", "Navy"),
+    "Bombardment TF": ({"naval": 4, "aggression": 3}, "Task Force", "Navy"),
+    "Land HQ": ({"land": 5, "admin": 2, "inspiration": 3}, "Headquarters", "Army"),
+    "Air HQ": ({"air": 5, "admin": 2, "inspiration": 4}, "Headquarters", "All"),
+}
 KIND_AIR_GROUP, KIND_SHIP, KIND_LCU, KIND_TF = "Air group", "Ship", "LCU", "TF"
 
 LeaderRow = namedtuple(
@@ -169,3 +191,8 @@ def filter_leaders(rows, side="All", branch="All", type_text="All", assigned="Al
             and (type_text == "All" or r.type == type_text)
             and (assigned == "All" or bool(r.kind) == (assigned == "Assigned"))
             and (not needle or needle in r.name.lower() or needle in r.commands.lower())]
+
+
+def weighted_rating(row, weights):
+    """Sum of weight * rating over the seven ratings; a name missing from `weights` counts 0."""
+    return sum(weights.get(name, 0) * getattr(row, name) for name in RATING_NAMES)
