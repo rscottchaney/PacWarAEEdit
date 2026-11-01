@@ -964,6 +964,37 @@ class GuiSmokeTests(unittest.TestCase):
                 app.raise_unit_support()
         self.assertTrue(err.called)
 
+    def test_treeview_tag_colours_are_not_overridden(self):
+        # Tk 8.6.9 maps normal rows to the system colours, hiding the edited, pending and short tag colours.
+        from tkinter import ttk
+        import witpae_editor
+        witpae_editor.EditorApp(self.root)
+        style = ttk.Style()
+        for option in ("foreground", "background"):
+            states = [m[:-1] for m in style.map("Treeview", query_opt=option)]
+            self.assertNotIn(("!disabled", "!selected"), states)
+            self.assertIn(("selected",), states)  # the selection colour is kept
+
+    def test_base_supply_short_highlight(self):
+        import witpae_editor
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        self.assertIn("short", app.tree.item("327", "tags"))  # Pescadores 568 of 1531
+        self.assertIn("short", app.tree.item("1088", "tags"))  # Chengchow (town) 943 of 1037
+        self.assertNotIn("short", app.tree.item("584", "tags"))
+        self.assertEqual(app.tree.set("327", "supply"), "568 / 1531")
+        self.assertEqual(app.tree.set("584", "supply"), "982531")
+        app.sort_by("supply")  # still sorts on the number, not the "have / required" text
+        order = [int(app.tree.set(i, "supply").split(" /")[0]) for i in app.tree.get_children()]
+        self.assertEqual(order, sorted(order))
+        app.tree.selection_set("327")
+        self.root.update()
+        app.field_vars["supply"].set("2000")
+        app.apply()
+        self.root.update()
+        self.assertEqual(app.tree.item("327", "tags"), ("edited",))
+        self.assertEqual(app.tree.set("327", "supply"), "2000")
+
     def test_land_unit_supplies_short_highlight(self):
         import witpae_editor
         app = witpae_editor.EditorApp(self.root)
