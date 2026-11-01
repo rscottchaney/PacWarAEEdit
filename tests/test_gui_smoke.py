@@ -60,6 +60,15 @@ class GuiSmokeTests(unittest.TestCase):
         app.sort_by("supply")
         self.root.update()
 
+    def test_window_fits_a_1440_pixel_screen(self):
+        # The tallest tab sets the window height; it was 1390 px before the Aircraft and Air Groups detail panels
+        # moved their lower boxes into a second column, too tall once the taskbar and title bar are counted.
+        import witpae_editor
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        self.root.update_idletasks()
+        self.assertLessEqual(self.root.winfo_reqheight(), 1150)
+
     def test_pbem_save_cannot_be_saved_even_after_retitling(self):
         import tempfile
         from unittest import mock
