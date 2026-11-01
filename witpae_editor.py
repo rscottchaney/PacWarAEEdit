@@ -1874,10 +1874,13 @@ class EditorApp:
             self.aircraft_info[name] = tk.StringVar()
             ttk.Label(right, textvariable=self.aircraft_info[name]).grid(row=row, column=1, sticky="w", padx=(8, 0))
             row += 1
+        # The weapon lists sit in a second column beside the fields so the tab stays short enough for small screens.
+        weapons = ttk.Frame(right)
+        weapons.grid(row=2, column=2, rowspan=row - 2, sticky="n", padx=(12, 0))
         self.aircraft_weapon_trees = {}
         for key, title in (("max", "Weapons, max load"), ("reduced", "Weapons, reduced load")):
-            box = ttk.LabelFrame(right, text=title, padding=2)
-            box.grid(row=row, column=0, columnspan=2, sticky="we", pady=(4, 0))
+            box = ttk.LabelFrame(weapons, text=title, padding=2)
+            box.pack(side="top", fill="x", pady=(0, 4))
             tree = ttk.Treeview(box, columns=("name", "count", "facing"), show="headings", height=5,
                                 selectmode="none")
             for cid, heading, width in (("name", "Name", 150), ("count", "Count", 50), ("facing", "Facing", 50)):
@@ -1885,7 +1888,6 @@ class EditorApp:
                 tree.column(cid, width=width, anchor="w" if cid == "name" else "e")
             tree.pack(fill="x")
             self.aircraft_weapon_trees[key] = tree
-            row += 1
 
     def _build_ships_tab(self):
         tab = self.ships_tab = ttk.Frame(self.notebook, padding=4)
@@ -2225,10 +2227,12 @@ class EditorApp:
             self.group_info[name] = tk.StringVar()
             ttk.Label(right, textvariable=self.group_info[name]).grid(row=row, column=1, sticky="w", padx=(8, 0))
             row += 1
-        self._build_planes(right, row)
-        row += 1
-        self._build_schedule(right, row)
-        row += 1
+        # Planes and size changes sit in a second column beside the fields so the tab stays short enough for small
+        # screens.
+        side = ttk.Frame(right)
+        side.grid(row=1, column=2, rowspan=row - 1, sticky="n", padx=(12, 0))
+        self._build_planes(side, 0)
+        self._build_schedule(side, 1)
         self.group_move_var, self.group_move_box, self.group_move_button, self.group_move_note = self._build_move_row(
             right, row, self.move_group)
         row += 3
