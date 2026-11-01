@@ -31,6 +31,12 @@ class BaseTests(unittest.TestCase):
         self.assertEqual(self.by_id[631].name, "Manila")
         self.assertEqual(self.by_id[252].name, "Tokyo")
 
+    def test_supply_short(self):
+        self.assertTrue(self.by_id[327].supply_short)  # Pescadores 568 of 1531
+        self.assertFalse(self.by_id[584].supply_short)  # Pearl Harbor 982531 of 7053
+        self.by_id[327].set("supply", 1531)
+        self.assertFalse(self.by_id[327].supply_short)  # equal is enough
+
     def test_count(self):
         self.assertEqual(len(self.by_id), 781)
 

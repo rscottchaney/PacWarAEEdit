@@ -32,6 +32,7 @@ Tests: `python -m unittest discover -s tests -v`
 | Supply cap (the "max" on the base screen), Garrison required (Allied) | values verified against game screens, editable (edit not yet tested in-game) |
 | Garrison required (Japanese) | unverified (not yet checked on a Japanese-held base), editable |
 | Supply required, Aviation support, Ships in port, Aircraft at base | verified, display only (recalculated by the game) |
+| Supply shortage: bases, towns and minor places whose supply is below supply required are listed in red with the Supply cell reading "have / required" (e.g. 568 / 1531; the column still sorts on supply), as land units are | display only; uses the stored requirement, so it updates when supply is edited |
 
 Towns are listed in the Bases tab too (Type column) and edited the same way, except
 that towns have no port, so Port size, Port max, Port damage and the Port build

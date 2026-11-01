@@ -166,6 +166,11 @@ class Base:
     def y(self):
         return struct.unpack_from("<h", self._save[LOCATION_SECTION].data, self._offset + Y_OFFSET)[0]
 
+    @property
+    def supply_short(self):
+        """True when the place holds less supply than the game's stored requirement."""
+        return self.get("supply") < self.get("supply_required")
+
     def get(self, name):
         f = FIELD_BY_NAME[name]
         return struct.unpack_from("<" + f.fmt, self._save[LOCATION_SECTION].data, self._offset + f.offset)[0]

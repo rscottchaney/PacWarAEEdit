@@ -30,12 +30,15 @@ COLUMNS = [
     ("kind", "Type", 50, False, lambda b: b.kind),
     ("side", "Side", 70, False, lambda b: b.side),
     ("hex", "Hex x,y", 70, True, lambda b: (b.x, b.y)),
-    ("supply", "Supply", 80, True, lambda b: b.get("supply")),
+    ("supply", "Supply", 110, True, lambda b: b.get("supply")),
     ("fuel", "Fuel", 80, True, lambda b: b.get("fuel")),
     ("port", "Port", 45, True, lambda b: b.get("port")),
     ("airfield", "Airfield", 60, True, lambda b: b.get("airfield")),
 ]
 COLUMN_BY_ID = {c[0]: c for c in COLUMNS}
+# Cell text where it differs from the sort value: a short place's supply reads "have / required", as for land units.
+BASE_TEXT = {"supply": lambda b: f"{b.get('supply')} / {b.get('supply_required')}" if b.supply_short
+             else b.get("supply")}
 
 AIRCRAFT_COLUMNS = [
     ("id", "ID", 55, True, lambda a: a.id),
@@ -930,11 +933,23 @@ def _history_change(value):
     return HISTORY_NONE_TEXT if value is None else f"{value:+,}"
 
 
+def _fix_treeview_tag_colours():
+    """Let row tags colour Treeview rows (edited, pending, short).
+
+    Tk 8.6.9's themes map the foreground and background of every normal row (state !disabled !selected) to the
+    system colours, which overrides the tag colours; dropping those entries restores them. Newer Tk is unaffected.
+    """
+    style = ttk.Style()
+    for option in ("foreground", "background"):
+        style.map("Treeview", **{option: [m for m in style.map("Treeview", query_opt=option)
+                                          if m[:2] != ("!disabled", "!selected")]})
+
 
 class EditorApp:
     def __init__(self, root):
         self.root = root
         root.title("WitP:AE Base Editor")
+        _fix_treeview_tag_colours()
         self.save = None
         self.path = None
         self.bases = {}
@@ -1186,6 +1201,7 @@ class EditorApp:
             self.tree.heading(cid, text=heading, command=lambda c=cid: self.sort_by(c))
             self.tree.column(cid, width=width, anchor="w" if cid in ("name", "kind", "side") else "e")
         self.tree.tag_configure("edited", background="#fff2b3")
+        self.tree.tag_configure("short", foreground="red")
         scroll = ttk.Scrollbar(left, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=scroll.set)
         scroll.pack(side="right", fill="y")
@@ -2825,7 +2841,7 @@ class EditorApp:
     def _row_values(self, b):
         vals = []
         for cid, _h, _w, _n, get in COLUMNS:
-            v = get(b)
+            v = BASE_TEXT.get(cid, get)(b)
             vals.append(f"{v[0]},{v[1]}" if cid == "hex" else v)
         return vals
 
@@ -2843,7 +2859,7 @@ class EditorApp:
                 if needle in b.name.lower() and (side == "All" or b.side == side)]
         rows.sort(key=self._sort_key, reverse=self.sort_reverse)
         for b in rows:
-            tags = ("edited",) if b.id in self.edited else ()
+            tags = (("edited",) if b.id in self.edited else ()) + (("short",) if b.supply_short else ())
             self.tree.insert("", "end", iid=str(b.id), values=self._row_values(b), tags=tags)
         if selected is not None and self.tree.exists(str(selected)):
             self.tree.selection_set(str(selected))
