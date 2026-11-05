@@ -1004,6 +1004,36 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertEqual(app.tree.item("327", "tags"), ("edited",))
         self.assertEqual(app.tree.set("327", "supply"), "2000")
 
+    def test_active_only_hides_the_dimmed_rows(self):
+        import witpae_editor
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        for tree, active, refresh, side in (
+                (app.shiprec_tree, app.shiprec_active_var, app.refresh_shiprec_list, app.shiprec_side_var),
+                (app.group_tree, app.group_active_var, app.refresh_group_list, app.group_side_var),
+                (app.unit_tree, app.unit_active_var, app.refresh_unit_list, app.unit_side_var),
+                (app.ldr_tree, app.ldr_active_var, app.refresh_ldr_list, app.ldr_filter_vars["side"])):
+            with self.subTest(tree=str(tree)):
+                self.assertFalse(active.get())  # off by default: the lists open as before
+                rows = tree.get_children()
+                pending = [i for i in rows if "pending" in tree.item(i, "tags")]
+                self.assertTrue(pending)
+                active.set(True)
+                refresh()
+                shown = tree.get_children()
+                self.assertEqual(len(shown), len(rows) - len(pending))
+                self.assertFalse([i for i in shown if "pending" in tree.item(i, "tags")])
+                side.set("Allied")  # combines with the side filter
+                refresh()
+                allied = tree.get_children()
+                self.assertTrue(allied)
+                self.assertLess(len(allied), len(shown))
+                self.assertFalse([i for i in allied if "pending" in tree.item(i, "tags")])
+                side.set("All")
+                active.set(False)
+                refresh()
+                self.assertEqual(len(tree.get_children()), len(rows))
+
     def test_land_unit_supplies_short_highlight(self):
         import witpae_editor
         app = witpae_editor.EditorApp(self.root)
