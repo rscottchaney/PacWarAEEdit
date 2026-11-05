@@ -1993,6 +1993,9 @@ class EditorApp:
                                 state="readonly", width=9)
         side_box.pack(side="left", padx=4)
         side_box.bind("<<ComboboxSelected>>", lambda e: self.refresh_shiprec_list())
+        self.shiprec_active_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(bar, text="Active only", variable=self.shiprec_active_var,
+                        command=self.refresh_shiprec_list).pack(side="left", padx=4)
         self.shiprec_tree = ttk.Treeview(left, columns=[c[0] for c in SHIPREC_COLUMNS], show="headings",
                                          selectmode="browse")
         for cid, heading, width, _numeric, _get in SHIPREC_COLUMNS:
@@ -2199,6 +2202,9 @@ class EditorApp:
                                 state="readonly", width=9)
         side_box.pack(side="left", padx=4)
         side_box.bind("<<ComboboxSelected>>", lambda e: self.refresh_group_list())
+        self.group_active_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(bar, text="Active only", variable=self.group_active_var,
+                        command=self.refresh_group_list).pack(side="left", padx=4)
 
         # Pilots and commander sit below the list so the tab stays short enough for small screens.
         lower = ttk.Frame(left)
@@ -2450,6 +2456,9 @@ class EditorApp:
                                 state="readonly", width=9)
         side_box.pack(side="left", padx=4)
         side_box.bind("<<ComboboxSelected>>", lambda e: self.refresh_unit_list())
+        self.unit_active_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(bar, text="Active only", variable=self.unit_active_var,
+                        command=self.refresh_unit_list).pack(side="left", padx=4)
 
         box = ttk.LabelFrame(left, text="Equipment", padding=4)
         box.pack(side="bottom", fill="x", pady=(6, 0))
@@ -2561,6 +2570,10 @@ class EditorApp:
             box = ttk.Combobox(bar, textvariable=var, values=values, state="readonly", width=width)
             box.pack(side="left", padx=4)
             box.bind("<<ComboboxSelected>>", lambda e: self.refresh_ldr_list())
+            if name == "side":
+                self.ldr_active_var = tk.BooleanVar(value=False)
+                ttk.Checkbutton(bar, text="Active only", variable=self.ldr_active_var,
+                                command=self.refresh_ldr_list).pack(side="left", padx=4)
         self.ldr_count = tk.StringVar()
         ttk.Label(bar, textvariable=self.ldr_count).pack(side="right")
 
@@ -3387,7 +3400,8 @@ class EditorApp:
         needle = self.shiprec_search_var.get().strip().lower()
         side = self.shiprec_side_var.get()
         rows = [x for x in self.shiprecs.values()
-                if needle in x.name.lower() and (side == "All" or x.side == side)]
+                if needle in x.name.lower() and (side == "All" or x.side == side)
+                and (x.arrived or not self.shiprec_active_var.get())]
         rows.sort(key=self._shiprec_sort_key, reverse=self.shiprec_sort_reverse)
         for x in rows:
             tags = ("edited",) if x.id in self.shiprecs_edited else ()
@@ -3855,7 +3869,8 @@ class EditorApp:
         needle = self.group_search_var.get().strip().lower()
         side = self.group_side_var.get()
         rows = [g for g in self.groups.values()
-                if needle in g.name.lower() and (side == "All" or g.side == side)]
+                if needle in g.name.lower() and (side == "All" or g.side == side)
+                and (g.arrived or not self.group_active_var.get())]
         rows.sort(key=self._group_sort_key, reverse=self.group_sort_reverse)
         for g in rows:
             tags = ("edited",) if g.id in self.groups_edited else ()
@@ -4292,7 +4307,8 @@ class EditorApp:
         needle = self.unit_search_var.get().strip().lower()
         side = self.unit_side_var.get()
         rows = [u for u in self.units.values()
-                if needle in u.display_name.lower() and (side == "All" or u.side == side)]
+                if needle in u.display_name.lower() and (side == "All" or u.side == side)
+                and (u.arrived or not self.unit_active_var.get())]
         rows.sort(key=self._unit_sort_key, reverse=self.unit_sort_reverse)
         for u in rows:
             # Text colour: dimmed while not arrived (a shortage is not shown then), else red when short.
@@ -4578,6 +4594,8 @@ class EditorApp:
         f = self.ldr_filter_vars
         rows = leaders.filter_leaders(self.ldr_rows.values(), f["side"].get(), f["branch"].get(), f["type"].get(),
                                       f["assigned"].get(), self.ldr_search_var.get())
+        if self.ldr_active_var.get():
+            rows = [r for r in rows if r.delay <= 0]  # hides the leaders the list dims
         rows.sort(key=self._ldr_sort_key, reverse=self.ldr_sort_reverse)
         for r in rows:
             tags = ("edited",) if r.id in self.ldr_edited else ()
