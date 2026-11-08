@@ -2227,6 +2227,97 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertEqual(app.notebook.select(), str(app.leaders_tab))
         self.assertEqual(app.ldr_tree.selection(), ("6652",))
 
+    def test_withdrawals_report(self):
+        import datetime
+        import witpae_editor
+        from witpae import withdrawals as wd
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        app.notebook.select(app.reports_tab)
+        self.root.update()
+        tabs = [app.reports_notebook.tab(t, "text") for t in app.reports_notebook.tabs()]
+        self.assertEqual(tabs.index("Withdrawals"), tabs.index("Inconsistencies") + 1)
+        tree = app.wd_tree
+
+        def column(name):
+            return [tree.set(i, name) for i in tree.get_children()]
+
+        # Default: arrived rows only, days ascending.
+        arrived = [r for r in app.wd_all if r.arrived]
+        self.assertEqual(len(tree.get_children()), len(arrived))
+        days = [int(d) for d in column("days")]
+        self.assertEqual(days, sorted(days))
+        self.assertEqual(column("date")[0], "19 Dec 41")
+        self.assertEqual(column("returns")[0], "-")
+        self.assertEqual(app.wd_count.get(), f"{len(arrived)} withdrawals (0 overdue, 1 due)")
+        # The not-yet-arrived checkbox, then the Kind and Side filters.
+        app.wd_future_var.set(True)
+        app.refresh_wd_list()
+        self.assertEqual(len(tree.get_children()), len(app.wd_all))
+        app.wd_kind_var.set("Land units")
+        app.refresh_wd_list()
+        self.assertEqual(set(column("kind")), {wd.LAND_UNIT})
+        self.assertEqual(len(tree.get_children()), 372)
+        app.wd_kind_var.set("Air groups")
+        app.wd_side_var.set("Japanese")
+        app.refresh_wd_list()
+        self.assertEqual(set(column("kind")), {wd.AIR_GROUP})
+        self.assertEqual(set(column("side")), {"Japanese"})
+        app.wd_kind_var.set("All")
+        app.wd_side_var.set("All")
+        # Overdue and due rows are tagged; the window moves the Due boundary.
+        late = app.wd_all[0]._replace(kind=wd.LAND_UNIT, id=5601, days=-3, date=datetime.date(1941, 12, 7))
+        app.wd_all = [late] + app.wd_all
+        app.refresh_wd_list()
+        first = tree.get_children()[0]
+        self.assertEqual(tree.item(first, "tags"), ("overdue",))
+        self.assertEqual(tree.set(first, "status"), "Overdue")
+        statuses = {tree.set(i, "status"): tree.item(i, "tags") for i in tree.get_children()}
+        self.assertEqual(statuses, {"Overdue": ("overdue",), "Due": ("due",), "Scheduled": ""})
+        self.assertEqual(app.wd_count.get(), f"{len(app.wd_all)} withdrawals (1 overdue, 2 due)")
+        app.wd_window_var.set("90")
+        app.refresh_wd_list()
+        due = [i for i in tree.get_children() if tree.set(i, "status") == "Due"]
+        self.assertTrue(all(0 <= int(tree.set(i, "days")) <= 90 for i in due))
+        self.assertGreater(len(due), 2)
+        app.wd_window_var.set("30")
+        # Sorting by Withdraw by is chronological, not alphabetical; a second click reverses it.
+        app.sort_wd_by("date")
+        dates = [datetime.datetime.strptime(d, "%d %b %y") for d in column("date")]
+        self.assertEqual(dates, sorted(dates))
+        app.sort_wd_by("date")
+        dates = [datetime.datetime.strptime(d, "%d %b %y") for d in column("date")]
+        self.assertEqual(dates, sorted(dates, reverse=True))
+        app.sort_wd_by("id")
+        ids = [int(i) for i in column("id")]
+        self.assertEqual(ids, sorted(ids))
+        app.sort_wd_by("returns")
+        returns = [d for d in column("returns") if d != "-"]
+        parsed = [datetime.datetime.strptime(d, "%d %b %y") for d in returns]
+        self.assertEqual(parsed, sorted(parsed))
+        self.assertEqual(column("returns")[:len(returns)], returns)
+        app.sort_wd_by("name")
+        names = [n.lower() for n in column("name")]
+        self.assertEqual(names, sorted(names))
+
+        def open_row(kind, row_id):
+            app.notebook.select(app.reports_tab)
+            app.wd_sort_col = None
+            app.refresh_wd_list()
+            iid = next(i for i, r in app.wd_by_iid.items() if (r.kind, r.id) == (kind, row_id))
+            tree.selection_set(iid)
+            app.open_wd()
+            self.root.update()
+
+        app.unit_search_var.set("zzz")
+        open_row(wd.LAND_UNIT, 5601)
+        self.assertEqual(app.notebook.select(), str(app.units_tab))
+        self.assertEqual(app.unit_tree.selection(), ("5601",))
+        app.group_search_var.set("zzz")
+        open_row(wd.AIR_GROUP, 3212)
+        self.assertEqual(app.notebook.select(), str(app.groups_tab))
+        self.assertEqual(app.group_tree.selection(), ("3212",))
+
     def test_alerts_report_lists_skipped_checks(self):
         import witpae_editor
         from witpae import minefields
