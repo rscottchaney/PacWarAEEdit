@@ -16,7 +16,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from witpae import (aircraft, airgroups, airproduction, alerts, bases, chart, combat, events, factories, history, inconsistencies, industry, intel, landunits, lcuproduction, lcutargets, leaders, losses, mapview, minefields,
                     pilotpool, planeart, regions, reports, shipproduction, shipratings, shiprecords, shiprepair, ships,
-                    taskforces, victory)
+                    taskforces, victory, withdrawals)
 from witpae.container import SaveFile, SaveFormatError
 from witpae.fileio import is_pbem, save_with_backup
 
@@ -289,6 +289,10 @@ def _num(v):
 
 def _rate(v):
     return f"{v:+,}" if v else "0"
+
+
+def _date_text(d):
+    return f"{d.day} {MONTH_NAMES[d.month - 1]} {d.year % 100:02d}"
 
 
 def _arrival_text(v):
@@ -656,6 +660,30 @@ INCON_NOTE = (
     "chain is broken, which the editor refuses to move ships in; a task force whose home port is not a base or "
     "belongs to the other side. WitpStaff also lists LCUs with the wrong suffix, which is not checked. Leader data "
     "in saves is not fully reliable, so rows are hints. Double-click a row to open the subject.")
+
+WD_ALL = "All"
+WD_WINDOWS = ["7", "14", "30", "60", "90"]
+WD_COLUMNS = [
+    # Status sorts by days (overdue, due, scheduled); its text needs the window, see EditorApp.refresh_wd_list.
+    ("status", "Status", 75, False, lambda r: r.days),
+    ("kind", "Kind", 70, False, lambda r: r.kind),
+    ("id", "ID", 50, True, lambda r: r.id),
+    ("name", "Name", 200, False, lambda r: r.name),
+    ("side", "Side", 65, False, lambda r: r.side),
+    ("type", "Type", 130, False, lambda r: r.type),
+    ("location", "Location", 120, False, lambda r: r.location),
+    ("date", "Withdraw by", 90, False, lambda r: r.date),
+    ("days", "Days", 50, True, lambda r: r.days),
+    # Land units have no return date; they sort after the groups that do.
+    ("returns", "Returns", 90, False, lambda r: r.returns or datetime.date.max),
+]
+WD_COLUMN_BY_ID = {c[0]: c for c in WD_COLUMNS}
+WD_NOTE = (
+    "Land units and air groups scheduled to be withdrawn, overdue and soonest first. Air group dates are the game's "
+    "\"Remove by\" dates; an overdue group costs political points every day until it is withdrawn. Land unit dates "
+    "are computed from the save's day counter (days until withdrawal from the game date); the game removes or "
+    "withdraws them on the day, so they never show as overdue. \"Due within\" sets the window of the Due status. "
+    "Double-click a row to open the unit or group.")
 
 
 
@@ -1100,6 +1128,10 @@ class EditorApp:
         self.incon_by_iid = {}
         self.incon_sort_col = None  # None keeps the order inconsistencies.find_issues gives
         self.incon_sort_reverse = False
+        self.wd_all = []
+        self.wd_by_iid = {}
+        self.wd_sort_col = None  # None keeps the order withdrawals.withdrawal_rows gives
+        self.wd_sort_reverse = False
         self.history_dir = None
         self.history_snaps = []
         self.history_problems = []
@@ -1256,6 +1288,7 @@ class EditorApp:
 
         self._build_alerts_report()
         self._build_inconsistencies_report()
+        self._build_withdrawals_report()
         spoil = ttk.Frame(self.reports_notebook, padding=4)
         self.reports_notebook.add(spoil, text="Spoilage")
         bar = ttk.Frame(spoil)
@@ -1778,6 +1811,30 @@ class EditorApp:
         ttk.Label(rep, text=INCON_NOTE, wraplength=1100, justify="left").pack(side="bottom", anchor="w", pady=(4, 0))
         self.incon_tree = self._report_tree(rep, INCON_COLUMNS, self.sort_incon_by,
                                             ("check", "side", "subject", "detail"), self.open_incon)
+
+    def _build_withdrawals_report(self):
+        rep = self.wd_frame = ttk.Frame(self.reports_notebook, padding=4)
+        self.reports_notebook.add(rep, text="Withdrawals")
+        bar = ttk.Frame(rep)
+        bar.pack(side="top", fill="x")
+        self.wd_kind_var = tk.StringVar(value=WD_ALL)
+        self._report_combo(bar, "Kind:", self.wd_kind_var, [WD_ALL, "Land units", "Air groups"],
+                           self.refresh_wd_list, 11)
+        self.wd_side_var = tk.StringVar(value=WD_ALL)
+        self._report_combo(bar, "Side:", self.wd_side_var, [WD_ALL, "Allied", "Japanese"], self.refresh_wd_list, 9)
+        self.wd_window_var = tk.StringVar(value="30")
+        self._report_combo(bar, "Due within (days):", self.wd_window_var, WD_WINDOWS, self.refresh_wd_list, 4)
+        self.wd_future_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(bar, text="Include not yet arrived", variable=self.wd_future_var,
+                        command=self.refresh_wd_list).pack(side="left", padx=(4, 8))
+        self.wd_count = tk.StringVar()
+        ttk.Label(bar, textvariable=self.wd_count).pack(side="left", padx=8)
+        ttk.Label(rep, text=WD_NOTE, wraplength=1100, justify="left").pack(side="bottom", anchor="w", pady=(4, 0))
+        self.wd_tree = self._report_tree(rep, WD_COLUMNS, self.sort_wd_by,
+                                         ("status", "kind", "name", "side", "type", "location", "date", "returns"),
+                                         self.open_wd)
+        self.wd_tree.tag_configure("overdue", foreground="red")
+        self.wd_tree.tag_configure("due", foreground="#b35900")
 
     def _build_victory_report(self):
         rep = ttk.Frame(self.reports_notebook, padding=4)
@@ -4738,6 +4795,7 @@ class EditorApp:
         self.refresh_vp_reports()
         self.refresh_alerts()
         self.refresh_inconsistencies()
+        self.refresh_withdrawals()
 
     @staticmethod
     def _report_values(columns, texts, row):
@@ -5314,6 +5372,61 @@ class EditorApp:
             self._select_unit({inconsistencies.KIND_GROUP: leaders.KIND_AIR_GROUP,
                                inconsistencies.KIND_SHIP: leaders.KIND_SHIP,
                                inconsistencies.KIND_TF: leaders.KIND_TF}[kind], iid)
+
+    def refresh_withdrawals(self):
+        """Recompute the rows from the save; the filters and sort only re-select from the result."""
+        if self.save is None:
+            return
+        try:
+            self.wd_all = withdrawals.withdrawal_rows(self.save)
+        except (SaveFormatError, IndexError, struct.error):
+            self.wd_all = []
+        self.refresh_wd_list()
+
+    def refresh_wd_list(self):
+        kind = {"Land units": withdrawals.LAND_UNIT, "Air groups": withdrawals.AIR_GROUP}.get(self.wd_kind_var.get())
+        side = self.wd_side_var.get()
+        future = self.wd_future_var.get()
+        window = int(self.wd_window_var.get())
+        rows = [(k, r) for k, r in enumerate(self.wd_all)
+                if kind in (None, r.kind) and side in (WD_ALL, r.side) and (future or r.arrived)]
+        if self.wd_sort_col is not None:
+            get = WD_COLUMN_BY_ID[self.wd_sort_col][4]
+
+            def key(t):
+                v = get(t[1])
+                return (v.lower() if isinstance(v, str) else v, t[0])
+            rows.sort(key=key, reverse=self.wd_sort_reverse)
+        texts = {"status": lambda days: withdrawals.status(days, window),
+                 "date": _date_text, "returns": lambda d: _date_text(d) if d != datetime.date.max else "-"}
+        tree = self.wd_tree
+        tree.delete(*tree.get_children())
+        self.wd_by_iid = {}
+        overdue = due = 0
+        for k, r in rows:
+            state = withdrawals.status(r.days, window)
+            overdue += state == withdrawals.OVERDUE
+            due += state == withdrawals.DUE
+            tags = {withdrawals.OVERDUE: ("overdue",), withdrawals.DUE: ("due",)}.get(state, ())
+            self.wd_by_iid[str(k)] = r
+            tree.insert("", "end", iid=str(k), values=self._report_values(WD_COLUMNS, texts, r), tags=tags)
+        self.wd_count.set(f"{len(rows)} withdrawal{'' if len(rows) == 1 else 's'} ({overdue} overdue, {due} due)")
+
+    def sort_wd_by(self, col):
+        self.wd_sort_reverse = (not self.wd_sort_reverse) if col == self.wd_sort_col else False
+        self.wd_sort_col = col
+        self.refresh_wd_list()
+
+    def open_wd(self):
+        """Double-click: open the land unit or air group in its tab."""
+        sel = self.wd_tree.selection()
+        row = self.wd_by_iid.get(sel[0]) if sel else None
+        if row is None:
+            return
+        if row.kind == withdrawals.LAND_UNIT:
+            self._select_land_unit(str(row.id))
+        else:
+            self._select_unit(leaders.KIND_AIR_GROUP, str(row.id))
 
     def _select_leader(self, leader_id):
         """Show a leader in the Leaders tab, clearing its filters when they hide him."""

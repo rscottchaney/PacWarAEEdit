@@ -284,7 +284,7 @@ edits go through `airgroups.Leader`.
 
 ## Reports
 
-The Reports tab holds sixteen reports; only the bulk switch buttons of Air production edit the save. It
+The Reports tab holds seventeen reports; only the bulk switch buttons of Air production edit the save. It
 shows the game date (section 0x01: day at 42, month at 44, two-digit year at 46,
 all i16) and refreshes whenever the tab is shown, so edits made in the Bases tab
 are reflected. Double-click a row to jump to that base (Bases tab) or ship (Ships
@@ -294,6 +294,7 @@ tab); the target tab's search and side filter are cleared if they hide the row.
 |---|---|---|
 | Alerts | The first sub-tab: the actionable problems of the other reports in one list, see below | built from the other reports, so it has no offsets of its own |
 | Inconsistencies | The second sub-tab: data in the save that contradicts itself, see below | ported from WitpStaff, built from existing readers, so it has no offsets of its own |
+| Withdrawals | The third sub-tab: land units and air groups scheduled to be withdrawn, see below | air group withdraw date u32 at 392; land unit days until withdrawal i32 at 908 (details below) |
 | Spoilage | Bases and towns whose supply or fuel exceeds the spoilage limit, largest total excess first (columns can be re-sorted; Side filter; Region column). With s = port size + airfield size, the limit is supply 5000 + 3000 x s squared and fuel 1000 + 2000 x s squared (game manual 15.7); a base of size 1 gets 8000 / 3000, matching the base screen. "Over" is shown as `-` when not over | formula verified for size 1 (Bassein); the rule that there is no limit at s of 10 or more is from the manual and unverified (a patch note suggests the limit is shown below 9) |
 | Ship upgrades | One row per arrived ship whose class has a further upgrade (ships not yet arrived are left out, because reinforcements arrive with the upgrades of their arrival date): current class, target class, type change (for example DD -> DE), the date the upgrade becomes available, months until then relative to the game date, and the Location. Search (ship or class name), Side and "Due within" (default 3 months) filters | link (ship class u16 at 256 = next class id, available on the target class's date) matches the game's "Upgrade on" dates for Maryland and Kanawha; chains end when the id is 0, the class itself or an unused record |
 | Yard? column (target class i16 at 260) | the shipyard size shown for the upgrade target | unverified |
@@ -361,6 +362,30 @@ before it was kept (sample, real):
 
 Left out: WitpStaff's check for LCUs with the wrong suffix (the suffix table is only partly known). The code is in
 `witpae/inconsistencies.py`.
+
+### Withdrawals
+
+The "Withdrawals" sub-tab (after Inconsistencies) is read-only. It lists the land units and air groups scheduled to be
+withdrawn, overdue and soonest first, in a sortable table: Status, Kind, ID, Name, Side, Type, Location, Withdraw by,
+Days (negative = overdue) and Returns (air groups; `-` when none). Click a heading to sort by it (again to reverse);
+Withdraw by and Returns sort by date. The top bar has a Kind filter (All, Land units, Air groups), a Side filter, a
+"Due within" window in days (7, 14, 30, 60, 90; default 30) for the Status column, an "Include not yet arrived"
+checkbox (off by default) and a count. Status is Overdue (before the game date), Due (today up to the window) or
+Scheduled; overdue rows are red and due rows dark orange. Double-click a row to open the unit in the Land Units tab or
+the group in the Air Groups tab (the tab's filters are cleared if they hide it).
+
+- Air groups: the withdraw field (u32 at 392, the game's "Remove by") is an absolute YYMMDD date, 0 = not scheduled.
+  The Returns column is the return date (u32 at 396; 0 and the 9999 sentinel show as `-`). A few scenario dates have
+  an invalid day (for example 440631) and are clamped to the last day of the month. An overdue group costs political
+  points every day until it is withdrawn.
+- Land units: i32 at offset 908 of the land unit record is the number of days until withdrawal, counted from the
+  save's game date; 0 = not scheduled and 9999 or more are placeholders of units not yet scheduled to arrive (both
+  skipped). It matches the Withdraw column of the scenario's land unit table for 249 of the 298 scheduled units of a
+  real save (12 Dec 41) and decreases by exactly 1 a day for 370 units across three consecutive saves; a convoy unit
+  holds its arrival day + 3. The counter never goes negative (a unit that reached 1 was removed by the game), so land
+  units cannot show as overdue. Not yet compared with the game's Ground Withdrawal Schedule screen (hotkey G).
+
+The code is in `witpae/withdrawals.py`.
 
 ### Ship class ratings
 
