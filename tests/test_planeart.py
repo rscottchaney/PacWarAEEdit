@@ -115,6 +115,14 @@ class SyntheticSheetTests(unittest.TestCase):
         self.assertIsNone(planeart.find_sheet([first], 7))
         self.assertTrue(planeart.plane_png([first], 0, 2).startswith(b"\x89PNG"))
 
+    def test_picture_numbers_count_from_one(self):
+        folder = os.path.dirname(self.path)
+        for picture in range(1, 7):
+            self.assertEqual(planeart.plane_png([folder], 0, picture), planeart.tile_png(self.path, picture - 1))
+        for picture in (0, 7):  # 0 is no picture; 7 would be tile 6, past the 6 tiles of the sheet
+            with self.assertRaises(ValueError, msg=picture):
+                planeart.plane_png([folder], 0, picture)
+
 
 @unittest.skipUnless(os.path.exists(REAL), "game ART folder missing")
 class RealArtTests(unittest.TestCase):
@@ -123,13 +131,23 @@ class RealArtTests(unittest.TestCase):
         self.assertEqual(planeart.sheet_size(os.path.join(ART, "A_PlaneSide.bmp")), (600, 7504))
 
     def test_tiles_of_known_models_can_be_read(self):
-        # (side, bitmap): A6M2 Zero, Ki-21-Ic Sally, P-38G, F6F-5, A-29A Hudson
+        # (side, picture number): A6M2 Zero, Ki-21-Ic Sally, P-38G, F6F-5, A-29A Hudson
         for side, bitmap in ((0, 4), (0, 147), (1, 333), (1, 439), (1, 1)):
             path = planeart.find_sheet([ART], side)
-            rows = planeart.read_tile(path, bitmap)
+            rows = planeart.read_tile(path, bitmap - 1)
             self.assertEqual((len(rows), len(rows[0])), (60, 450), (side, bitmap))
             png = planeart.plane_png([ART], side, bitmap)
             self.assertEqual(struct.unpack(">II", png[16:24]), (150, 60))
+
+    def test_picture_is_the_tile_before_its_number(self):
+        # B5N2 Kate is picture 29 of the Japanese sheet. Tile 29 is a BLANK placeholder like tile 0: pale sky with the
+        # word BLANK, the same number of dark pixels in every one. The Kate (tile 28) is a dark green aircraft.
+        def dark(rows):
+            return sum(1 for row in rows for i in range(0, len(row), 3) if max(row[i:i + 3]) < 70)
+        blank = dark(planeart.read_tile(REAL, 0))
+        self.assertEqual(dark(planeart.read_tile(REAL, 29)), blank)
+        self.assertGreater(dark(planeart.read_tile(REAL, 28)), 2 * blank)
+        self.assertEqual(planeart.plane_png([ART], 0, 29), planeart.tile_png(REAL, 28))
 
     def test_tile_past_the_end(self):
         with self.assertRaises(ValueError):

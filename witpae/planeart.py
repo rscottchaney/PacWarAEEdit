@@ -1,8 +1,9 @@
 """Side-view aircraft pictures from the game's ART folder.
 
 A_PlaneSide.bmp (Allied) and J_PlaneSide.bmp (Japanese) are uncompressed 24-bit BMPs holding
-a grid of 150 x 60 tiles, 4 per row; the tile of an aircraft is its bitmap number (u16 at 26
-of the aircraft record). The sheets are read at run time and are not part of the editor. Rows are
+a grid of 150 x 60 tiles, 4 per row. The picture number of an aircraft (u16 at 26 of the aircraft
+record) counts from 1, so picture n is tile n - 1 (I-15-III, picture 10, is the biplane in tile 9;
+tile 10 is a P-40) and 0 means no picture. The sheets are read at run time and are not part of the editor. Rows are
 read one at a time because a sheet is 13 MB. Every failure is a ValueError, so a caller can turn
 any of them into "no picture".
 """
@@ -88,8 +89,11 @@ def tile_png(path, n):
 
 
 def plane_png(candidates, side_id, bitmap):
-    """PNG of the aircraft picture, searching the candidate ART folders; ValueError if there is none."""
+    """PNG of the aircraft picture (picture number bitmap, from 1), searching the candidate ART folders; ValueError
+    if there is none."""
+    if bitmap < 1:
+        raise ValueError("the model has no picture")
     path = find_sheet(candidates, side_id)
     if path is None:
         raise ValueError("ART folder not found")
-    return tile_png(path, bitmap)
+    return tile_png(path, bitmap - 1)
