@@ -72,7 +72,7 @@ Models whose "from" availability date is after the game date are dimmed (the
 | Nation: IJA, IJN, USN, USA, NZ verified; other labels are guesses and end in `?`; unknown codes show the number | read-only |
 | Weapons (max load and reduced load: name, count, facing F/TR/C/XT), gun value, maneuver modifiers per altitude band | verified, read-only |
 | Engines: the engine is weapon slot 9, a device id (i16 at offset 60) and a count (u8 at offset 100; the reduced-load copies at 80 and 120 are not used). Japanese models name a specific engine device (A6M2 Zero: 1 x Nakajima Ha-35; Ki-21-Ic Sally: 2 x Nakajima Ha-5), Allied models use the generic device 1852 "Engine" and show "2 engines" | read-only |
-| Picture number (u16 at 26): the tile of the model's side-view picture, see below | verified (Zero, Sally, P-38G, Hellcat show the right pictures), read-only |
+| Picture number (u16 at 26): the model's side-view picture, counted from 1, see below | verified (I-15-III, B5N2 Kate, Spitfire PR.IV, P-38G, PBY-5 checked against neighbouring tiles), read-only. Versions before 2026-11-08 showed tile n instead of n - 1, so most models showed the next picture on the sheet: often a close variant, sometimes a BLANK placeholder |
 | Upgrade (u16 at 192: the model it upgrades to; its own id or 0 means none, shown as `-`) | checked on a few models (SBD-3 -> SBD-5, P-38G -> P-38H, A6M2 Zero -> A6M2 Sen Baku; P-40E has none), labelled unverified, read-only. Earlier versions read offset 26 here, which is the picture number, so they showed unrelated models (the A6M2 Zero "upgraded" to a B-25D) |
 
 The top of the detail pane shows the model's side-view picture (150 x 60), and the buttons "Compare as A" and
@@ -80,7 +80,8 @@ The top of the detail pane shows the model's side-view picture (150 x 60), and t
 
 Pictures are not part of the editor and not stored in saves: they are read at run time from the game's ART
 folder, `A_PlaneSide.bmp` (Allied) and `J_PlaneSide.bmp` (Japanese), uncompressed 24-bit BMP sheets of 150 x 60
-tiles, 4 per row; the tile of a model is its picture number (tile n is at x = (n % 4) x 150, y = (n // 4) x 60).
+tiles, 4 per row. Picture numbers count from 1: picture n is tile n - 1, at x = ((n - 1) % 4) x 150,
+y = ((n - 1) // 4) x 60, and 0 means no picture.
 The editor looks for the ART folder next to the folder of the loaded save (`<game>\ART` for `<game>\SAVE`), then
 next to the editor (`<game>\SaveEditor`). Without one, the picture area says "No picture" and nothing else
 changes. The code is in `witpae/planeart.py`.
