@@ -1217,6 +1217,39 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertEqual(app.plane_vars["ready"].get(), "10")
         self.assertIn("not arrived", app.plane_note.get())
 
+    def test_air_group_plane_total(self):
+        from unittest import mock
+        import witpae_editor
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        self.assertTrue(app.plane_total_button.instate(["disabled"]))
+        app.group_tree.selection_set("4020")
+        self.root.update()
+        self.assertFalse(app.plane_total_button.instate(["disabled"]))
+        self.assertEqual(app.plane_note.get(), "max 25")
+        g = app.groups[4020]
+        app.plane_total.set("23")
+        app.set_plane_total()
+        self.assertEqual((g.planes, g.ready, g.damaged), (23, 14, 3))
+        self.assertIn(4020, app.groups_edited)
+        self.assertTrue(app.dirty)
+        self.assertEqual(app.plane_total.get(), "23")
+        self.assertEqual(app.plane_vars["ready"].get(), "14")
+        app.plane_total.set("15")  # removes the 3 damaged, then 5 maintenance planes
+        app.set_plane_total()
+        self.assertEqual((g.planes, g.damaged, g.maintenance, g.ready), (15, 0, 1, 14))
+        # Over the maximum and non-numbers are refused and change nothing.
+        for text in ("26", "x", ""):
+            app.plane_total.set(text)
+            with mock.patch.object(witpae_editor.messagebox, "showerror") as err:
+                app.set_plane_total()
+            self.assertTrue(err.called, text)
+            self.assertEqual(g.planes, 15)
+        app.group_tree.selection_set("2")  # not arrived
+        self.root.update()
+        self.assertTrue(app.plane_total_button.instate(["disabled"]))
+        self.assertTrue(all(e.instate(["disabled"]) for e in app.plane_entries))
+
     def test_reports_tab(self):
         import witpae_editor
         app = witpae_editor.EditorApp(self.root)

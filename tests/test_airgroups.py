@@ -440,6 +440,196 @@ class AirGroupTests(unittest.TestCase):
             self.groups[2].repair_all()
         self.assertEqual([bytes(self.sf[k].data) for k in sections], before)
 
+    def chain(self, sf, g):
+        """Plane record indexes from the group's head through each plane's next link."""
+        data = sf[airgroups.PLANE_SECTION].data
+        out, i = [], int.from_bytes(g._data[g._offset + 252:g._offset + 254], "little")
+        while i:
+            self.assertNotIn(i, out, "chain loops")
+            out.append(i)
+            i = int.from_bytes(data[i * 304 + 176:i * 304 + 178], "little")
+        return out
+
+    def check_chain(self, sf, g):
+        self.assertEqual(sorted(self.chain(sf, g)), sorted(self.plane_records(sf, g.id)), g.id)
+        self.assertEqual(len(self.chain(sf, g)), g.planes)
+
+    def pilot_planes(self, sf):
+        data = sf[airgroups.PILOT_SECTION].data
+        return {p: int.from_bytes(data[p * 180 + 28:p * 180 + 30], "little") for p in range(len(data) // 180)
+                if data[p * 180 + 28] or data[p * 180 + 29]}
+
+    def other_sections_unchanged(self, before, after, allowed):
+        for sec in before.sections:
+            if sec.sid not in allowed:
+                self.assertEqual(bytes(sec.data), bytes(after[sec.sid].data), sec.sid)
+
+    def test_set_plane_total_raise_adds_ready_copies_in_never_used_slots(self):
+        before = SaveFile.load(SAVE_015)
+        old = self.plane_records(before, 4020)
+        old_chain = self.chain(before, self.groups[4020])
+        old_data = bytes(before[airgroups.PLANE_SECTION].data)
+        last = max(i for i in range(len(old_data) // 304) if any(old_data[i * 304:(i + 1) * 304]))
+        template = self.plane_records(before, 4020)[old_chain[2]]  # first ready plane in chain order
+        self.assertEqual(template[160], 6)
+        g = self.groups[4020]
+        g.set_plane_total(25)
+        for loaded in (self.sf, self.roundtrip()):
+            h = {x.id: x for x in airgroups.list_airgroups(loaded)}[4020]
+            self.assertEqual((h.planes, h.ready, h.maintenance, h.damaged, h.reserve), (25, 16, 6, 3, 0))
+            self.assertTrue(self.check_group_consistent(loaded, h))
+            self.check_chain(loaded, h)
+            new = self.plane_records(loaded, 4020)
+            added = sorted(set(new) - set(old))
+            self.assertEqual(added, list(range(last + 1, last + 6)))
+            self.assertEqual(self.chain(loaded, h), added[::-1] + old_chain)
+            for i in old:
+                self.assertEqual(new[i], old[i])
+            for i in added:
+                want = bytearray(template)
+                want[4:6] = want[172:174] = want[180:182] = b"\0\0"
+                want[176:178] = new[i][176:178]
+                self.assertEqual(new[i], bytes(want))
+            self.other_sections_unchanged(before, loaded, (airgroups.GROUP_SECTION, airgroups.PLANE_SECTION))
+            self.assertEqual(set(self.changed_groups(before, loaded)), {4020})
+            self.assertEqual(self.pilot_planes(loaded), self.pilot_planes(before))
+
+    def test_set_plane_total_raise_without_ready_plane_copies_any_plane(self):
+        g = self.groups[4020]
+        data = self.sf[airgroups.PLANE_SECTION].data
+        for i in self.chain(self.sf, g):
+            data[i * 304 + 160] = 4
+        g.set_plane_total(21)
+        new = self.chain(self.sf, g)[0]
+        self.assertEqual(data[new * 304 + 160], 6)
+        self.assertEqual(int.from_bytes(data[new * 304:new * 304 + 2], "little"), g._i16(30))
+
+    def test_set_plane_total_raise_with_empty_group_copies_model_elsewhere(self):
+        empty = next(g for g in self.groups.values() if g.arrived and g.planes == 0 and g.get("max_size") > 0)
+        empty.set_plane_total(2)
+        self.check_chain(self.sf, empty)
+        self.assertEqual(empty.ready, 2)
+        data = self.sf[airgroups.PLANE_SECTION].data
+        for i in self.chain(self.sf, empty):
+            self.assertEqual(int.from_bytes(data[i * 304:i * 304 + 2], "little"), empty._i16(30))
+
+    def test_set_plane_total_lower_removes_damaged_maintenance_reserve_then_ready(self):
+        before = SaveFile.load(SAVE_015)
+        old = self.plane_records(before, 4020)
+        old_chain = self.chain(before, self.groups[4020])
+        status = lambda i: old[i][160]
+        expected = [i for s in (1, 4, 2, 6) for i in old_chain if status(i) == s]
+        for total in (17, 10, 4):
+            self.setUp()
+            g = self.groups[4020]
+            g.set_plane_total(total)
+            gone = set(expected[:20 - total])
+            for loaded in (self.sf, self.roundtrip()):
+                h = {x.id: x for x in airgroups.list_airgroups(loaded)}[4020]
+                self.assertEqual(h.planes, total)
+                self.assertEqual(set(self.plane_records(loaded, 4020)), set(old) - gone)
+                self.check_group_consistent(loaded, h)
+                self.check_chain(loaded, h)
+                self.assertEqual(self.chain(loaded, h), [i for i in old_chain if i not in gone])
+                data = loaded[airgroups.PLANE_SECTION].data
+                for i in gone:
+                    self.assertFalse(any(data[i * 304:(i + 1) * 304]))
+                self.assertEqual(g._i16(airgroups.REPAIR_OFFSET),
+                                 sum(old[i][162] for i in old if i not in gone))
+        # 17 removes only damaged planes; 10 removes all damaged and maintenance planes plus one ready one.
+        self.setUp()
+        self.groups[4020].set_plane_total(17)
+        self.assertEqual(self.status_counts(self.sf, 4020), (11, 6, 0, 0))
+        self.setUp()
+        self.groups[4020].set_plane_total(10)
+        self.assertEqual(self.status_counts(self.sf, 4020), (10, 0, 0, 0))
+
+    def test_set_plane_total_to_zero_clears_pilot_assignments_and_peer_links(self):
+        before = SaveFile.load(SAVE_015)
+        records = set(self.plane_records(before, 4020))
+        assigned = {p: i for p, i in self.pilot_planes(before).items() if i in records}
+        self.assertEqual(assigned, {18110: 13717, 18122: 124})
+        self.groups[4020].set_plane_total(0)
+        loaded = self.roundtrip()
+        h = {x.id: x for x in airgroups.list_airgroups(loaded)}[4020]
+        self.assertEqual((h.planes, h.ready, h.maintenance, h.damaged, h.reserve), (0, 0, 0, 0, 0))
+        self.assertEqual(self.chain(loaded, h), [])
+        self.assertEqual(self.pilot_planes(loaded), {p: i for p, i in self.pilot_planes(before).items()
+                                                     if p not in assigned})
+        self.assertEqual(h._i16(airgroups.REPAIR_OFFSET), 0)
+        # Only the pilots' plane links (28/29) differ in the pilot section.
+        old, new = before[airgroups.PILOT_SECTION].data, loaded[airgroups.PILOT_SECTION].data
+        self.assertEqual({i % 180 for i in range(len(old)) if old[i] != new[i]}, {28, 29})
+        data = loaded[airgroups.PLANE_SECTION].data
+        self.assertFalse(any(any(data[i * 304:(i + 1) * 304]) for i in records))
+        self.other_sections_unchanged(before, loaded, (airgroups.GROUP_SECTION, airgroups.PLANE_SECTION,
+                                                       airgroups.PILOT_SECTION))
+
+    def test_set_plane_total_peer_link_to_removed_plane_is_cleared(self):
+        g = self.groups[4020]
+        data = self.sf[airgroups.PLANE_SECTION].data
+        self.assertEqual(int.from_bytes(data[13715 * 304 + 172:13715 * 304 + 174], "little"), 13709)
+        g.set_plane_total(5)  # removes every damaged and maintenance plane, then 6 of the 11 ready ones
+        removed = set(self.plane_records(SaveFile.load(SAVE_015), 4020)) - set(self.plane_records(self.sf, 4020))
+        for i in self.plane_records(self.sf, 4020):
+            self.assertNotIn(int.from_bytes(data[i * 304 + 172:i * 304 + 174], "little"), removed)
+
+    def test_set_plane_total_over_max_size_group(self):
+        g = self.groups[3]
+        self.assertGreater(g.planes, g.get("max_size"))
+        planes = g.planes
+        with self.assertRaisesRegex(ValueError, "maximum size"):
+            g.set_plane_total(planes + 1)
+        before = {s.sid: bytes(s.data) for s in self.sf.sections}
+        g.set_plane_total(planes)  # unchanged total is a no-op even above the maximum
+        self.assertEqual({s.sid: bytes(s.data) for s in self.sf.sections}, before)
+        g.set_plane_total(planes - 1)
+        self.assertEqual(g.planes, planes - 1)
+        self.check_chain(self.sf, g)
+        self.assertTrue(self.check_group_consistent(self.sf, g) or g.id in self.OFF_REPAIR_TOTAL)
+
+    def test_set_plane_total_failures_leave_bytes_unchanged(self):
+        sections = (airgroups.GROUP_SECTION, airgroups.PLANE_SECTION, airgroups.PILOT_SECTION)
+        before = [bytes(self.sf[k].data) for k in sections]
+        for group, total in [(4020, 26), (4020, -1), (4020, True), (4020, "5"), (4020, 5.0), (4020, 300),
+                             (2, 1), (2, 0), (3, 7)]:
+            with self.assertRaises(ValueError, msg=repr((group, total))):
+                self.groups[group].set_plane_total(total)
+        with self.assertRaisesRegex(ValueError, "has not arrived"):
+            self.groups[2].set_plane_total(0)
+        data = self.sf[airgroups.PLANE_SECTION].data
+        # Broken chains: a link that loops, then a record that no longer belongs to the group.
+        head = self.chain(self.sf, self.groups[4020])
+        data[head[3] * 304 + 176:head[3] * 304 + 178] = head[0].to_bytes(2, "little")
+        before = [bytes(self.sf[k].data) for k in sections]
+        for total in (5, 22):
+            with self.assertRaisesRegex(ValueError, "chain"):
+                self.groups[4020].set_plane_total(total)
+        self.assertEqual([bytes(self.sf[k].data) for k in sections], before)
+        data[head[3] * 304 + 176:head[3] * 304 + 178] = head[5].to_bytes(2, "little")  # skips head[4]
+        before = [bytes(self.sf[k].data) for k in sections]
+        with self.assertRaisesRegex(ValueError, "chain"):
+            self.groups[4020].set_plane_total(5)
+        # Record count mismatch.
+        data[head[1] * 304 + 10:head[1] * 304 + 12] = b"\0\0"
+        before = [bytes(self.sf[k].data) for k in sections]
+        with self.assertRaisesRegex(ValueError, "19 plane records"):
+            self.groups[4020].set_plane_total(5)
+        self.assertEqual([bytes(self.sf[k].data) for k in sections], before)
+
+    def test_set_plane_total_same_total_writes_nothing(self):
+        before = {s.sid: bytes(s.data) for s in self.sf.sections}
+        self.groups[4020].set_plane_total(20)
+        self.assertEqual({s.sid: bytes(s.data) for s in self.sf.sections}, before)
+
+    def test_set_plane_total_no_model_to_copy_is_refused(self):
+        g = next(x for x in self.groups.values() if x.arrived and x.planes == 0 and x.get("max_size") > 0)
+        self.sf[airgroups.GROUP_SECTION].data[g._offset + 30:g._offset + 32] = (0).to_bytes(2, "little")
+        before = bytes(self.sf[airgroups.PLANE_SECTION].data)
+        with self.assertRaisesRegex(ValueError, "no plane of this model"):
+            g.set_plane_total(1)
+        self.assertEqual(before, bytes(self.sf[airgroups.PLANE_SECTION].data))
+
     def japanese_group(self):
         return next(g.id for g in self.groups.values() if g.side == "Japanese")
 

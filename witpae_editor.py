@@ -2384,7 +2384,11 @@ class EditorApp:
         self.pool_button.grid(row=3 + pilotpool.INTAKES // per_row, column=0, columnspan=3, sticky="w", pady=(4, 0))
 
     def _build_planes(self, parent, row):
-        """Ready / maintenance / damaged / reserve split of the group's planes; the total stays fixed."""
+        """Ready / maintenance / damaged / reserve split of the group's planes, and the total.
+
+        Apply planes needs the split to add up to the current total; Set total changes the total itself
+        (up to the group's maximum size) and is the only way to add or remove planes.
+        """
         box = ttk.LabelFrame(parent, text="Planes", padding=4)
         box.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(8, 2))
         self.plane_vars, self.plane_entries = {}, []
@@ -2398,7 +2402,11 @@ class EditorApp:
             self.plane_entries.append(entry)
         ttk.Label(box, text="Total").grid(row=2, column=0, sticky="w", pady=1)
         self.plane_total = tk.StringVar()
-        ttk.Label(box, textvariable=self.plane_total).grid(row=2, column=1, sticky="w", pady=1)
+        entry = ttk.Entry(box, textvariable=self.plane_total, width=5, state="disabled")
+        entry.grid(row=2, column=1, sticky="w", padx=(0, 10), pady=1)
+        self.plane_entries.append(entry)
+        self.plane_total_button = ttk.Button(box, text="Set total", command=self.set_plane_total, state="disabled")
+        self.plane_total_button.grid(row=2, column=2, columnspan=2, sticky="w", pady=1)
         self.plane_apply_button = ttk.Button(box, text="Apply planes", command=self.apply_planes, state="disabled")
         self.plane_apply_button.grid(row=3, column=0, columnspan=2, sticky="w", pady=(2, 0))
         self.plane_repair_button = ttk.Button(box, text="Repair all", command=self.repair_planes, state="disabled")
@@ -4031,9 +4039,12 @@ class EditorApp:
         state = "normal" if g is not None and g.arrived else "disabled"
         for entry in self.plane_entries:
             entry.configure(state=state)
-        for button in (self.plane_apply_button, self.plane_repair_button):
+        for button in (self.plane_apply_button, self.plane_repair_button, self.plane_total_button):
             button.state(["disabled"] if state == "disabled" else ["!disabled"])
-        self.plane_note.set("not arrived" if g is not None and not g.arrived else "")
+        if g is None:
+            self.plane_note.set("")
+        else:
+            self.plane_note.set("not arrived" if not g.arrived else f"max {g.get('max_size')}")
 
     def apply_planes(self):
         if self.group_current is None:
@@ -4049,6 +4060,18 @@ class EditorApp:
                 return
         self._change_planes(g, lambda: g.set_plane_status(*counts))
 
+    def set_plane_total(self):
+        if self.group_current is None:
+            return
+        g = self.groups[self.group_current]
+        text = self.plane_total.get().strip()
+        try:
+            total = int(text)
+        except ValueError:
+            messagebox.showerror("Invalid value", f"Total must be a whole number (got {text!r}).")
+            return
+        self._change_planes(g, lambda: g.set_plane_total(total))
+
     def repair_planes(self):
         if self.group_current is None:
             return
@@ -4056,13 +4079,13 @@ class EditorApp:
         self._change_planes(g, g.repair_all)
 
     def _change_planes(self, g, change):
-        before = (g.ready, g.maintenance, g.damaged, g.reserve)
+        before = (g.planes, g.ready, g.maintenance, g.damaged, g.reserve)
         try:
             change()
         except ValueError as exc:
             messagebox.showerror("Cannot change planes", str(exc))
             return
-        if before != (g.ready, g.maintenance, g.damaged, g.reserve):
+        if before != (g.planes, g.ready, g.maintenance, g.damaged, g.reserve):
             self.groups_edited.add(g.id)
             self.dirty = True
         self.refresh_group_list()
