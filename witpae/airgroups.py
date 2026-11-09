@@ -62,6 +62,16 @@ PLANE_GROUP_OFFSET = 10
 PLANE_STATUS_OFFSET = 160
 PLANE_DAMAGE_OFFSET = 161
 PLANE_REPAIR_OFFSET = 162
+# The group's first plane record (0 = none); each plane's PLANE_NEXT_OFFSET gives the next one,
+# 0 ends the chain. Chain links are u16, so only the first 65536 plane records can be chained.
+GROUP_CHAIN_OFFSET = 252
+MAX_SIZE_OFFSET = 245
+PLANE_PILOT_OFFSET = 4
+PLANE_NEXT_OFFSET = 176
+PLANE_PEER_OFFSET = 172
+PLANE_FREED_OFFSET = 180
+# Pilot record: the plane record the pilot is assigned to (0 = none).
+PILOT_PLANE_OFFSET = 28
 # Plane status codes in the per-plane record.
 PLANE_READY, PLANE_MAINTENANCE, PLANE_DAMAGED, PLANE_RESERVE = 6, 4, 1, 2
 # (damage, repair time) written to a plane whose status changes; the pairs are the
@@ -536,6 +546,135 @@ class AirGroup(Record):
         self._data[self._offset + MAINTENANCE_OFFSET] = maintenance
         self._data[self._offset + RESERVE_OFFSET] = reserve
         self._data[self._offset + DAMAGED_OFFSET] = damaged
+
+    def set_plane_total(self, total):
+        """Change the group's number of planes; the aircraft pool is not touched.
+
+        Raising needs total <= max_size (lowering is always allowed) and adds ready planes copied
+        from a ready plane of the group (else any plane of the group, else a plane of the same model
+        anywhere). New records go in never-used slots, after the last record with any data, and are
+        prepended to the group's chain. Lowering removes damaged, then maintenance, then reserve,
+        then ready planes; within a status, in chain order (newest first). A removed plane is
+        unlinked, its pilot's assignment (pilot 28) and any plane 172 reference are cleared and its
+        record is zeroed. Validates everything before writing; the group's counts and repair time
+        (adjusted by the change in the planes' summed repair time) are updated.
+        """
+        if isinstance(total, bool) or not isinstance(total, int):
+            raise ValueError("Plane total must be an integer")
+        if total < 0:
+            raise ValueError("Plane total cannot be negative")
+        if not self.arrived:
+            raise ValueError(f"{self.name} has not arrived")
+        old_total = self.planes
+        if total > old_total and total > self._u8(MAX_SIZE_OFFSET):
+            raise ValueError(f"{self.name} has a maximum size of {self._u8(MAX_SIZE_OFFSET)}")
+        if total > 255:
+            raise ValueError("Plane total cannot exceed 255")
+        records = self._plane_records()
+        if len(records) != old_total:
+            raise ValueError(f"{self.name} has {len(records)} plane records but {old_total} planes")
+        if total == old_total:
+            return
+        planes = self._save[PLANE_SECTION].data
+        limit = min(PLANE_RECORD_COUNT, len(planes) // PLANE_RECORD_SIZE, 0x10000)
+        chain = self._plane_chain(planes, limit)
+        if sorted(chain) != sorted(pos // PLANE_RECORD_SIZE for pos in records):
+            raise ValueError(f"{self.name}'s plane chain does not match its plane records")
+        size = PLANE_RECORD_SIZE
+        status_of = lambda i: planes[i * size + PLANE_STATUS_OFFSET]
+        old_repair = sum(planes[i * size + PLANE_REPAIR_OFFSET] for i in chain)
+        new_records, victims = {}, []
+        if total > old_total:
+            need = total - old_total
+            first = (len(bytes(planes[:limit * size]).rstrip(b"\0")) - 1) // size + 1
+            slots = list(range(max(first, 1), limit))
+            if len(slots) < need:
+                raise ValueError("The plane section has no free plane records")
+            template = self._plane_template(planes, chain, limit)
+            for index in slots[:need]:
+                record = bytearray(planes[template * size:(template + 1) * size])
+                struct.pack_into("<h", record, PLANE_GROUP_OFFSET, self.id)
+                record[PLANE_STATUS_OFFSET] = PLANE_READY
+                record[PLANE_DAMAGE_OFFSET], record[PLANE_REPAIR_OFFSET] = PLANE_NEW_STATE[PLANE_READY]
+                for pos in (PLANE_PILOT_OFFSET, PLANE_PEER_OFFSET, PLANE_FREED_OFFSET):
+                    record[pos:pos + 2] = b"\0\0"
+                new_records[index] = record
+            order = sorted(new_records, reverse=True) + chain
+        else:
+            for status in (PLANE_DAMAGED, PLANE_MAINTENANCE, PLANE_RESERVE, PLANE_READY):
+                victims += [i for i in chain if status_of(i) == status]
+            victims = victims[:old_total - total]
+            order = [i for i in chain if i not in victims]
+        # Everything is valid; write.
+        for index, record in new_records.items():
+            planes[index * size:(index + 1) * size] = record
+        if victims:
+            self._unreference_planes(set(victims), chain)
+            for i in victims:
+                planes[i * size:(i + 1) * size] = bytes(size)
+        # Rewriting every link also covers the head and predecessors of removed planes.
+        struct.pack_into("<H", self._data, self._offset + GROUP_CHAIN_OFFSET, order[0] if order else 0)
+        for i, nxt in zip(order, order[1:] + [0]):
+            struct.pack_into("<H", planes, i * size + PLANE_NEXT_OFFSET, nxt)
+        counts = {PLANE_READY: 0, PLANE_MAINTENANCE: 0, PLANE_DAMAGED: 0, PLANE_RESERVE: 0}
+        for i in order:
+            if status_of(i) in counts:
+                counts[status_of(i)] += 1
+        new_repair = sum(planes[i * size + PLANE_REPAIR_OFFSET] for i in order)
+        repair = max(0, self._i16(REPAIR_OFFSET) + new_repair - old_repair)
+        struct.pack_into("<h", self._data, self._offset + REPAIR_OFFSET, repair)
+        struct.pack_into("<h", self._data, self._offset + READY_OFFSET, counts[PLANE_READY])
+        self._data[self._offset + MAINTENANCE_OFFSET] = counts[PLANE_MAINTENANCE]
+        self._data[self._offset + RESERVE_OFFSET] = counts[PLANE_RESERVE]
+        self._data[self._offset + DAMAGED_OFFSET] = counts[PLANE_DAMAGED]
+        self._data[self._offset + PLANES_OFFSET] = total
+
+    def _plane_chain(self, planes, limit):
+        """Plane record indexes in chain order (group 252, then each plane's 176); ValueError if broken."""
+        chain, seen = [], set()
+        index = struct.unpack_from("<H", self._data, self._offset + GROUP_CHAIN_OFFSET)[0]
+        while index:
+            if index >= limit or index in seen:
+                raise ValueError(f"{self.name}'s plane chain is broken")
+            seen.add(index)
+            chain.append(index)
+            index = struct.unpack_from("<H", planes, index * PLANE_RECORD_SIZE + PLANE_NEXT_OFFSET)[0]
+        return chain
+
+    def _plane_template(self, planes, chain, limit):
+        """Index of the plane record to copy for a new plane."""
+        size = PLANE_RECORD_SIZE
+        for i in chain:
+            if planes[i * size + PLANE_STATUS_OFFSET] == PLANE_READY:
+                return i
+        if chain:
+            return chain[0]
+        aircraft = self._i16(AIRCRAFT_OFFSET)
+        fallback = None
+        for i in range(1, limit):
+            pos = i * size
+            if (planes[pos + PLANE_GROUP_OFFSET] or planes[pos + PLANE_GROUP_OFFSET + 1]) \
+                    and struct.unpack_from("<H", planes, pos)[0] == aircraft:
+                if planes[pos + PLANE_STATUS_OFFSET] == PLANE_READY:
+                    return i
+                if fallback is None:
+                    fallback = i
+        if fallback is None:
+            raise ValueError("There is no plane of this model to copy")
+        return fallback
+
+    def _unreference_planes(self, victims, chain):
+        """Clear pilot 28 and plane 172 links that point at the planes about to be removed."""
+        pilots = self._save[PILOT_SECTION].data
+        for p in range(min(PILOT_RECORD_COUNT, len(pilots) // PILOT_RECORD_SIZE)):
+            pos = p * PILOT_RECORD_SIZE + PILOT_PLANE_OFFSET
+            if struct.unpack_from("<H", pilots, pos)[0] in victims:
+                pilots[pos:pos + 2] = b"\0\0"
+        planes = self._save[PLANE_SECTION].data
+        for i in chain:
+            pos = i * PLANE_RECORD_SIZE + PLANE_PEER_OFFSET
+            if struct.unpack_from("<H", planes, pos)[0] in victims:
+                planes[pos:pos + 2] = b"\0\0"
 
     def _plane_records(self):
         """Byte offsets of this group's records in the plane section, in record order."""
