@@ -394,10 +394,16 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertEqual(app.tf_tree.set("14409", "ships"), "3")
         self.assertEqual(app.tf_tree.set("14409", "flagship"), "Long")
         self.assertIn(14409, app.tfs_edited)
-        # Now docked: the TFs at Pearl are offered, not another port.
+        # Now docked: the TFs at Pearl are offered, then every other Allied port.
         labels = list(app.shiprec_move_box.cget("values"))
         self.assertIn("TF 14409 USN minesweepers (3 ships)", labels)
         self.assertFalse([l for l in labels if l.endswith("(port)")])
+        midway = next(l for l in labels if l.startswith("Midway Island (port "))
+        app.shiprec_move_box.current(labels.index(midway))
+        app.move_shiprec()
+        self.assertEqual(app.shiprec_tree.set("4342", "location"), "Midway Island")
+        self.assertEqual(app.shiprec_info["base"].get(), "Midway Island")
+        self.assertEqual(app.shiprec_info["tf"].get(), "none")
         # A lone ship has nowhere to go and the Move button is disabled.
         app.shiprec_search_var.set("")
         app.shiprec_tree.selection_set("3684")

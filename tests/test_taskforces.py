@@ -193,10 +193,18 @@ class TaskForceTests(unittest.TestCase):
             copy = SaveFile.from_bytes(self.sf.to_bytes())
             taskforces.move_ship(copy, ELLIOT, d.id)
             self.assert_consistent(copy)
-        # A docked ship can join the TFs but not another port.
+        # A docked ship can join the TFs of its hex, and go to any other Allied port, listed after them by name.
         docked = taskforces.destinations(self.sf, ZANE)
         self.assertIn(MINESWEEPERS, {d.id for d in docked})
-        self.assertEqual([d for d in docked if d.kind == "port"], [])
+        ports = [d for d in docked if d.kind == "port"]
+        self.assertEqual([d.kind for d in docked], ["tf"] * (len(docked) - len(ports)) + ["port"] * len(ports))
+        expected = {p.id for p in bases.list_places(self.sf) if p.side_id == 1 and p.id != PEARL and p.name
+                    and taskforces.port_size(self.sf, p.id) >= 1}
+        self.assertEqual({d.id for d in ports}, expected)
+        self.assertEqual([d.label.lower() for d in ports], sorted(d.label.lower() for d in ports))
+        midway = next(d for d in ports if d.label.startswith("Midway Island"))
+        self.assertRegex(midway.label, r"^Midway Island \(port \d+, hex \d+,\d+\)$")
+        self.assertEqual(taskforces.destinations(self.sf, ELLIOT)[-1].id, PEARL)  # TF ships stay in their hex
 
     def test_no_destinations(self):
         self.assertEqual(taskforces.destinations(self.sf, LONE_SHIP), [])  # last ship of its TF
@@ -246,8 +254,36 @@ class TaskForceTests(unittest.TestCase):
     def test_refuse_same_chain_and_port_to_port(self):
         self.assert_refused(ELLIOT, MINESWEEPERS, "already")
         self.assert_refused(ZANE, PEARL, "already")
-        other_port = next(p.id for p in bases.list_places(self.sf) if p.id != PEARL)
-        self.assert_refused(ZANE, other_port, "port to another")
+        no_port = next(p for p in bases.list_places(self.sf)
+                       if p.side_id == 1 and p.name and taskforces.port_size(self.sf, p.id) < 1)
+        self.assert_refused(ZANE, no_port.id, "has no port")
+        enemy = next(p.id for p in bases.list_places(self.sf)
+                     if p.side_id == 0 and taskforces.port_size(self.sf, p.id) >= 1)
+        self.assert_refused(ZANE, enemy, "other side")
+
+    def test_move_port_to_far_port(self):
+        far = next(p for p in bases.list_places(self.sf) if p.name == "Midway Island")
+        self.assertNotEqual((far.x, far.y), bases.place_hex(self.sf, PEARL))
+        prev, nxt = self.g(ship_at(ZANE, PREV)), self.g(ship_at(ZANE, NEXT))
+        pearl_count, far_count = self.g(loc_at(PEARL, COUNT)), self.g(loc_at(far.id, COUNT))
+        far_last = self.g(loc_at(far.id, LAST))
+        pearl_ships = taskforces.chain(self.sf, PEARL)
+        before = snapshot(self.sf)
+        taskforces.move_ship(self.sf, ZANE, far.id)
+        self.assertEqual((self.g(ship_at(ZANE, BASE)), self.g(ship_at(ZANE, TASK_FORCE))), (far.id, 0))
+        self.assertEqual(taskforces.chain(self.sf, PEARL), [s for s in pearl_ships if s != ZANE])
+        self.assertEqual(taskforces.chain(self.sf, far.id)[-1], ZANE)
+        self.assertEqual((self.g(loc_at(PEARL, COUNT)), self.g(loc_at(far.id, COUNT))), (pearl_count - 1, far_count + 1))
+        self.assertEqual(self.g(loc_at(far.id, LAST)), ZANE)
+        expected = {ship_at(ZANE, BASE), ship_at(ZANE, PREV), ship_at(ZANE, NEXT), ship_at(prev, NEXT),
+                    ship_at(nxt, PREV), loc_at(PEARL, COUNT), loc_at(far.id, COUNT), loc_at(far.id, LAST)}
+        if far_last:
+            expected.add(ship_at(far_last, NEXT))
+        self.assertEqual(changes(self.sf, before) - expected, set())
+        self.assert_consistent(self.sf)
+        other = self.roundtrip()
+        self.assert_consistent(other)
+        self.assertEqual(taskforces.chain(other, far.id)[-1], ZANE)
 
     def test_refuse_bad_ids(self):
         self.assert_refused(19999, PEARL, "not a ship")

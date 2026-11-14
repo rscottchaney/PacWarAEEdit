@@ -365,8 +365,11 @@ def _plan(save, ship_id, dest_id):
         raise ValueError(f"{dest_id} is not a task force, base or town")
     if dest_id == src:
         raise ValueError("ship is already there")
-    if not src_tf and not dest_is_tf:
-        raise ValueError("a ship cannot move from one port to another")
+    # A ship docked outside a TF can move to any port of its side; it stores no map position of its
+    # own, so only its base (60) and the two port chains change. Every other move stays in one hex.
+    port_to_port = not src_tf and not dest_is_tf
+    if port_to_port and port_size(save, dest_id) < 1:
+        raise ValueError(f"{_name(save, dest_id) or dest_id} has no port")
     src_ships = chain(save, src)
     if ship_id not in src_ships:
         raise ValueError(f"ship {ship_id} is not in its own chain")
@@ -376,7 +379,7 @@ def _plan(save, ship_id, dest_id):
             raise ValueError("cannot move the last ship out of a task force")
         if _flagship(save, src) not in src_ships:
             raise ValueError(f"flagship of TF {src} is not one of its ships")
-    if place_hex(save, src) != place_hex(save, dest_id):
+    if not port_to_port and place_hex(save, src) != place_hex(save, dest_id):
         raise ValueError("destination is not in the same hex")
     if dest_is_tf:
         if not dest_ships:
@@ -430,7 +433,11 @@ def can_move(save, ship_id, destination):
 
 
 def destinations(save, ship_id):
-    """Valid destinations for a ship as Destination tuples (TFs first, then ports); [] if none."""
+    """Valid destinations for a ship as Destination tuples; [] if none.
+
+    TFs and ports in the ship's hex come first. A ship docked outside a TF can also go to any other port of
+    its side, listed after them by name.
+    """
     if not _ship_exists(save, ship_id):
         return []
     src = _ship(save, ship_id, shiprecords.TASK_FORCE_OFFSET) or _ship(save, ship_id, shiprecords.BASE_OFFSET)
@@ -452,4 +459,15 @@ def destinations(save, ship_id):
             out.append(Destination(dest, f"{label} ({_loc(save, dest, COUNT_OFFSET)} ships)", "tf"))
         else:
             out.append(Destination(dest, f"{_name(save, dest)} (port)", "port"))
+    if src < TF_BASE_ID:
+        far = []
+        for p in list_places(save):
+            if (p.x, p.y) == here or not p.name or port_size(save, p.id) < 1:
+                continue
+            try:
+                _plan(save, ship_id, p.id)
+            except ValueError:
+                continue
+            far.append(Destination(p.id, f"{p.name} (port {port_size(save, p.id)}, hex {p.x},{p.y})", "port"))
+        out += sorted(far, key=lambda d: d.label.lower())
     return out
