@@ -737,15 +737,17 @@ open sea do nothing.
 
 ### Victory points
 
-The "Victory points" sub-tab (after Minefields) is read-only. A small table on top gives, per side, the score, the
+The "Victory points" sub-tab (after Minefields) is read-only except for the political points. A small table on top gives, per side, the score, the
 bases and base points, the enemy aircraft destroyed and their points, the ground points, the enemy ships sunk, Other
 and the political points. A line below it gives the victory level, the score ratio and the automatic victory rule
-for the game year. Below that: a Side filter (All, Allied, Japanese), a Search box (base name, region) and a sortable
+for the game year. Then a "Political points" row: an entry per side and "Set political points", which writes
+both values (whole numbers 0 to 999999; nothing is written if either is invalid). Below that: a Side filter (All, Allied, Japanese), a Search box (base name, region) and a sortable
 table of the bases and towns that are worth victory points. Double-click a row to open the base in the Bases tab
 (filters are cleared if they hide it).
 
 - Score: section 0x01, i32 at 116 (Japanese) and 120 (Allied), shown as stored. Political points: i32 at 65788
-  (Japanese) and 65792 (Allied). Ground losses: i32 at 64876 (Japanese) and 64880 (Allied), in twelfths of a victory
+  (Japanese) and 65792 (Allied); in the user's campaign both rise by 50 a day, matching the u16 50 at 65796 and 65798
+  (probably the daily gain, not editable). Edits not yet verified in game. Ground losses: i32 at 64876 (Japanese) and 64880 (Allied), in twelfths of a victory
   point (manual 17.0: Allied 1 VP per 3 items, Chinese and Philippine 1 per 12, Soviet 1 per 6, Japanese 1 per 6);
   the other side scores the stored value // 12. The sample save has 2165 Japanese and 11303 Allied points.
 - Bases: a base or town is worth the owner's basic VP (location record, "value to Japan" i16 at 782 and "value to
