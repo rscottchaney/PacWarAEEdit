@@ -1,7 +1,7 @@
 """Nation codes shared by the aircraft (@284) and ship class (@26) tables."""
 
-NATIONS = {1: "IJA", 2: "IJN", 4: "USN", 5: "USA", 7: "Aus", 8: "NZ", 9: "UK", 10: "French",
-           11: "Dutch", 13: "Soviet", 18: "Canada"}
+NATIONS = {1: "IJA", 2: "IJN", 4: "USN", 5: "USA", 6: "USMC", 7: "Aus", 8: "NZ", 9: "UK", 10: "French",
+           11: "Dutch", 13: "Soviet", 15: "CW", 16: "Phil", 18: "Canada"}
 # Guessed; shown with a trailing "?".
 GUESSED_NATIONS = {12: "China", 14: "India"}
 

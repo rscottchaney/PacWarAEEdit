@@ -156,6 +156,7 @@ class AircraftTests(unittest.TestCase):
         self.assertEqual(aircraft.nation_label(9), "UK")
         self.assertEqual(aircraft.nation_label(12), "China?")
         self.assertEqual(aircraft.nation_label(77), "77")
+        self.assertEqual([aircraft.nation_label(n) for n in (6, 15, 16)], ["USMC", "CW", "Phil"])
 
     def test_engines(self):
         # Japanese models name their engine device; Allied ones use the generic device 1852.

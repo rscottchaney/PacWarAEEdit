@@ -37,7 +37,7 @@ class PilotPoolTests(unittest.TestCase):
         self.assertEqual((self.pools[18].label, self.pools[18].get("pool"), self.pools[18].get("rate")),
                          ("Canada", 230, 20))
         self.assertEqual((self.pools[6].label, self.pools[6].get("pool"), self.pools[6].get("rate")),
-                         ("6", 1270, 115))
+                         ("USMC", 1270, 115))
         self.assertEqual(self.pools[10].get("pool"), 0)
         self.assertFalse(usn.is_empty)
 
