@@ -252,6 +252,71 @@ class LandUnitTests(unittest.TestCase):
         self.assertEqual(u.raise_support_to_estimate(), 0)
         self.assertEqual(self.record_bytes(2063), after)
 
+    def test_aviation_support_at(self):
+        # Djojakarta (1153): its Aviation Support is 6 with 2 disabled; Vk.A.2 is the only group, 11 planes.
+        self.assertEqual(landunits.aviation_support_at(self.sf, 1153, "Allied"), (4, 11))
+        # 868 holds two land units; only 2nd Bengal (13 with 11 disabled) has Aviation Support.
+        self.assertEqual(landunits.aviation_support_at(self.sf, 868, "Allied"), (2, 4))
+        self.assertEqual(landunits.aviation_support_at(self.sf, 1153, "Japanese"), (0, 0))
+        self.assertEqual(landunits.aviation_support_at(self.sf, 5639, "Allied"), (0, 0))  # not a place
+
+    def test_aviation_support_at_counts_disabled_at_most_to_zero(self):
+        # Madras (871): 29 Aviation Support with 31 disabled counts as 0, not -2.
+        self.assertEqual(landunits.aviation_support_at(self.sf, 871, "Allied"), (0, 4))
+
+    def test_raise_aviation_support_tops_up_existing_slot(self):
+        u = self.units[5902]
+        before = self.record_bytes(5902)
+        self.assertEqual(u.raise_aviation_support_to_aircraft(), 7)
+        self.assertEqual(self.full_slot(5902, 1)[:3], (254, 13, 2))
+        self.assertEqual(landunits.aviation_support_at(self.sf, 1153, "Allied"), (11, 11))
+        changed = [i for i, (a, b) in enumerate(zip(before, self.record_bytes(5902))) if a != b]
+        self.assertEqual(changed, [landunits.COUNT_OFFSET + 2])
+        self.assertEqual(u.raise_aviation_support_to_aircraft(), 0)
+
+    def test_raise_aviation_support_creates_slot_when_unit_has_none(self):
+        u = self.units[6431]  # at 868 with 2nd Bengal, which supplies 2 of the 4 needed
+        self.assertEqual(u.equipment_slots(), [0, 1, 4])
+        self.assertEqual(u.raise_aviation_support_to_aircraft(), 2)
+        self.assertEqual(self.full_slot(6431, 2), (254, 2, 0, 0, 0))
+        self.assertEqual(landunits.aviation_support_at(self.sf, 868, "Allied"), (4, 4))
+        self.assertEqual(self.units[6354].list_equipment(), landunits.LandUnit(
+            SaveFile.load(SAVE_015), 6354, "x").list_equipment())
+
+    def test_raise_aviation_support_without_empty_slot_raises(self):
+        u = self.units[6431]
+        for k in range(20):
+            if k not in u.equipment_slots():
+                struct.pack_into("<h", u._data, u._offset + landunits.DEVICE_OFFSET + 2 * k, 1002)
+        before = self.record_bytes(6431)
+        with self.assertRaises(ValueError):
+            u.raise_aviation_support_to_aircraft()
+        self.assertEqual(self.record_bytes(6431), before)
+
+    def test_raise_aviation_support_refuses_unit_not_arrived(self):
+        u = self.units[2038]
+        self.assertFalse(u.arrived)
+        before = self.record_bytes(2038)
+        with self.assertRaises(ValueError):
+            u.raise_aviation_support_to_aircraft()
+        self.assertEqual(self.record_bytes(2038), before)
+
+    def test_raise_aviation_support_refuses_unit_not_at_a_place(self):
+        u = self.units[5902]
+        struct.pack_into("<h", u._data, u._offset + landunits.LOCATION_OFFSET, 5000)
+        before = self.record_bytes(5902)
+        with self.assertRaises(ValueError):
+            u.raise_aviation_support_to_aircraft()
+        self.assertEqual(self.record_bytes(5902), before)
+
+    def test_raise_aviation_support_caps_at_max_count(self):
+        u = self.units[5902]
+        # 4 active (the shortfall is 7), with the count 3 below the cap.
+        struct.pack_into("<h", u._data, u._offset + landunits.COUNT_OFFSET + 2, landunits.MAX_COUNT - 3)
+        struct.pack_into("<h", u._data, u._offset + landunits.DISABLED_OFFSET + 2, landunits.MAX_COUNT - 7)
+        self.assertEqual(u.raise_aviation_support_to_aircraft(), 3)
+        self.assertEqual(self.full_slot(5902, 1)[1], landunits.MAX_COUNT)
+
     def test_fill_to_toe_rejects_bad_percent(self):
         u = self.units[2]
         before = self.record_bytes(2)

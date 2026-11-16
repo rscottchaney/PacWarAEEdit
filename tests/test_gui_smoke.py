@@ -979,6 +979,41 @@ class GuiSmokeTests(unittest.TestCase):
                 app.raise_unit_support()
         self.assertTrue(err.called)
 
+    def test_land_unit_aviation_support(self):
+        from unittest import mock
+        import witpae_editor
+        app = witpae_editor.EditorApp(self.root)
+        self.assertTrue(app.load(SAVE_015))
+        app.raise_unit_aviation_support()  # nothing selected
+        self.assertEqual(app.units_edited, set())
+        self.assertEqual(app.unit_info["aviation_support"].get(), "")
+        app.unit_tree.selection_set("5902")  # Djojakarta: 4 active Aviation Support, 11 aircraft
+        self.root.update()
+        self.assertEqual(app.unit_info["aviation_support"].get(), "4 for 11 aircraft (7 short)")
+        app.raise_unit_aviation_support()
+        self.root.update()
+        self.assertEqual(app.unit_info["aviation_support"].get(), "11 for 11 aircraft")
+        self.assertIn(5902, app.units_edited)
+        self.assertTrue(app.dirty)
+        self.assertEqual(app.unit_equipment_tree.set("1", "count"), "13")
+        self.assertIn("Added 7 aviation support squads", app.status.get())
+        self.assertIn("not yet saved", app.status.get())
+        app.raise_unit_aviation_support()
+        self.assertIn("already has enough aviation support", app.status.get())
+        # An equipment edit changes the row.
+        app.unit_equipment_tree.selection_set("1")
+        self.root.update()
+        app.unit_equipment_vars["disabled"].set("3")
+        app.apply_unit_equipment()
+        self.assertEqual(app.unit_info["aviation_support"].get(), "10 for 11 aircraft (1 short)")
+        # A unit that has not arrived shows nothing.
+        app.unit_tree.selection_set("2038")
+        self.root.update()
+        self.assertEqual(app.unit_info["aviation_support"].get(), "")
+        with mock.patch.object(witpae_editor.messagebox, "showerror") as err:
+            app.raise_unit_aviation_support()
+        self.assertEqual(err.call_args[0][0], "Cannot raise aviation support")
+
     def test_treeview_tag_colours_are_not_overridden(self):
         # Tk 8.6.9 maps normal rows to the system colours, hiding the edited, pending and short tag colours.
         from tkinter import ttk

@@ -10,7 +10,7 @@ added to an empty equipment slot; the devices of existing slots and the TOE
 
 import struct
 
-from .airgroups import Record
+from .airgroups import Record, list_airgroups
 from .bases import (
     INDEX_RECORD_SIZE, INDEX_SECTION, LOCATION_SECTION, MAX_VALUE, NAME_SIZE, RECORD_COUNT,
     RECORD_SIZE, SIDE_OFFSET, SIDES, TYPE_OFFSET, X_OFFSET, Y_OFFSET, Field, decode_name, is_place,
@@ -69,7 +69,8 @@ TOE_DEVICE_OFFSET = 336
 TOE_COUNT_OFFSET = 376
 MAX_COUNT = 9999
 SUPPORT_DEVICES = (252, 253)  # Support, Motorized Support: these count toward the unit's support
-NO_SUPPORT_NEEDED = frozenset({252, 253, 254, 255})  # plus Aviation Support and Naval Support
+AVIATION_SUPPORT_DEVICE = 254
+NO_SUPPORT_NEEDED = frozenset({252, 253, AVIATION_SUPPORT_DEVICE, 255})  # plus Aviation Support and Naval Support
 
 
 def type_label(type_id):
@@ -333,21 +334,68 @@ class LandUnit(Record):
         if support >= needed:
             return 0
         shortfall = needed - support
-        devices = [self._i16(DEVICE_OFFSET + 2 * k) for k in range(SLOTS)]
-        slot = next((k for k, d in enumerate(devices) if d == SUPPORT_DEVICES[0]), None)
-        if slot is None:
-            slot = next((k for k, d in enumerate(devices) if d == SUPPORT_DEVICES[1]), None)
+        return self._add_to_device_slot(SUPPORT_DEVICES, shortfall, "support squads")
+
+    def raise_aviation_support_to_aircraft(self):
+        """Add Aviation Support squads so the unit's location has one per aircraft; return the number added.
+
+        The manual requires one Aviation Support point per aircraft at an airbase. The shortfall
+        (see aviation_support_at) goes to the unit's first Aviation Support slot, else to Aviation
+        Support in the lowest empty slot (TOE bytes stay 0). Nothing is ever lowered. The slot count
+        is capped at MAX_COUNT. Raises ValueError, writing nothing, if the unit has not arrived, is
+        not at a base or town, or a new slot is needed and none is empty.
+        """
+        if not self.arrived:
+            raise ValueError(f"{self.name} has not arrived")
+        if not is_place(self._save, self.location_id):
+            raise ValueError(f"{self.name} is not at a base or town")
+        active, aircraft = aviation_support_at(self._save, self.location_id, self.side)
+        if active >= aircraft:
+            return 0
+        return self._add_to_device_slot((AVIATION_SUPPORT_DEVICE,), aircraft - active, "aviation support squads")
+
+    def _add_to_device_slot(self, devices, shortfall, what):
+        """Add shortfall to the first slot holding devices[0], else devices[1:] in order, else devices[0]
+        in the lowest empty slot. Return the number added (the count is capped at MAX_COUNT)."""
+        held = [self._i16(DEVICE_OFFSET + 2 * k) for k in range(SLOTS)]
+        slot = None
+        for device in devices:
+            slot = next((k for k, d in enumerate(held) if d == device), None)
+            if slot is not None:
+                break
         if slot is None:
             used = set(self.equipment_slots())
             slot = next((k for k in range(SLOTS) if k not in used), None)
             if slot is None:
-                raise ValueError(f"{self.name} has no empty equipment slot for support squads")
-            struct.pack_into("<h", self._data, self._offset + DEVICE_OFFSET + 2 * slot, SUPPORT_DEVICES[0])
+                raise ValueError(f"{self.name} has no empty equipment slot for {what}")
+            struct.pack_into("<h", self._data, self._offset + DEVICE_OFFSET + 2 * slot, devices[0])
             struct.pack_into("<h", self._data, self._offset + DISABLED_OFFSET + 2 * slot, 0)
         old = self._i16(COUNT_OFFSET + 2 * slot)
         new = min(MAX_COUNT, old + shortfall)
         struct.pack_into("<h", self._data, self._offset + COUNT_OFFSET + 2 * slot, new)
         return new - old
+
+
+def aviation_support_at(save, loc_id, side):
+    """Return (active, aircraft) for a place: Aviation Support squads against aircraft based there.
+
+    active counts the squads that function (count minus disabled) in the arrived land units of
+    `side` at the place; aircraft is the planes of the arrived air groups of `side` based there
+    (groups aboard ships are not at a place). (0, 0) if loc_id is not a base or town.
+    """
+    if not is_place(save, loc_id):
+        return 0, 0
+    active = 0
+    for unit in list_land_units(save):
+        if unit.location_id != loc_id or not unit.arrived or unit.side != side:
+            continue
+        for k in range(SLOTS):
+            if unit._i16(DEVICE_OFFSET + 2 * k) == AVIATION_SUPPORT_DEVICE:
+                # The game's saves sometimes hold more disabled than present; that never counts below 0.
+                active += max(0, unit._i16(COUNT_OFFSET + 2 * k) - unit._i16(DISABLED_OFFSET + 2 * k))
+    aircraft = sum(g.planes for g in list_airgroups(save)
+                   if g.arrived and g.location_id == loc_id and g.side == side)
+    return active, aircraft
 
 
 def available_devices(save):
