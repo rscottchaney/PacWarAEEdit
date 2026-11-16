@@ -2609,14 +2609,19 @@ class EditorApp:
                             ("target", "Target (set by a move)"), ("required", "Supplies required (read-only)"),
                             ("support", "Support (game, read-only)"),
                             ("support_required", "Support required (game, read-only)"),
-                            ("support_estimate", "Support required (estimate)")):
+                            ("support_estimate", "Support required (estimate)"),
+                            ("aviation_support", "Aviation support at location")):
             ttk.Label(right, text=label).grid(row=row, column=0, sticky="w", pady=1)
             self.unit_info[name] = tk.StringVar()
             self.unit_info_labels[name] = ttk.Label(right, textvariable=self.unit_info[name])
             self.unit_info_labels[name].grid(row=row, column=1, sticky="w", padx=(8, 0))
             row += 1
-        ttk.Button(right, text="Raise support to estimate", command=self.raise_unit_support).grid(
-            row=row, column=0, columnspan=2, pady=4)
+        support_buttons = ttk.Frame(right)
+        support_buttons.grid(row=row, column=0, columnspan=2, pady=4)
+        ttk.Button(support_buttons, text="Raise support to estimate", command=self.raise_unit_support).pack(
+            side="left", padx=(0, 4))
+        ttk.Button(support_buttons, text="Raise aviation support", command=self.raise_unit_aviation_support).pack(
+            side="left")
         row += 1
         self.unit_move_var, self.unit_move_box, self.unit_move_button, self.unit_move_note = self._build_move_row(
             right, row, self.move_unit)
@@ -4460,7 +4465,16 @@ class EditorApp:
     def show_unit_equipment(self, u):
         if u is None:
             self.unit_info["support_estimate"].set("")
+            self.unit_info["aviation_support"].set("")
         else:
+            active, aircraft = landunits.aviation_support_at(u._save, u.location_id, u.side)
+            if not u.arrived or not aircraft and not active:
+                text = ""
+            else:
+                text = f"{active} for {aircraft} aircraft"
+                if active < aircraft:
+                    text += f" ({aircraft - active} short)"
+            self.unit_info["aviation_support"].set(text)
             support, needed = u.support_estimate()
             short = needed - support
             self.unit_info["support_estimate"].set(f"{needed} ({short} short)" if short > 0 else str(needed))
@@ -4574,6 +4588,25 @@ class EditorApp:
         self.refresh_unit_list()
         self.show_unit_equipment(u)
         self.status.set(f"Added {added} support squad{'s' if added != 1 else ''} to {u.name} (not yet saved)")
+
+    def raise_unit_aviation_support(self):
+        if self.unit_current is None:
+            return
+        u = self.units[self.unit_current]
+        try:
+            added = u.raise_aviation_support_to_aircraft()
+        except ValueError as exc:
+            messagebox.showerror("Cannot raise aviation support", str(exc))
+            return
+        if not added:
+            self.status.set(f"{u.name} already has enough aviation support at {u.location_name}")
+            return
+        self.units_edited.add(u.id)
+        self.dirty = True
+        self._map_data_changed()
+        self.refresh_unit_list()
+        self.show_unit_equipment(u)
+        self.status.set(f"Added {added} aviation support squad{'s' if added != 1 else ''} to {u.name} (not yet saved)")
 
     def add_unit_equipment(self):
         if self.unit_current is None:
