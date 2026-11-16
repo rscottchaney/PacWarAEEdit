@@ -69,7 +69,7 @@ Models whose "from" availability date is after the game date are dimmed (the
 | Available from / to, entered as `m/yy` like the game database ("12/41"); `0/0` or `-` means no date (many records store it for "to") | verified in-game, editable |
 | Carrier capable (one bit of a flag byte, other bits preserved) | verified in-game, editable |
 | Type: Fighter and Dive Bomber verified; other labels are guesses and end in `?` | read-only |
-| Nation: IJA, IJN, USN, USA, NZ verified; other labels are guesses and end in `?`; unknown codes show the number | read-only |
+| Nation: IJA, IJN, USN, USA, NZ verified; USMC (6), CW (15, Commonwealth) and Phil (16, Philippines) named from the game; other labels are guesses and end in `?`; unknown codes show the number | read-only |
 | Weapons (max load and reduced load: name, count, facing F/TR/C/XT), gun value, maneuver modifiers per altitude band | verified, read-only |
 | Engines: the engine is weapon slot 9, a device id (i16 at offset 60) and a count (u8 at offset 100; the reduced-load copies at 80 and 120 are not used). Japanese models name a specific engine device (A6M2 Zero: 1 x Nakajima Ha-35; Ki-21-Ic Sally: 2 x Nakajima Ha-5), Allied models use the generic device 1852 "Engine" and show "2 engines" | read-only |
 | Picture number (u16 at 26): the model's side-view picture, counted from 1, see below | verified (I-15-III, B5N2 Kate, Spitfire PR.IV, P-38G, PBY-5 checked against neighbouring tiles), read-only. Versions before 2026-11-08 showed tile n instead of n - 1, so most models showed the next picture on the sheet: often a close variant, sometimes a BLANK placeholder |
@@ -215,8 +215,8 @@ rises with the intake index, so T1 (index 0) is presumably the newest intake.
 
 These offsets were taken from WitPTracker's code and the values look right on
 three saves, but they are NOT yet checked against the game: compare with the
-game's Pilot Pool / Experience screen before relying on edits. Nations 3, 6, 15,
-16 and 17 have no confirmed name and are shown by number (nation 3 is skipped by
+game's Pilot Pool / Experience screen before relying on edits. Nations 3 and 17
+have no confirmed name and are shown by number (nation 3 is skipped by
 WitPTracker and is normally empty).
 
 ## Land Units
