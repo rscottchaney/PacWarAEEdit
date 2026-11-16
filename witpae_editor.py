@@ -622,7 +622,7 @@ VP_NOTE = (
     "lost, 2 for a heavy bomber (4 or more engines). Ground points are the other side's ground losses (i32 at 64876 "
     "Japanese, 64880 Allied; twelfths of a VP) // 12. Other = Score less base, aircraft and ground points; it covers "
     "ships sunk, industry damage and rules not modelled, and can be negative. Political points are the i32 at 65788 "
-    "(Japanese) and 65792 (Allied). Victory levels per manual 17.1: ratio 1.75 decisive, 1.25 marginal. Offsets "
+    "(Japanese) and 65792 (Allied), editable above (not yet verified in game). Victory levels per manual 17.1: ratio 1.75 decisive, 1.25 marginal. Offsets "
     "from WiTPTracker's reader; not yet compared with the game's Intel screen.")
 
 ALERT_ALL = "All"
@@ -1846,6 +1846,17 @@ class EditorApp:
         self.vp_summary_tree.configure(height=2)
         self.vp_status = tk.StringVar()
         ttk.Label(rep, textvariable=self.vp_status, justify="left").pack(side="top", anchor="w", pady=(4, 0))
+        pp = ttk.Frame(rep)
+        pp.pack(side="top", fill="x", pady=(4, 0))
+        ttk.Label(pp, text="Political points:").pack(side="left")
+        self.vp_political_vars = {}
+        for side in ("Allied", "Japanese"):
+            ttk.Label(pp, text=f"  {side}").pack(side="left")
+            self.vp_political_vars[side] = tk.StringVar()
+            ttk.Entry(pp, textvariable=self.vp_political_vars[side], width=8).pack(side="left", padx=(4, 0))
+        self.vp_political_button = ttk.Button(pp, text="Set political points", command=self.set_political_points,
+                                              state="disabled")
+        self.vp_political_button.pack(side="left", padx=8)
         bar = ttk.Frame(rep)
         bar.pack(side="top", fill="x", pady=(4, 0))
         self.vp_side_var = tk.StringVar(value=VP_ALL)
@@ -5233,11 +5244,43 @@ class EditorApp:
             self.vp_status.set(f"{level}. {automatic}.")
         except (SaveFormatError, IndexError):
             self.vp_status.set("")
+        try:
+            points = {side: victory.political_points(self.save, side) for side in self.vp_political_vars}
+        except (SaveFormatError, IndexError):
+            points = {}
+        for side, var in self.vp_political_vars.items():
+            var.set(str(points[side]) if points else "")
+        self.vp_political_button.state(["!disabled"] if points else ["disabled"])
         tree = self.vp_summary_tree
         tree.delete(*tree.get_children())
         for r in self.vp_summary:
             tree.insert("", "end", iid=r.side, values=self._report_values(VP_SUMMARY_COLUMNS, VP_SUMMARY_TEXT, r))
         self.refresh_vp_list()
+
+    def set_political_points(self):
+        """Write both sides' political points from the entries; every value is checked before anything is written."""
+        if self.save is None:
+            return
+        values = {}
+        for side, var in self.vp_political_vars.items():
+            text = var.get().strip()
+            try:
+                values[side] = int(text)
+            except ValueError:
+                messagebox.showerror("Invalid value", f"{side} political points must be a whole number (got {text!r}).")
+                return
+            if not 0 <= values[side] <= victory.POLITICAL_MAX:
+                messagebox.showerror("Invalid value", f"{side} political points must be between 0 and "
+                                                      f"{victory.POLITICAL_MAX}.")
+                return
+        changed = False
+        for side, value in values.items():
+            if victory.political_points(self.save, side) != value:
+                victory.set_political_points(self.save, side, value)
+                changed = True
+        if changed:
+            self.dirty = True
+        self.refresh_vp_reports()
 
     def refresh_vp_list(self):
         needle = self.vp_search_var.get().strip().lower()

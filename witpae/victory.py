@@ -1,7 +1,8 @@
-"""Read-only victory points report.
+"""Victory points report, and the one edit it offers: the political points of each side.
 
 Section 0x01 (scenario) holds the score: the Japanese victory points are the i32 at 116 and the Allied ones the i32 at
-120; they are shown as stored. The political points are the i32 at 65788 (Japanese) and 65792 (Allied). The ground
+120; they are shown as stored. The political points are the i32 at 65788 (Japanese) and 65792 (Allied); both rise by 50 a day in the user's
+campaign, matching the u16 50 at 65796 and 65798 (probably the daily gain, left alone). The ground
 losses are the i32 at 64876 (Japanese) and 64880 (Allied), counted in twelfths of a victory point because the manual
 (17.0) gives 1 VP per 3 Allied items, 1 per 12 Chinese or Philippine, 1 per 6 Soviet and 1 per 6 Japanese; the other
 side scores the stored value // 12.
@@ -14,7 +15,8 @@ side's aircraft losses. Only the number of enemy ships sunk is shown, there is n
 out (ships sunk, industry damage, rules not modelled) is the "other" difference, which can be negative.
 Victory level (17.1): score ratio of 1.75 or more is decisive, 1.25 or more marginal, otherwise a draw. Automatic
 victory (17.2) needs a ratio of 4:1 in 1943, 3:1 in 1944 and 2:1 from 1945. The offsets come from WiTPTracker's
-reader and the manual; they have not been compared with the game's Intel screen yet. Nothing here writes to the save.
+reader and the manual; they have not been compared with the game's Intel screen yet. Only set_political_points
+writes to the save.
 """
 
 import struct
@@ -26,6 +28,7 @@ from .container import SaveFormatError
 SECTION = 0x01
 SCORE_OFFSETS = {"Japanese": 116, "Allied": 120}  # i32
 POLITICAL_OFFSETS = {"Japanese": 65788, "Allied": 65792}  # i32
+POLITICAL_MAX = 999999
 GROUND_OFFSETS = {"Japanese": 64876, "Allied": 64880}  # i32 losses, twelfths of a VP
 GROUND_UNIT = 12
 SIDES = ("Allied", "Japanese")
@@ -50,6 +53,25 @@ def _i32(save, offset):
     if len(data) < offset + 4:
         raise SaveFormatError(f"section 0x{SECTION:02x} (scenario) is too short")
     return struct.unpack_from("<i", data, offset)[0]
+
+
+def political_points(save, side):
+    """The side's political points as stored."""
+    if side not in POLITICAL_OFFSETS:
+        raise ValueError(f"{side!r} is not a side")
+    return _i32(save, POLITICAL_OFFSETS[side])
+
+
+def set_political_points(save, side, value):
+    """Set the side's political points (0..POLITICAL_MAX); ValueError on refusal, nothing written then."""
+    if side not in POLITICAL_OFFSETS:
+        raise ValueError(f"{side!r} is not a side")
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError("Political points must be a whole number")
+    if not 0 <= value <= POLITICAL_MAX:
+        raise ValueError(f"Political points must be between 0 and {POLITICAL_MAX}")
+    _i32(save, POLITICAL_OFFSETS[side])  # raises if the section is missing or short
+    struct.pack_into("<i", save[SECTION].data, POLITICAL_OFFSETS[side], value)
 
 
 def place_value(value, port, airfield):

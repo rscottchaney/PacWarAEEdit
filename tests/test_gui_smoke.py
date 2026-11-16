@@ -2047,6 +2047,23 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertEqual(summary.set("Allied", "score"), "11,303")
         self.assertEqual(summary.set("Japanese", "score"), "2,165")
         self.assertEqual(summary.set("Allied", "political_points"), "250")
+        # Political points: shown in the entries, written by Set, refused (nothing written) when either is invalid.
+        from unittest import mock
+        self.assertEqual({s: v.get() for s, v in app.vp_political_vars.items()}, {"Allied": "250", "Japanese": "650"})
+        self.assertFalse(app.dirty)
+        app.vp_political_vars["Allied"].set("1500")
+        app.set_political_points()
+        self.assertEqual(summary.set("Allied", "political_points"), "1,500")
+        self.assertEqual(summary.set("Japanese", "political_points"), "650")
+        self.assertTrue(app.dirty)
+        for text in ("x", "-5", "1000000"):
+            app.vp_political_vars["Allied"].set("1600")
+            app.vp_political_vars["Japanese"].set(text)
+            with mock.patch.object(witpae_editor.messagebox, "showerror") as err:
+                app.set_political_points()
+            self.assertTrue(err.called, text)
+            self.assertEqual(summary.set("Allied", "political_points"), "1,500")
+        app.refresh_vp_reports()
         self.assertEqual(summary.set("Japanese", "ground_points"), "72")
         self.assertEqual(summary.set("Allied", "ground_points"), "2")
         self.assertEqual(app.vp_status.get(),

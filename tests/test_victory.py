@@ -1,5 +1,6 @@
 import os
 import struct
+import tempfile
 import unittest
 
 from witpae import aircraft, bases, losses, victory
@@ -89,6 +90,34 @@ class VictoryTests(unittest.TestCase):
         self.assertEqual((japanese.political_points, allied.political_points), (650, 250))
         # Ground losses (Japan 32, Allies 871 twelfths) score for the other side.
         self.assertEqual((japanese.ground_points, allied.ground_points), (72, 2))
+
+    def test_set_political_points(self):
+        before = bytes(self.sf[victory.SECTION].data)
+        victory.set_political_points(self.sf, "Allied", 1234)
+        victory.set_political_points(self.sf, "Japanese", 0)
+        after = bytes(self.sf[victory.SECTION].data)
+        self.assertEqual({i for i in range(len(before)) if before[i] != after[i]} - set(range(65788, 65796)), set())
+        self.assertEqual((victory.political_points(self.sf, "Allied"), victory.political_points(self.sf, "Japanese")),
+                         (1234, 0))
+        allied, japanese = victory.scores(self.sf)
+        self.assertEqual((allied.political_points, japanese.political_points), (1234, 0))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "out.pws")
+            self.sf.save(path)
+            again = SaveFile.load(path)
+        self.assertEqual(victory.political_points(again, "Allied"), 1234)
+        victory.set_political_points(self.sf, "Allied", victory.POLITICAL_MAX)
+        self.assertEqual(victory.political_points(self.sf, "Allied"), victory.POLITICAL_MAX)
+
+    def test_set_political_points_refusals(self):
+        before = bytes(self.sf[victory.SECTION].data)
+        for side, value in (("Allied", -1), ("Allied", victory.POLITICAL_MAX + 1), ("Allied", True), ("Allied", 1.5),
+                            ("Allied", "10"), ("Soviet", 10)):
+            with self.assertRaises(ValueError, msg=(side, value)):
+                victory.set_political_points(self.sf, side, value)
+        with self.assertRaises(ValueError):
+            victory.political_points(self.sf, "Soviet")
+        self.assertEqual(bytes(self.sf[victory.SECTION].data), before)
 
     def test_other_is_what_the_parts_leave_out(self):
         for s in victory.scores(self.sf):
