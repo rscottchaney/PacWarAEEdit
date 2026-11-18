@@ -545,6 +545,9 @@ class GuiSmokeTests(unittest.TestCase):
             self.assertEqual(len(app.group_tree.get_children()), count, side)
         app.group_search_var.set("19th TS")
         self.assertIn("4205", app.group_tree.get_children())
+        values = dict(zip(app.group_tree["columns"], app.group_tree.item("4205", "values")))
+        self.assertEqual((values["planes"], values["pilots"], values["gap"]), ("1", "2", "-1"))  # a spare pilot
+        self.assertEqual(values["repl"], "Yes")  # Pearl Harbor
         app.group_tree.selection_set("4205")
         self.root.update()
         self.assertEqual(app.group_vars["morale"].get(), "50")

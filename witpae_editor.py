@@ -97,6 +97,10 @@ GROUP_COLUMNS = [
     ("planes", "Planes", 55, True, lambda g: g.planes),
     # Active pilots from the pilot table; the group's own count byte disagrees for many groups.
     ("pilots", "Pilots", 50, True, lambda g: g.active_pilots),
+    # Planes without an active pilot; negative when the group has spare pilots.
+    ("gap", "Gap", 45, True, lambda g: g.planes - g.active_pilots),
+    # Manual 16.2 first rule only (own base); blank when not at a base or town.
+    ("repl", "Base repl", 65, False, lambda g: {True: "Yes", False: "No", None: ""}[g.base_takes_replacements]),
     ("morale", "Morale", 55, True, lambda g: g.get("morale")),
     ("exp", "Exp", 45, True, lambda g: g.get("experience")),
     ("location", "Location", 120, False, lambda g: g.location_name),
