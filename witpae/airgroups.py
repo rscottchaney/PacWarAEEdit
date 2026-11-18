@@ -13,7 +13,7 @@ import struct
 from .aircraft import AIRCRAFT_RECORD_SIZE, AIRCRAFT_SECTION, RECORD_COUNT as AIRCRAFT_RECORD_COUNT
 from .aircraft import SIDE_OFFSET as AIRCRAFT_SIDE_OFFSET
 from .bases import (
-    LOCATION_SECTION, NAME_SIZE, RECORD_SIZE, SIDES, Field, decode_name, is_place, place_side_id,
+    LOCATION_SECTION, NAME_SIZE, RECORD_SIZE, SIDES, Base, Field, decode_name, is_place, place_side_id,
 )
 from .factories import _plain_name
 
@@ -88,6 +88,9 @@ SCHEDULE_SIZE_OFFSET = 456
 SCHEDULE_COUNT = 5
 FORMATIONS = {7: "Squadron", 8: "Flight", 9: "Section"}
 PILOT_COUNT_OFFSET = 546
+# Manual 16.2: a group's base passes the first replacement rule with an airfield of 1+ and over 20,000 supplies.
+REPLACEMENT_AIRFIELD = 1
+REPLACEMENT_SUPPLY = 20000
 PILOT_GROUP_OFFSET = 32
 PILOT_AGE_OFFSET = 43
 # 1 for active pilots; 2-4 are rarer (a pilot the game counts as killed in action has 2),
@@ -486,6 +489,21 @@ class AirGroup(Record):
     @property
     def arrived(self):
         return self.location_id != 0
+
+    @property
+    def base_takes_replacements(self):
+        """Whether the group's own base meets the manual's first replacement rule (16.2).
+
+        True when the group is at a base or town with an airfield of size 1 or more holding over
+        REPLACEMENT_SUPPLY supplies, False when it is at one that does not, None when it is not at a
+        place (not arrived or aboard a ship). The HQ-based rules and the float-plane exception are not
+        checked, so False does not prove the group gets no replacements.
+        """
+        loc = self.location_id
+        if not is_place(self._save, loc):
+            return None
+        base = Base(self._save, loc, "")
+        return base.get("airfield") >= REPLACEMENT_AIRFIELD and base.get("supply") > REPLACEMENT_SUPPLY
 
     @property
     def ready(self):

@@ -163,6 +163,14 @@ number shown in the game). Select a group to edit it, its pilots (section
 dimmed; "Active only" hides them. Editing a pilot or commander
 highlights the group row. The Side filter uses the group's side byte
 (offset 26), so groups aboard ships or not yet arrived are filtered too.
+The Pilots column counts the group's active pilots; Gap is planes minus active
+pilots (positive: planes without a pilot, negative: spare pilots). Sort by Gap
+to find the groups shortest of pilots. Base repl is Yes when the group's own
+base passes the manual's first rule for replacement aircraft (section 16.2: an
+airfield of size 1 or more and over 20,000 supplies), No when it does not, and
+blank for groups aboard ships or not arrived. Only that rule is checked: a group
+marked No can still get replacements through its HQ or command HQ base when that
+base is within transfer range and has over 20,000 supplies.
 
 | Field | Status |
 |---|---|

@@ -39,6 +39,19 @@ class AirGroupTests(unittest.TestCase):
     def test_list(self):
         self.assertEqual(len(self.groups), 2895)
 
+    def test_base_takes_replacements(self):
+        self.assertIs(self.groups[1].base_takes_replacements, True)  # Singapore: 55067 supply, airfield 6
+        self.assertIs(self.groups[3].base_takes_replacements, False)  # Ominato: 4425 supply
+        self.assertIsNone(self.groups[144].base_takes_replacements)  # aboard Teihoku Maru
+        self.assertIsNone(self.groups[2].base_takes_replacements)  # not arrived
+        singapore = bases.Base(self.sf, self.groups[1].location_id, "Singapore")
+        singapore.set("supply", 20000)  # the manual asks for over 20,000
+        self.assertIs(self.groups[1].base_takes_replacements, False)
+        singapore.set("supply", 20001)
+        self.assertIs(self.groups[1].base_takes_replacements, True)
+        singapore.set("airfield", 0)
+        self.assertIs(self.groups[1].base_takes_replacements, False)
+
     def test_group_without_pilots(self):
         g = self.groups[4156]
         self.assertEqual(g.name, "10th BS PAAC")
